@@ -1,0 +1,15 @@
+
+Algorithm : SHA256
+Hash      : A9E796D6E6C62E0281CF1B930730B905A57C2B30931057403A8C3089D86D9CB4
+Path      : C:\Users\tes43\Documents\ChatGPT\dlss 5\rdna2\build\kernels_test.exe
+
+Algorithm : SHA256
+Hash      : 97FD9D26258A6FEA9CE07E481946558A4979642A0CE45E4F269D3C7CA7BAC215
+Path      : C:\Users\tes43\Documents\ChatGPT\dlss 5\rdna2\build\kernels\_Z13k_align_probePh.co
+
+GPU=AMD Radeon RX 6900 XT arch=gfx1030 runtime=60450101 driver=60450101
+One dispatch, no automatic retry; no watchdog/TDR changes by this test.
+Module: VGPRs=16 LDS=0
+Launching 1 workgroup, 32 threads
+Probe bytes: a5 11 22 a5
+Guards=intact numerical comparison=PASS

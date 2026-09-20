@@ -1,0 +1,2035 @@
+
+File: .\analysis\installer-bundles\000e3200-3-hipv4-amdgcn-amd-amdhsa--gfx1100.elf
+Format: elf64-amdgpu
+Arch: amdgcn
+AddressSize: 64bit
+LoadName: <Not found>
+NoteSections [
+  NoteSection {
+    Name: .note
+    Offset: 0x238
+    Size: 0x8BD8
+    Notes [
+      {
+        Owner: AMDGPU
+        Data size: 0x8BC1
+        Type: NT_AMDGPU_METADATA (AMDGPU Metadata)
+        AMDGPU Metadata: ---
+amdhsa.kernels:
+  - .args:
+      - .offset:         0
+        .size:           40
+        .value_kind:     by_value
+      - .offset:         40
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         44
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         48
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         52
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         54
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         56
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         58
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         60
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         62
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         96
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         104
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 62592
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 296
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z16k_swin_1h_32_fp810SwinParams
+    .private_segment_fixed_size: 64
+    .sgpr_count:     35
+    .sgpr_spill_count: 0
+    .symbol:         _Z16k_swin_1h_32_fp810SwinParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     194
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           80
+        .value_kind:     by_value
+      - .offset:         80
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         84
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         88
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         92
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         94
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         96
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         98
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         100
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         102
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         120
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         128
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         136
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         144
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 64640
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 336
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z21k_pre_block_1h_32_fp89PreParams
+    .private_segment_fixed_size: 64
+    .sgpr_count:     45
+    .sgpr_spill_count: 0
+    .symbol:         _Z21k_pre_block_1h_32_fp89PreParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     194
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           80
+        .value_kind:     by_value
+      - .offset:         80
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         84
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         88
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         92
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         94
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         96
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         98
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         100
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         102
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         120
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         128
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         136
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         144
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 62592
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 336
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z22k_post_block_1h_32_fp810PostParams
+    .private_segment_fixed_size: 64
+    .sgpr_count:     43
+    .sgpr_spill_count: 0
+    .symbol:         _Z22k_post_block_1h_32_fp810PostParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     194
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           32
+        .value_kind:     by_value
+      - .offset:         32
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         36
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         40
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         44
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         46
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         48
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         50
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         52
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         54
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         72
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         96
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 24576
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 288
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z6k_ffwd10FfwdParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     28
+    .sgpr_spill_count: 0
+    .symbol:         _Z6k_ffwd10FfwdParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     112
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           40
+        .value_kind:     by_value
+      - .offset:         40
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         44
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         48
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         52
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         54
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         56
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         58
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         60
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         62
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         96
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         104
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 8192
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 296
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z10k_conv_res10ConvParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     18
+    .sgpr_spill_count: 0
+    .symbol:         _Z10k_conv_res10ConvParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     87
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           40
+        .value_kind:     by_value
+      - .offset:         40
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         44
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         48
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         52
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         54
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         56
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         58
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         60
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         62
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         96
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         104
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 58368
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 296
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z10k_qkv_attn10AttnParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     32
+    .sgpr_spill_count: 0
+    .symbol:         _Z10k_qkv_attn10AttnParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     102
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           48
+        .value_kind:     by_value
+      - .offset:         48
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         52
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         56
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         60
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         62
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         64
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         66
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         68
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         70
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         96
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         104
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         112
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 21504
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 304
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z7k_ffwd211Ffwd2Params
+    .private_segment_fixed_size: 0
+    .sgpr_count:     54
+    .sgpr_spill_count: 0
+    .symbol:         _Z7k_ffwd211Ffwd2Params.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     88
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           64
+        .value_kind:     by_value
+      - .offset:         64
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         68
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         72
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         76
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         78
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         80
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         82
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         84
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         86
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         104
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         112
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         120
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         128
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 0
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 320
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z11k_conv_res211Conv2Params
+    .private_segment_fixed_size: 0
+    .sgpr_count:     107
+    .sgpr_spill_count: 43
+    .symbol:         _Z11k_conv_res211Conv2Params.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     179
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           40
+        .value_kind:     by_value
+      - .offset:         40
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         44
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         48
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         52
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         54
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         56
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         58
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         60
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         62
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         96
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         104
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 23808
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 296
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z11k_qkv_attn210AttnParams
+    .private_segment_fixed_size: 24
+    .sgpr_count:     49
+    .sgpr_spill_count: 0
+    .symbol:         _Z11k_qkv_attn210AttnParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     144
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           24
+        .value_kind:     by_value
+      - .offset:         24
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         28
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         32
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         36
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         38
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         40
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         42
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         44
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         46
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         64
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         72
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         88
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 16384
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 280
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z8k_expand12ExpandParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     20
+    .sgpr_spill_count: 0
+    .symbol:         _Z8k_expand12ExpandParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     90
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           48
+        .value_kind:     by_value
+      - .offset:         48
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         52
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         56
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         60
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         62
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         64
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         66
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         68
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         70
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         96
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         104
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         112
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 4096
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 304
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z13k_conv_splitk12ConvParams1d
+    .private_segment_fixed_size: 0
+    .sgpr_count:     42
+    .sgpr_spill_count: 0
+    .symbol:         _Z13k_conv_splitk12ConvParams1d.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     51
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           40
+        .value_kind:     by_value
+      - .offset:         40
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         44
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         48
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         52
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         54
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         56
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         58
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         60
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         62
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         96
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         104
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 6144
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 296
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z5k_qkv9QkvParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     106
+    .sgpr_spill_count: 0
+    .symbol:         _Z5k_qkv9QkvParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     69
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           40
+        .value_kind:     by_value
+      - .offset:         40
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         44
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         48
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         52
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         54
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         56
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         58
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         60
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         62
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         96
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         104
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 28928
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 296
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z11k_attention12AttnParams1d
+    .private_segment_fixed_size: 0
+    .sgpr_count:     32
+    .sgpr_spill_count: 0
+    .symbol:         _Z11k_attention12AttnParams1d.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     67
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           24
+        .value_kind:     by_value
+      - .offset:         24
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         28
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         32
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         36
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         38
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         40
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         42
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         44
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         46
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         64
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         72
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         88
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 0
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 280
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z9k_expand212ExpandParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     26
+    .sgpr_spill_count: 0
+    .symbol:         _Z9k_expand212ExpandParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     84
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           48
+        .value_kind:     by_value
+      - .offset:         48
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         52
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         56
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         60
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         62
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         64
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         66
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         68
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         70
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         96
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         104
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         112
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 16384
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 304
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z11k_contract212ConvParams1d
+    .private_segment_fixed_size: 0
+    .sgpr_count:     69
+    .sgpr_spill_count: 0
+    .symbol:         _Z11k_contract212ConvParams1d.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     149
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           40
+        .value_kind:     by_value
+      - .offset:         40
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         44
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         48
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         52
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         54
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         56
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         58
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         60
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         62
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         96
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         104
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 12800
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 296
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z6k_qkv29QkvParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     34
+    .sgpr_spill_count: 0
+    .symbol:         _Z6k_qkv29QkvParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     119
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           40
+        .value_kind:     by_value
+      - .offset:         40
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         44
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         48
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         52
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         54
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         56
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         58
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         60
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         62
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         96
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         104
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 19456
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 296
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z12k_attention212AttnParams1d
+    .private_segment_fixed_size: 0
+    .sgpr_count:     49
+    .sgpr_spill_count: 0
+    .symbol:         _Z12k_attention212AttnParams1d.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     107
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           32
+        .value_kind:     by_value
+      - .offset:         32
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         36
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         40
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         44
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         46
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         48
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         50
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         52
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         54
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         72
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         96
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 24576
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 288
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z14k_ffwd_inpview12FfwdPlParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     28
+    .sgpr_spill_count: 0
+    .symbol:         _Z14k_ffwd_inpview12FfwdPlParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     112
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           72
+        .value_kind:     by_value
+      - .offset:         72
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         76
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         80
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         84
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         86
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         88
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         90
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         92
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         94
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         112
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         120
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         128
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         136
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 24576
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 328
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z16k_conv_res_views12ConvPlParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     51
+    .sgpr_spill_count: 0
+    .symbol:         _Z16k_conv_res_views12ConvPlParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     137
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           24
+        .value_kind:     by_value
+      - .offset:         24
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         28
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         32
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         36
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         38
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         40
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         42
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         44
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         46
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         64
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         72
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         88
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 8192
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 280
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z12k_final_head10HeadParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     18
+    .sgpr_spill_count: 0
+    .symbol:         _Z12k_final_head10HeadParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     84
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           32
+        .value_kind:     by_value
+      - .offset:         32
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         36
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         40
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         44
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         46
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         48
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         50
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         52
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         54
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         72
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         96
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 0
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 288
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 1024
+    .name:           _Z8k_repack12RepackParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     20
+    .sgpr_spill_count: 0
+    .symbol:         _Z8k_repack12RepackParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     17
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           40
+        .value_kind:     by_value
+      - .offset:         40
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         44
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         48
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         52
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         54
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         56
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         58
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         60
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         62
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         96
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         104
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 4096
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 296
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z14k_dec_upsample11DecUpParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     20
+    .sgpr_spill_count: 0
+    .symbol:         _Z14k_dec_upsample11DecUpParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     81
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           32
+        .value_kind:     by_value
+      - .offset:         32
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         36
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         40
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         44
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         46
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         48
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         50
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         52
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         54
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         72
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         80
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         96
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 1024
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 288
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 1024
+    .name:           _Z6k_mean10MeanParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     18
+    .sgpr_spill_count: 0
+    .symbol:         _Z6k_mean10MeanParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     11
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           48
+        .value_kind:     by_value
+      - .offset:         48
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         52
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         56
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         60
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         62
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         64
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         66
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         68
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         70
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         88
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         96
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         104
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         112
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 0
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 304
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 1024
+    .name:           _Z8k_import12ImportParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     18
+    .sgpr_spill_count: 0
+    .symbol:         _Z8k_import12ImportParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     21
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           64
+        .value_kind:     by_value
+      - .offset:         64
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         68
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         72
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         76
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         78
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         80
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         82
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         84
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         86
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         104
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         112
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         120
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         128
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 0
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 320
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 1024
+    .name:           _Z8k_export12ExportParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     18
+    .sgpr_spill_count: 0
+    .symbol:         _Z8k_export12ExportParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     28
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           128
+        .value_kind:     by_value
+      - .offset:         128
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         132
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         136
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         140
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         142
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         144
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         146
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         148
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         150
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         168
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         176
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         184
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         192
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 0
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 384
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 1024
+    .name:           _Z11k_reproject12ReprojParams
+    .private_segment_fixed_size: 0
+    .sgpr_count:     38
+    .sgpr_spill_count: 0
+    .symbol:         _Z11k_reproject12ReprojParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     63
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .address_space:  global
+        .offset:         0
+        .size:           8
+        .value_kind:     global_buffer
+      - .offset:         8
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         12
+        .size:           4
+        .value_kind:     by_value
+    .group_segment_fixed_size: 0
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 16
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 1024
+    .name:           _Z11k_flag_waitPjjj
+    .private_segment_fixed_size: 0
+    .sgpr_count:     9
+    .sgpr_spill_count: 0
+    .symbol:         _Z11k_flag_waitPjjj.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     4
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .address_space:  global
+        .offset:         0
+        .size:           8
+        .value_kind:     global_buffer
+    .group_segment_fixed_size: 0
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 8
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 1024
+    .name:           _Z13k_align_probePh
+    .private_segment_fixed_size: 0
+    .sgpr_count:     3
+    .sgpr_spill_count: 0
+    .symbol:         _Z13k_align_probePh.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     3
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .address_space:  global
+        .offset:         0
+        .size:           8
+        .value_kind:     global_buffer
+      - .offset:         8
+        .size:           4
+        .value_kind:     by_value
+      - .address_space:  global
+        .offset:         16
+        .size:           8
+        .value_kind:     global_buffer
+    .group_segment_fixed_size: 0
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 24
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 1024
+    .name:           _Z10k_flag_setPjjS_
+    .private_segment_fixed_size: 0
+    .sgpr_count:     8
+    .sgpr_spill_count: 0
+    .symbol:         _Z10k_flag_setPjjS_.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     4
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           168
+        .value_kind:     by_value
+      - .offset:         168
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         172
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         176
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         180
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         182
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         184
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         186
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         188
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         190
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         208
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         216
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         224
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         232
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 15616
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 424
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z10k_swin_varILi32ELb1EEv9VarParams
+    .private_segment_fixed_size: 24
+    .sgpr_count:     72
+    .sgpr_spill_count: 0
+    .symbol:         _Z10k_swin_varILi32ELb1EEv9VarParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     96
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           168
+        .value_kind:     by_value
+      - .offset:         168
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         172
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         176
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         180
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         182
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         184
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         186
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         188
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         190
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         208
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         216
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         224
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         232
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 15632
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 424
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z10k_swin_varILi32ELb0EEv9VarParams
+    .private_segment_fixed_size: 24
+    .sgpr_count:     65
+    .sgpr_spill_count: 0
+    .symbol:         _Z10k_swin_varILi32ELb0EEv9VarParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     91
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           168
+        .value_kind:     by_value
+      - .offset:         168
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         172
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         176
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         180
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         182
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         184
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         186
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         188
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         190
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         208
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         216
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         224
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         232
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 15616
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 424
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z10k_swin_varILi64ELb0EEv9VarParams
+    .private_segment_fixed_size: 88
+    .sgpr_count:     70
+    .sgpr_spill_count: 0
+    .symbol:         _Z10k_swin_varILi64ELb0EEv9VarParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     120
+    .vgpr_spill_count: 17
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           168
+        .value_kind:     by_value
+      - .offset:         168
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         172
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         176
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         180
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         182
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         184
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         186
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         188
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         190
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         208
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         216
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         224
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         232
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 15616
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 424
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z10k_swin_varILi128ELb0EEv9VarParams
+    .private_segment_fixed_size: 80
+    .sgpr_count:     69
+    .sgpr_spill_count: 0
+    .symbol:         _Z10k_swin_varILi128ELb0EEv9VarParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     120
+    .vgpr_spill_count: 17
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+  - .args:
+      - .offset:         0
+        .size:           168
+        .value_kind:     by_value
+      - .offset:         168
+        .size:           4
+        .value_kind:     hidden_block_count_x
+      - .offset:         172
+        .size:           4
+        .value_kind:     hidden_block_count_y
+      - .offset:         176
+        .size:           4
+        .value_kind:     hidden_block_count_z
+      - .offset:         180
+        .size:           2
+        .value_kind:     hidden_group_size_x
+      - .offset:         182
+        .size:           2
+        .value_kind:     hidden_group_size_y
+      - .offset:         184
+        .size:           2
+        .value_kind:     hidden_group_size_z
+      - .offset:         186
+        .size:           2
+        .value_kind:     hidden_remainder_x
+      - .offset:         188
+        .size:           2
+        .value_kind:     hidden_remainder_y
+      - .offset:         190
+        .size:           2
+        .value_kind:     hidden_remainder_z
+      - .offset:         208
+        .size:           8
+        .value_kind:     hidden_global_offset_x
+      - .offset:         216
+        .size:           8
+        .value_kind:     hidden_global_offset_y
+      - .offset:         224
+        .size:           8
+        .value_kind:     hidden_global_offset_z
+      - .offset:         232
+        .size:           2
+        .value_kind:     hidden_grid_dims
+    .group_segment_fixed_size: 19200
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 424
+    .language:       OpenCL C
+    .language_version:
+      - 2
+      - 0
+    .max_flat_workgroup_size: 256
+    .name:           _Z10k_swin_varILi256ELb0EEv9VarParams
+    .private_segment_fixed_size: 24
+    .sgpr_count:     70
+    .sgpr_spill_count: 0
+    .symbol:         _Z10k_swin_varILi256ELb0EEv9VarParams.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     136
+    .vgpr_spill_count: 0
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+amdhsa.target:   amdgcn-amd-amdhsa--gfx1100
+amdhsa.version:
+  - 1
+  - 2
+...
+
+      }
+    ]
+  }
+]

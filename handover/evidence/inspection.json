@@ -1,0 +1,37 @@
+{
+  "audit_date": "2026-09-20",
+  "upstream_commit": "dcc39b815f9d8f0ccd7b77ab1e5393f32a2645c8",
+  "upstream_status_short": "",
+  "host_tests_exit_code": 0,
+  "gpu_tests_run_during_audit": false,
+  "game_run_during_audit": false,
+  "installer_sha256": "cf7ada1486b499700a84846b342ca2b1defdb4db622843f812151f255f2ad63c",
+  "bundle_offset": 930304,
+  "u64_at_offset_24_entry_count": 9,
+  "targets": [
+    "host-x86_64-unknown-linux-gnu-",
+    "hipv4-amdgcn-amd-amdhsa--gfx10-3-generic",
+    "hipv4-amdgcn-amd-amdhsa--gfx11-generic",
+    "hipv4-amdgcn-amd-amdhsa--gfx1100",
+    "hipv4-amdgcn-amd-amdhsa--gfx1101",
+    "hipv4-amdgcn-amd-amdhsa--gfx1102",
+    "hipv4-amdgcn-amd-amdhsa--gfx1200",
+    "hipv4-amdgcn-amd-amdhsa--gfx1201",
+    "hipv4-amdgcn-amd-amdhsa--gfx9-generic"
+  ],
+  "missing_public_inputs": {
+    "src/bridge/bridge_gfx1030_fatbin.h": true,
+    "phase9_final_module/asm": true,
+    "phase5_exact_fragment/gfx1100_code_object.o": true
+  },
+  "static_function_count": 35,
+  "functions_with_wmma_sites": 24,
+  "wmma_sites": {
+    "v_wmma_f32_16x16x16_f16": 203
+  },
+  "sources_of_claims": {
+    "upstream_physical_noncompletion": "Pinned STATUS.md; not rerun here",
+    "local_final_head_pass": "Copied local source, artifact identities and retained logs",
+    "external_gta_log": "User-supplied RX 6600 report, not independently reproduced"
+  }
+}
