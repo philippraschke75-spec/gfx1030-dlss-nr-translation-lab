@@ -1,0 +1,13 @@
+
+Algorithm : SHA256
+Hash      : 8B0243689BF2A400459D9D988B8DBAD361C614FA563538FF1EC12A96C8BAC7C3
+Path      : C:\Users\tes43\Documents\ChatGPT\dlss 5\rdna2\build\final-head\final_head.co
+
+GPU=AMD Radeon RX 6900 XT arch=gfx1030
+module loaded: VGPRs=96 LDS=8192 maxThreads=256
+Launching exactly one workgroup of 256 threads
+Synchronization returned after 0.700 ms (not itself success evidence)
+Output bytes=16384, mismatches against constant reference=0
+byte 0x50: 16384
+Allocation guards: intact
+CONSTANT KERNEL TEST: PASS

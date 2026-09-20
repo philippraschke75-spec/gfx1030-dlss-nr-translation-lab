@@ -1,0 +1,17 @@
+
+Algorithm : SHA256
+Hash      : 476AA2300892AAD6F06D3F1A378168F19A5B57D6C3B41E6B32834A4FF317BBE0
+Path      : C:\Users\tes43\Documents\ChatGPT\dlss 5\rdna2\build\final_head_test.exe
+
+
+Algorithm : SHA256
+Hash      : C3416C86B09A7294135EA2040008A0AEDB222CFE581E8D83F9D0E935A58FF24F
+Path      : C:\Users\tes43\Documents\ChatGPT\dlss 5\rdna2\build\final-head\abi_probe.co
+
+GPU=AMD Radeon RX 6900 XT arch=gfx1030
+module loaded: VGPRs=96 LDS=8192 maxThreads=256
+Launching exactly one workgroup of 256 threads
+Synchronization returned after 0.439 ms (not itself success evidence)
+Hidden args: blocks=(1,1,1) groupXY=0x00010100
+Allocation guards: intact
+ABI PROBE: PASS

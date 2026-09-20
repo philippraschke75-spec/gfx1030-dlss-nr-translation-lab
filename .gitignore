@@ -1,0 +1,14 @@
+# generated build output
+rdna2/build/
+__pycache__/
+*.pyc
+# vendor binaries and disassembly derived from them
+analysis/installer-bundles/
+analysis/*-disassembly.txt
+# separate git repositories (not vendored here)
+handover-upstream/
+research/
+# translated vendor code objects embed original rodata
+*.co
+*.o
+*.exe

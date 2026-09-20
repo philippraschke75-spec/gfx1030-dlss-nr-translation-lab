@@ -1,0 +1,13 @@
+
+Algorithm : SHA256
+Hash      : 8BCE123265AE4CA33B0C1EDC94E231E7BE0D51DA810C4CD74A569A021D251CD1
+Path      : C:\Users\tes43\Documents\ChatGPT\dlss 5\rdna2\build\lowering_probe_test.exe
+
+Algorithm : SHA256
+Hash      : B7D4C3039B49A7C1201F2900F8210EDD84331C2E44008401B0E4902EFD758D29
+Path      : C:\Users\tes43\Documents\ChatGPT\dlss 5\rdna2\build\lowering-probe\lowering_probe.co
+
+GPU=AMD Radeon RX 6900 XT; one dispatch: 2 groups x 256 threads, LDS=8192
+Checks: private table isolation, dynamic word/byte loads, signed wide offsets, SCC preservation, CLZ including zero.
+Checked 2560 result words plus untouched padding/guards; byte mismatches=0
+LOWERING PROBE: PASS
