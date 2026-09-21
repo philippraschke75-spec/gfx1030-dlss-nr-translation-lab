@@ -465,11 +465,14 @@ SALU2 = {
     's_add_u32': lambda x, y, c: ((x + y) & M32, int(x + y > M32)),
     's_addc_u32': lambda x, y, c: ((x + y + c) & M32, int(x + y + c > M32)),
     's_mul_i32': lambda x, y, c: ((_sh(x) * _sh(y)) & M32, None),
+    # ISA: D = (S0 < S1) ? S0 : S1 (min) / (S0 >= S1) ? S0 : S1 (max); SCC = (D == S0)
+    's_min_i32': lambda x, y, c: ((x if _sh(x) < _sh(y) else y), int((x if _sh(x) < _sh(y) else y) == x)),
+    's_max_i32': lambda x, y, c: ((x if _sh(x) >= _sh(y) else y), int((x if _sh(x) >= _sh(y) else y) == x)),
     's_lshl_b32': lambda x, y, c: ((x << (y & 31)) & M32, int(((x << (y & 31)) & M32) != 0)),
     's_lshr_b32': lambda x, y, c: (x >> (y & 31), int((x >> (y & 31)) != 0)),
     's_ashr_i32': lambda x, y, c: ((_sh(x) >> (y & 31)) & M32, int(((_sh(x) >> (y & 31)) & M32) != 0)),
 }
-NOPS = ('s_delay_alu', 's_waitcnt_depctr', 's_waitcnt', 's_waitcnt_vscnt', 's_nop', 's_clause', 's_sleep', 'buffer_gl0_inv',
+NOPS = ('s_delay_alu', 's_waitcnt_depctr', 's_waitcnt', 's_waitcnt_vscnt', 's_nop', 's_clause', 's_sleep', 'buffer_gl0_inv', 'buffer_gl1_inv',
         's_sendmsg', 's_set_inst_prefetch_distance', 's_code_end')
 
 
@@ -571,6 +574,14 @@ class Exec:
             return orsav
         if base in ('s_mov_b32', 's_mov_b64'):
             return lambda w: w.ws(P[0], w.rs(P[1]))
+        if base == 's_abs_i32':          # D = |S0| (signed); SCC = (D != 0)
+            def sabs(w):
+                r = abs(_sh(w.rs(P[1]))) & M32; w.ws(P[0], r); w.scc = int(r != 0)
+            return sabs
+        if base == 's_bcnt1_i32_b32':    # D = popcount(S0); SCC = (D != 0)
+            def sbcnt(w):
+                r = bin(w.rs(P[1]) & M32).count('1'); w.ws(P[0], r); w.scc = int(r != 0)
+            return sbcnt
         if base == 's_cselect_b32':
             return lambda w: w.ws(P[0], w.rs(P[1]) if w.scc else w.rs(P[2]))
         if (m := re.fullmatch(r's_cmpk?_(eq|lg|gt|ge|lt|le)_(i|u)(32|64)', base)):
@@ -933,6 +944,77 @@ class Exec:
             return lambda w: w.wv64(P[0], w.r64(P[2]) << (w.r32(P[1]).astype(np.uint64) & np.uint64(63)))
         if b == 'v_mad_u64_u32':
             return lambda w: w.wv64(P[0], w.r32(P[2]).astype(np.uint64) * w.r32(P[3]).astype(np.uint64) + w.r64(P[4]))
+        if b in ('v_mul_i32_i24', 'v_mad_i32_i24'):      # signed 24-bit multiply (low 32 bits), optional add
+            def mul24(w):
+                s24 = lambda x: (((x.astype(np.int64) & 0xffffff) ^ 0x800000) - 0x800000)
+                r = s24(w.r32(P[1])) * s24(w.r32(P[2]))
+                if b == 'v_mad_i32_i24': r = r + w.r32(P[3]).view(np.int32).astype(np.int64)
+                w.wv(P[0], (r & M32).astype(np.uint32))
+            return mul24
+        if b == 'v_fmac_f16':          # D.f16 = fma(S0, S1, D); upper half written as zero (same convention as v_mul_f16 here)
+            return lambda w: w.wv(P[0], hbits((w.rh(P[1]).astype(np.float64) * w.rh(P[2]).astype(np.float64) + w.V[P[0]['i']].astype(np.uint16).view(np.float16).astype(np.float64)).astype(np.float16)))
+        if b == 'v_max3_f32':
+            return lambda w: w.wv(P[0], fbits(np.maximum(np.maximum(w.rf(P[1]), w.rf(P[2])), w.rf(P[3]))))
+        if b == 'v_med3_i32':
+            return lambda w: w.wv(P[0], np.sort(np.stack([w.r32(P[1]).view(np.int32), w.r32(P[2]).view(np.int32), w.r32(P[3]).view(np.int32)]), axis=0)[1].view(np.uint32))
+        if b == 'v_frexp_exp_i32_f32':
+            def frexp32e(w):
+                x = w.rf(P[1]); e = np.frexp(x)[1].astype(np.int32)
+                w.wv(P[0], np.where(np.isfinite(x), e, 0).astype(np.int32).view(np.uint32))
+            return frexp32e
+        if b == 'v_readlane_b32':      # SGPR D = VGPR S0[lane S1]; ignores EXEC
+            return lambda w: w.ws(P[0], int(w.RV[P[1]['i']][w.rs(P[2]) & 31]))
+        if b == 'v_writelane_b32':     # VGPR D[lane S1] = S0 (scalar); ignores EXEC
+            def wl(w):
+                w.V[P[0]['i']][w.rs(P[2]) & 31] = np.uint32(w.rs(P[1]) & M32)
+            return wl
+        if b == 'v_lshrrev_b64':
+            return lambda w: w.wv64(P[0], w.r64(P[2]) >> (w.r32(P[1]).astype(np.uint64) & np.uint64(63)))
+        if b == 'v_add_f64':
+            return lambda w: w.wv64(P[0], (w.r64(P[1]).view(np.float64) + w.r64(P[2]).view(np.float64)).view(np.uint64))
+        if b == 'v_cvt_f32_f64':
+            return lambda w: w.wv(P[0], fbits(w.r64(P[1]).view(np.float64).astype(np.float32)))
+        if (m64 := re.fullmatch(r'v_cmp(x?)_(eq|ne|lt|le|gt|ge)_(u64|i64)', b)):
+            def cmp64(w):
+                dt = np.uint64 if m64[3] == 'u64' else np.int64
+                bits = w.bits(CMP[m64[2]](w.r64(P[-2]).view(dt), w.r64(P[-1]).view(dt)))
+                if m64[1]: w.S[EXEC] = bits
+                else: w.wmask(P[0], bits)
+            return cmp64
+        if b == 'v_dot2acc_f32_f16':   # D.f32 += S0.f16[0]*S1.f16[0] + S0.f16[1]*S1.f16[1]; modeled as one rounding (hardware internals unverified)
+            def dot2acc(w):
+                a, c = w.r32(P[1]), w.r32(P[2])
+                h = lambda x, sh: ((x >> np.uint32(sh)) & np.uint32(0xffff)).astype(np.uint16).view(np.float16).astype(np.float64)
+                r = h(a, 0) * h(c, 0) + h(a, 16) * h(c, 16) + w.rf(P[0]).astype(np.float64)
+                w.wv(P[0], fbits(r.astype(np.float32)))
+            return dot2acc
+        if b == 'v_minmax_i32':      # LLVM/ISA: max(min(S0, S1), S2), signed
+            return lambda w: w.wv(P[0], np.maximum(np.minimum(w.r32(P[1]).view(np.int32), w.r32(P[2]).view(np.int32)),
+                                                   w.r32(P[3]).view(np.int32)).view(np.uint32))
+        if b == 'v_cvt_f32_i32':
+            return lambda w: w.wv(P[0], fbits(w.r32(P[1]).view(np.int32).astype(np.float32)))
+        if b == 'v_cvt_f32_ubyte1':
+            return lambda w: w.wv(P[0], fbits(((w.r32(P[1]) >> np.uint32(8)) & np.uint32(0xff)).astype(np.float32)))
+        if b == 'v_cvt_f64_f32':
+            return lambda w: w.wv64(P[0], w.rf(P[1]).astype(np.float64).view(np.uint64))
+        if b == 'v_frexp_mant_f32':  # mantissa in [0.5, 1) with the input's sign; zero/inf/nan pass through
+            def frexpm(w):
+                x = w.rf(P[1]); m = np.frexp(x)[0].astype(np.float32)
+                w.wv(P[0], fbits(np.where(np.isfinite(x), m, x)))
+            return frexpm
+        if b == 'v_frexp_exp_i32_f64':   # unbiased exponent for a [0.5, 1) mantissa; 0 for zero/inf/nan
+            def frexpe(w):
+                x = w.r64(P[1]).view(np.float64); e = np.frexp(x)[1].astype(np.int32)
+                w.wv(P[0], np.where(np.isfinite(x), e, 0).astype(np.int32).view(np.uint32))
+            return frexpe
+        if b in ('v_sub_co_ci_u32', 'v_subrev_co_ci_u32'):
+            def subci(w):
+                a, c = w.r32(P[2]).astype(np.int64), w.r32(P[3]).astype(np.int64)
+                if b == 'v_subrev_co_ci_u32': a, c = c, a
+                r = a - c - w.lanes(w.mask(P[4])).astype(np.int64)
+                w.wv(P[0], (r & M32).astype(np.uint32))
+                w.wmask(P[1], w.bits(r < 0))
+            return subci
         if b == 'v_add_co_u32':
             def addco(w):
                 r = w.r32(P[2]).astype(np.uint64) + w.r32(P[3]).astype(np.uint64)

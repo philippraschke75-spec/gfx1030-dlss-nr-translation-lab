@@ -1,0 +1,1226 @@
+[
+ {
+  "name": "block0.layer0.layer",
+  "file_offset": 18129311,
+  "bytes": 21696,
+  "trailer_count": 10848,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 8.8828125
+ },
+ {
+  "name": "block1.layer0.layer",
+  "file_offset": 18151082,
+  "bytes": 20672,
+  "trailer_count": 10336,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 22.890625
+ },
+ {
+  "name": "block10.layer0.layer",
+  "file_offset": 18171830,
+  "bytes": 197184,
+  "trailer_count": 98592,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 30464.0
+ },
+ {
+  "name": "block11.layer0.layer",
+  "file_offset": 18369090,
+  "bytes": 197184,
+  "trailer_count": 98592,
+  "f16_finite_frac": 0.9999797143784486,
+  "f16_absmax": 40640.0
+ },
+ {
+  "name": "block12.layer0.layer",
+  "file_offset": 18566350,
+  "bytes": 197184,
+  "trailer_count": 98592,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 6260.0
+ },
+ {
+  "name": "block13.layer0.layer",
+  "file_offset": 18763610,
+  "bytes": 197184,
+  "trailer_count": 98592,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 866.5
+ },
+ {
+  "name": "block14.layer0.layer",
+  "file_offset": 18960870,
+  "bytes": 229936,
+  "trailer_count": 114968,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 30304.0
+ },
+ {
+  "name": "block15.layer0.layer",
+  "file_offset": 19190882,
+  "bytes": 689232,
+  "trailer_count": 344616,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1050.0
+ },
+ {
+  "name": "block16.layer0.layer",
+  "file_offset": 19880190,
+  "bytes": 689232,
+  "trailer_count": 344616,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 8092.0
+ },
+ {
+  "name": "block17.layer0.layer",
+  "file_offset": 20569498,
+  "bytes": 689232,
+  "trailer_count": 344616,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1742.0
+ },
+ {
+  "name": "block18.layer0.layer",
+  "file_offset": 21258806,
+  "bytes": 689232,
+  "trailer_count": 344616,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 19472.0
+ },
+ {
+  "name": "block19.layer0.layer",
+  "file_offset": 21948114,
+  "bytes": 689232,
+  "trailer_count": 344616,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 40640.0
+ },
+ {
+  "name": "block2.layer0.layer",
+  "file_offset": 22637421,
+  "bytes": 20672,
+  "trailer_count": 10336,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 59040.0
+ },
+ {
+  "name": "block20.layer0.layer",
+  "file_offset": 22658169,
+  "bytes": 689232,
+  "trailer_count": 344616,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 14736.0
+ },
+ {
+  "name": "block21.layer0.layer",
+  "file_offset": 23347477,
+  "bytes": 689232,
+  "trailer_count": 344616,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 669.5
+ },
+ {
+  "name": "block22.layer0.layer",
+  "file_offset": 24036785,
+  "bytes": 820288,
+  "trailer_count": 410144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 35328.0
+ },
+ {
+  "name": "block23.layer0.layer",
+  "file_offset": 24857149,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.175048828125
+ },
+ {
+  "name": "block23.layer1.layer",
+  "file_offset": 25381513,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.982421875
+ },
+ {
+  "name": "block23.layer2.layer",
+  "file_offset": 25644757,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 24080.0
+ },
+ {
+  "name": "block23.layer3.layer",
+  "file_offset": 26562401,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block24.layer0.layer",
+  "file_offset": 26825645,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.11065673828125
+ },
+ {
+  "name": "block24.layer1.layer",
+  "file_offset": 27350009,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block24.layer2.layer",
+  "file_offset": 27613253,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 126.5
+ },
+ {
+  "name": "block24.layer3.layer",
+  "file_offset": 28530897,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block25.layer0.layer",
+  "file_offset": 28794141,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.190185546875
+ },
+ {
+  "name": "block25.layer1.layer",
+  "file_offset": 29318505,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block25.layer2.layer",
+  "file_offset": 29581749,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 0.9999978203250331,
+  "f16_absmax": 20336.0
+ },
+ {
+  "name": "block25.layer3.layer",
+  "file_offset": 30499393,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block26.layer0.layer",
+  "file_offset": 30762637,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.144287109375
+ },
+ {
+  "name": "block26.layer1.layer",
+  "file_offset": 31287001,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.99755859375
+ },
+ {
+  "name": "block26.layer2.layer",
+  "file_offset": 31550245,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 56992.0
+ },
+ {
+  "name": "block26.layer3.layer",
+  "file_offset": 32467889,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block27.layer0.layer",
+  "file_offset": 32731133,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.1761474609375
+ },
+ {
+  "name": "block27.layer1.layer",
+  "file_offset": 33255497,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block27.layer2.layer",
+  "file_offset": 33518741,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 0.9999978203250331,
+  "f16_absmax": 11104.0
+ },
+ {
+  "name": "block27.layer3.layer",
+  "file_offset": 34436385,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block28.layer0.layer",
+  "file_offset": 34699629,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.17529296875
+ },
+ {
+  "name": "block28.layer1.layer",
+  "file_offset": 35223993,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block28.layer2.layer",
+  "file_offset": 35487237,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 0.9999978203250331,
+  "f16_absmax": 26720.0
+ },
+ {
+  "name": "block28.layer3.layer",
+  "file_offset": 36404881,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block29.layer0.layer",
+  "file_offset": 36668125,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.1732177734375
+ },
+ {
+  "name": "block29.layer1.layer",
+  "file_offset": 37192489,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block29.layer2.layer",
+  "file_offset": 37455733,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 0.9999956406500663,
+  "f16_absmax": 62464.0
+ },
+ {
+  "name": "block29.layer3.layer",
+  "file_offset": 38373377,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block3.layer0.layer",
+  "file_offset": 38636620,
+  "bytes": 20672,
+  "trailer_count": 10336,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 6.96875
+ },
+ {
+  "name": "block30.layer0.layer",
+  "file_offset": 38657368,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.119140625
+ },
+ {
+  "name": "block30.layer1.layer",
+  "file_offset": 39181732,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block30.layer2.layer",
+  "file_offset": 39444976,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 51552.0
+ },
+ {
+  "name": "block30.layer3.layer",
+  "file_offset": 40362620,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block30.layer4.layer",
+  "file_offset": 40625864,
+  "bytes": 524304,
+  "trailer_count": 262152,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.05133056640625
+ },
+ {
+  "name": "block31.layer0.layer",
+  "file_offset": 41150244,
+  "bytes": 4194320,
+  "trailer_count": 2097160,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.1728515625
+ },
+ {
+  "name": "block31.layer1.layer",
+  "file_offset": 45344640,
+  "bytes": 4196352,
+  "trailer_count": 2098176,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block31.layer2.layer",
+  "file_offset": 49541068,
+  "bytes": 3145856,
+  "trailer_count": 1572928,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 512.0
+ },
+ {
+  "name": "block31.layer3.layer",
+  "file_offset": 52687000,
+  "bytes": 2,
+  "trailer_count": 1,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.10906982421875
+ },
+ {
+  "name": "block31.layer4.layer",
+  "file_offset": 52687078,
+  "bytes": 1050624,
+  "trailer_count": 525312,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block32.layer0.layer",
+  "file_offset": 53737778,
+  "bytes": 4194320,
+  "trailer_count": 2097160,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.0318603515625
+ },
+ {
+  "name": "block32.layer1.layer",
+  "file_offset": 57932174,
+  "bytes": 4196352,
+  "trailer_count": 2098176,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.99951171875
+ },
+ {
+  "name": "block32.layer2.layer",
+  "file_offset": 62128602,
+  "bytes": 3145856,
+  "trailer_count": 1572928,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 512.0
+ },
+ {
+  "name": "block32.layer3.layer",
+  "file_offset": 65274534,
+  "bytes": 2,
+  "trailer_count": 1,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.2484130859375
+ },
+ {
+  "name": "block32.layer4.layer",
+  "file_offset": 65274612,
+  "bytes": 1050624,
+  "trailer_count": 525312,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block33.layer0.layer",
+  "file_offset": 66325312,
+  "bytes": 4194320,
+  "trailer_count": 2097160,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.029327392578125
+ },
+ {
+  "name": "block33.layer1.layer",
+  "file_offset": 70519708,
+  "bytes": 4196352,
+  "trailer_count": 2098176,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.9990234375
+ },
+ {
+  "name": "block33.layer2.layer",
+  "file_offset": 74716136,
+  "bytes": 3145856,
+  "trailer_count": 1572928,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 512.0
+ },
+ {
+  "name": "block33.layer3.layer",
+  "file_offset": 77862068,
+  "bytes": 2,
+  "trailer_count": 1,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 5.0127506256103516e-05
+ },
+ {
+  "name": "block33.layer4.layer",
+  "file_offset": 77862146,
+  "bytes": 1050624,
+  "trailer_count": 525312,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block34.layer0.layer",
+  "file_offset": 78912846,
+  "bytes": 4194320,
+  "trailer_count": 2097160,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.0158538818359375
+ },
+ {
+  "name": "block34.layer1.layer",
+  "file_offset": 83107242,
+  "bytes": 4196352,
+  "trailer_count": 2098176,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.9990234375
+ },
+ {
+  "name": "block34.layer2.layer",
+  "file_offset": 87303670,
+  "bytes": 3145856,
+  "trailer_count": 1572928,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 512.0
+ },
+ {
+  "name": "block34.layer3.layer",
+  "file_offset": 90449602,
+  "bytes": 2,
+  "trailer_count": 1,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.01044464111328125
+ },
+ {
+  "name": "block34.layer4.layer",
+  "file_offset": 90449680,
+  "bytes": 1050624,
+  "trailer_count": 525312,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block35.layer0.layer",
+  "file_offset": 91500380,
+  "bytes": 4194320,
+  "trailer_count": 2097160,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.0214996337890625
+ },
+ {
+  "name": "block35.layer1.layer",
+  "file_offset": 95694776,
+  "bytes": 4196352,
+  "trailer_count": 2098176,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.99951171875
+ },
+ {
+  "name": "block35.layer2.layer",
+  "file_offset": 99891204,
+  "bytes": 3145856,
+  "trailer_count": 1572928,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 512.0
+ },
+ {
+  "name": "block35.layer3.layer",
+  "file_offset": 103037136,
+  "bytes": 2,
+  "trailer_count": 1,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.185791015625
+ },
+ {
+  "name": "block35.layer4.layer",
+  "file_offset": 103037214,
+  "bytes": 1050624,
+  "trailer_count": 525312,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block36.layer0.layer",
+  "file_offset": 104087914,
+  "bytes": 4194320,
+  "trailer_count": 2097160,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.039825439453125
+ },
+ {
+  "name": "block36.layer1.layer",
+  "file_offset": 108282310,
+  "bytes": 4196352,
+  "trailer_count": 2098176,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block36.layer2.layer",
+  "file_offset": 112478738,
+  "bytes": 3145856,
+  "trailer_count": 1572928,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 512.0
+ },
+ {
+  "name": "block36.layer3.layer",
+  "file_offset": 115624670,
+  "bytes": 2,
+  "trailer_count": 1,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.04107666015625
+ },
+ {
+  "name": "block36.layer4.layer",
+  "file_offset": 115624748,
+  "bytes": 1050624,
+  "trailer_count": 525312,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block37.layer0.layer",
+  "file_offset": 116675448,
+  "bytes": 4194320,
+  "trailer_count": 2097160,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.0352783203125
+ },
+ {
+  "name": "block37.layer1.layer",
+  "file_offset": 120869844,
+  "bytes": 4196352,
+  "trailer_count": 2098176,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.99853515625
+ },
+ {
+  "name": "block37.layer2.layer",
+  "file_offset": 125066272,
+  "bytes": 3145856,
+  "trailer_count": 1572928,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 512.0
+ },
+ {
+  "name": "block37.layer3.layer",
+  "file_offset": 128212204,
+  "bytes": 2,
+  "trailer_count": 1,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.08245849609375
+ },
+ {
+  "name": "block37.layer4.layer",
+  "file_offset": 128212282,
+  "bytes": 1050624,
+  "trailer_count": 525312,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block38.layer0.layer",
+  "file_offset": 129262982,
+  "bytes": 4194320,
+  "trailer_count": 2097160,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.050933837890625
+ },
+ {
+  "name": "block38.layer1.layer",
+  "file_offset": 133457378,
+  "bytes": 4196352,
+  "trailer_count": 2098176,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block38.layer2.layer",
+  "file_offset": 137653806,
+  "bytes": 3145856,
+  "trailer_count": 1572928,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 512.0
+ },
+ {
+  "name": "block38.layer3.layer",
+  "file_offset": 140799738,
+  "bytes": 2,
+  "trailer_count": 1,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 558.5
+ },
+ {
+  "name": "block38.layer4.layer",
+  "file_offset": 140799816,
+  "bytes": 1050624,
+  "trailer_count": 525312,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block39.layer0.layer",
+  "file_offset": 141850516,
+  "bytes": 525312,
+  "trailer_count": 262656,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.80712890625
+ },
+ {
+  "name": "block4.layer0.layer",
+  "file_offset": 142375903,
+  "bytes": 22720,
+  "trailer_count": 11360,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 433.5
+ },
+ {
+  "name": "block40.layer0.layer",
+  "file_offset": 142398699,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.1427001953125
+ },
+ {
+  "name": "block40.layer1.layer",
+  "file_offset": 142923063,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.98388671875
+ },
+ {
+  "name": "block40.layer2.layer",
+  "file_offset": 143186307,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 14264.0
+ },
+ {
+  "name": "block40.layer3.layer",
+  "file_offset": 144103951,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.9990234375
+ },
+ {
+  "name": "block41.layer0.layer",
+  "file_offset": 144367195,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.1435546875
+ },
+ {
+  "name": "block41.layer1.layer",
+  "file_offset": 144891559,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.99365234375
+ },
+ {
+  "name": "block41.layer2.layer",
+  "file_offset": 145154803,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 12040.0
+ },
+ {
+  "name": "block41.layer3.layer",
+  "file_offset": 146072447,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block42.layer0.layer",
+  "file_offset": 146335691,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.1448974609375
+ },
+ {
+  "name": "block42.layer1.layer",
+  "file_offset": 146860055,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.99951171875
+ },
+ {
+  "name": "block42.layer2.layer",
+  "file_offset": 147123299,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 24848.0
+ },
+ {
+  "name": "block42.layer3.layer",
+  "file_offset": 148040943,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block43.layer0.layer",
+  "file_offset": 148304187,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.14501953125
+ },
+ {
+  "name": "block43.layer1.layer",
+  "file_offset": 148828551,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.99951171875
+ },
+ {
+  "name": "block43.layer2.layer",
+  "file_offset": 149091795,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 6024.0
+ },
+ {
+  "name": "block43.layer3.layer",
+  "file_offset": 150009439,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block44.layer0.layer",
+  "file_offset": 150272683,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.1907958984375
+ },
+ {
+  "name": "block44.layer1.layer",
+  "file_offset": 150797047,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.99853515625
+ },
+ {
+  "name": "block44.layer2.layer",
+  "file_offset": 151060291,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 0.9999978203250331,
+  "f16_absmax": 954.5
+ },
+ {
+  "name": "block44.layer3.layer",
+  "file_offset": 151977935,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block45.layer0.layer",
+  "file_offset": 152241179,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.1739501953125
+ },
+ {
+  "name": "block45.layer1.layer",
+  "file_offset": 152765543,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.998046875
+ },
+ {
+  "name": "block45.layer2.layer",
+  "file_offset": 153028787,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 60576.0
+ },
+ {
+  "name": "block45.layer3.layer",
+  "file_offset": 153946431,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block46.layer0.layer",
+  "file_offset": 154209675,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.1751708984375
+ },
+ {
+  "name": "block46.layer1.layer",
+  "file_offset": 154734039,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block46.layer2.layer",
+  "file_offset": 154997283,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 7604.0
+ },
+ {
+  "name": "block46.layer3.layer",
+  "file_offset": 155914927,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block47.layer0.layer",
+  "file_offset": 156178171,
+  "bytes": 524288,
+  "trailer_count": 262144,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.14501953125
+ },
+ {
+  "name": "block47.layer1.layer",
+  "file_offset": 156702535,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block47.layer2.layer",
+  "file_offset": 156965779,
+  "bytes": 917568,
+  "trailer_count": 458784,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 16096.0
+ },
+ {
+  "name": "block47.layer3.layer",
+  "file_offset": 157883423,
+  "bytes": 263168,
+  "trailer_count": 131584,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1.0
+ },
+ {
+  "name": "block48.layer0.layer",
+  "file_offset": 158146667,
+  "bytes": 820784,
+  "trailer_count": 410392,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1508.0
+ },
+ {
+  "name": "block49.layer0.layer",
+  "file_offset": 158967527,
+  "bytes": 689232,
+  "trailer_count": 344616,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 6688.0
+ },
+ {
+  "name": "block5.layer0.layer",
+  "file_offset": 159656834,
+  "bytes": 61760,
+  "trailer_count": 30880,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 35168.0
+ },
+ {
+  "name": "block50.layer0.layer",
+  "file_offset": 159718670,
+  "bytes": 689232,
+  "trailer_count": 344616,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 29456.0
+ },
+ {
+  "name": "block51.layer0.layer",
+  "file_offset": 160407978,
+  "bytes": 689232,
+  "trailer_count": 344616,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 60576.0
+ },
+ {
+  "name": "block52.layer0.layer",
+  "file_offset": 161097286,
+  "bytes": 689232,
+  "trailer_count": 344616,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 3686.0
+ },
+ {
+  "name": "block53.layer0.layer",
+  "file_offset": 161786594,
+  "bytes": 689232,
+  "trailer_count": 344616,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1844.0
+ },
+ {
+  "name": "block54.layer0.layer",
+  "file_offset": 162475902,
+  "bytes": 689232,
+  "trailer_count": 344616,
+  "f16_finite_frac": 0.9999970982194675,
+  "f16_absmax": 12904.0
+ },
+ {
+  "name": "block55.layer0.layer",
+  "file_offset": 163165210,
+  "bytes": 689232,
+  "trailer_count": 344616,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 48128.0
+ },
+ {
+  "name": "block56.layer0.layer",
+  "file_offset": 163854518,
+  "bytes": 230176,
+  "trailer_count": 115088,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 38.4375
+ },
+ {
+  "name": "block57.layer0.layer",
+  "file_offset": 164084770,
+  "bytes": 197184,
+  "trailer_count": 98592,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 15.890625
+ },
+ {
+  "name": "block58.layer0.layer",
+  "file_offset": 164282030,
+  "bytes": 197184,
+  "trailer_count": 98592,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 12904.0
+ },
+ {
+  "name": "block59.layer0.layer",
+  "file_offset": 164479290,
+  "bytes": 197184,
+  "trailer_count": 98592,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 981.0
+ },
+ {
+  "name": "block6.layer0.layer",
+  "file_offset": 164676549,
+  "bytes": 61760,
+  "trailer_count": 30880,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 10.609375
+ },
+ {
+  "name": "block60.layer0.layer",
+  "file_offset": 164738385,
+  "bytes": 197184,
+  "trailer_count": 98592,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 1684.0
+ },
+ {
+  "name": "block61.layer0.layer",
+  "file_offset": 164935645,
+  "bytes": 197184,
+  "trailer_count": 98592,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 46240.0
+ },
+ {
+  "name": "block62.layer0.layer",
+  "file_offset": 165132905,
+  "bytes": 70048,
+  "trailer_count": 35024,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 9.6328125
+ },
+ {
+  "name": "block63.layer0.layer",
+  "file_offset": 165203029,
+  "bytes": 61760,
+  "trailer_count": 30880,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 19.0625
+ },
+ {
+  "name": "block64.layer0.layer",
+  "file_offset": 165264865,
+  "bytes": 61760,
+  "trailer_count": 30880,
+  "f16_finite_frac": 0.9999352331606217,
+  "f16_absmax": 15.8125
+ },
+ {
+  "name": "block65.layer0.layer",
+  "file_offset": 165326701,
+  "bytes": 61760,
+  "trailer_count": 30880,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 16.234375
+ },
+ {
+  "name": "block66.layer0.layer",
+  "file_offset": 165388537,
+  "bytes": 22784,
+  "trailer_count": 11392,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 613.5
+ },
+ {
+  "name": "block67.layer0.layer",
+  "file_offset": 165411397,
+  "bytes": 20672,
+  "trailer_count": 10336,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 15.03125
+ },
+ {
+  "name": "block68.layer0.layer",
+  "file_offset": 165432145,
+  "bytes": 20672,
+  "trailer_count": 10336,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 11.734375
+ },
+ {
+  "name": "block69.layer0.layer",
+  "file_offset": 165452893,
+  "bytes": 20672,
+  "trailer_count": 10336,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 13.265625
+ },
+ {
+  "name": "block7.layer0.layer",
+  "file_offset": 165473640,
+  "bytes": 61760,
+  "trailer_count": 30880,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 15240.0
+ },
+ {
+  "name": "block70.layer0.blend_scale",
+  "file_offset": 165535482,
+  "bytes": 2,
+  "trailer_count": 1,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 0.73974609375
+ },
+ {
+  "name": "block70.layer0.layer",
+  "file_offset": 165535560,
+  "bytes": 21808,
+  "trailer_count": 10904,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 14.9296875
+ },
+ {
+  "name": "block8.layer0.layer",
+  "file_offset": 165557443,
+  "bytes": 69936,
+  "trailer_count": 34968,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 57152.0
+ },
+ {
+  "name": "block9.layer0.layer",
+  "file_offset": 165627454,
+  "bytes": 197184,
+  "trailer_count": 98592,
+  "f16_finite_frac": 1.0,
+  "f16_absmax": 12512.0
+ }
+]

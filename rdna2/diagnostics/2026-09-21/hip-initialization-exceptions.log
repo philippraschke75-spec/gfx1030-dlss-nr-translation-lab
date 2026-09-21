@@ -32,9 +32,9 @@ frame address=00007FF866E65CD9 module=C:\Program Files\AMD\ROCm\6.4\bin\amdhip64
 frame address=00007FF8670F4701 module=C:\Program Files\AMD\ROCm\6.4\bin\amdhip64_6.dll offset=0x2a4701
 frame address=00007FF866E93323 module=C:\Program Files\AMD\ROCm\6.4\bin\amdhip64_6.dll offset=0x43323
 frame address=00007FF866EA998B module=C:\Program Files\AMD\ROCm\6.4\bin\amdhip64_6.dll offset=0x5998b
-frame address=00007FF8F0102724 module=C:\Users\tes43\Documents\ChatGPT\dlss 5\rdna2\build\launch-capture-bridge\amdhip64_7.dll offset=0x2724
-frame address=00007FF867F5A814 module=C:\Users\tes43\Documents\ChatGPT\dlss 5\gfx1032-dlss-nr-research-main\version.dll offset=0xa814
-frame address=00007FF867F59C04 module=C:\Users\tes43\Documents\ChatGPT\dlss 5\gfx1032-dlss-nr-research-main\version.dll offset=0x9c04
+frame address=00007FF8F0102724 module=C:\Users\<user>\Documents\ChatGPT\dlss 5\rdna2\build\launch-capture-bridge\amdhip64_7.dll offset=0x2724
+frame address=00007FF867F5A814 module=C:\Users\<user>\Documents\ChatGPT\dlss 5\gfx1032-dlss-nr-research-main\version.dll offset=0xa814
+frame address=00007FF867F59C04 module=C:\Users\<user>\Documents\ChatGPT\dlss 5\gfx1032-dlss-nr-research-main\version.dll offset=0x9c04
 frame address=00007FF85523984D module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\amd_fidelityfx_framegeneration_dx12.dll offset=0x984d
 frame address=00007FF85523C0EB module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\amd_fidelityfx_framegeneration_dx12.dll offset=0xc0eb
 frame address=00007FF7C2F5C6D8 module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe offset=0x21c6d8

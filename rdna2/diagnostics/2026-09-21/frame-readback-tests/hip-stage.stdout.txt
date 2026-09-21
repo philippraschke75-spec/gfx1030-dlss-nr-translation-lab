@@ -1,0 +1,2 @@
+HIP device=AMD Radeon RX 6900 XT arch=gfx1030
+PASS CPU-staged frame HIP roundtrip 23040 bytes; no shared-resource interop or neural dispatch
