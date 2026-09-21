@@ -91,6 +91,16 @@ class Ctx:
         E.run_workgroup(self.prog, g, self.lds, 256, sg, stop_at=addr, snap=snap, poison=True)
         return snap
 
+    def validate_allocation(self, addr, arena, dev, rebased):
+        self.adopt(dev)
+        if bytes(self.ka) != rebased:
+            raise RuntimeError('checkpoint rebased kernarg disagrees with emulator')
+        actual, _ = self.arena()
+        if not np.array_equal(actual.regions[1].arr, arena):
+            raise RuntimeError('checkpoint input arena changed during rebase')
+        if not self.emu_snap(addr):
+            raise RuntimeError('checkpoint unreachable at allocated device address')
+
     def gpu_dump(self, addr, tag):
         txt = variant_source(self.src, self.nreg, addr, self.sym, self.wg)
         s = W / (tag + '.s'); s.write_text(txt)
@@ -98,7 +108,11 @@ class Ctx:
         subprocess.run([str(BIN / 'llvm-mc.exe'), '-triple=amdgcn-amd-amdhsa', '-mcpu=gfx1030', '-filetype=obj', str(s), '-o', str(o)], check=True, capture_output=True)
         subprocess.run([str(BIN / 'ld.lld.exe'), '-shared', str(o), '-o', str(co)], check=True, capture_output=True)
         g, KA = self.arena()
-        rc, msg, out = D.gpu(co, self.sym, tag, bytes(self.ka), g.regions[1].arr.copy(), self.grid)
+        arena = g.regions[1].arr.copy()
+        def validate_allocation(dev, rebased):
+            self.validate_allocation(addr, arena, dev, rebased)
+        rc, msg, out = D.gpu(co, self.sym, tag, bytes(self.ka), arena, self.grid,
+                             preflight=validate_allocation)
         if out is None:
             return rc, msg, None, None
         n = 8 * (self.nreg + 1) * 128
@@ -109,9 +123,18 @@ class Ctx:
         return rc, msg, vec, sca
 
     def compare(self, addr, tag):
+        exploratory = os.environ.get('BISECT_HEURISTIC_FILTERS', '0') == '1'
+        ulp = int(os.environ.get('ULP', '0'))
+        if ulp < 0 or (ulp and not exploratory):
+            raise ValueError('ULP requires a nonnegative value and BISECT_HEURISTIC_FILTERS=1')
+        # Reject faulting/nonterminating checkpoint fixtures before GPU work.
+        snap = self.emu_snap(addr)
+        if not snap:
+            return None, 'checkpoint was not reached in the emulator'
         rc, msg, vec, sca = self.gpu_dump(addr, tag)
         if vec is None:
             return None, 'GPU %s %s' % (rc, msg)
+        # gpu_dump may adopt a new device arena base; refresh pointer values.
         snap = self.emu_snap(addr)
         reached_gpu = {w for w in range(8) if vec[w, self.nreg, 0] == MARK}
         if reached_gpu != set(snap):
@@ -122,11 +145,12 @@ class Ctx:
             e = V_[:self.nreg]; g = vec[w, :self.nreg]
             differ = (e != g) & (e != POISON)
             ptr = differ & (e >= np.uint32(0x8000)) & (e < np.uint32(0x140000))      # original image addresses (code/rodata pointers)
-            ulp = int(os.environ.get('ULP', '0'))
             near = np.zeros_like(differ)
             if ulp:                                                                  # float-noise tolerance (transcendentals differ per arch)
                 near = differ & (np.abs(e.view(np.int32).astype(np.int64) - g.view(np.int32).astype(np.int64)) <= ulp)
-            soft = (differ & (((e ^ g) & np.uint32(0xffff)) == 0)) | ptr | near      # upper-half-only, pointer-like or within ULP
+            # Heuristic filtering is useful for exploration, never a proof of
+            # agreement: integer values can look like floats or code pointers.
+            soft = ((differ & (((e ^ g) & np.uint32(0xffff)) == 0)) | ptr | near) if exploratory else np.zeros_like(differ)
             idx = np.argwhere(differ & ~soft)
             self.soft += int(soft.sum())
             for r, l in idx[:3]:
@@ -134,21 +158,23 @@ class Ctx:
             if len(idx): bad.append('wave%d: %d hard-differing vector cells' % (w, len(idx)))
             gs = dict(zip(SG_LIST, sca[w]))
             for name, ev, gv in (('exec', S_[E.EXEC], gs[100]), ('scc', scc, gs[101]), ('vcc', S_[E.VCC], gs[102])):
-                if ev != POISON and ev != 2 and ev != gv:
+                if ev != POISON and ev != gv:
                     bad.append('wave%d %s emu=%x gpu=%x' % (w, name, ev, gv))
             skip = set()
             for i in range(2, 64):
                 if S_[i] == POISON or S_[i] == gs[i]:
                     continue
-                if 0x8000 <= S_[i] < 0x140000:                       # code/rodata pointer: differs by construction
+                if exploratory and 0x8000 <= S_[i] < 0x140000:      # diagnostic-only pointer heuristic
                     skip.update((i, i + 1)); self.hi_seen.add(int(gs[i + 1])); continue
-                if S_[i] == 0 and i % 2 == 1 and 0 < int(gs[i]) <= 0xff:   # (stale) high dword of a code pointer (value varies per load)
+                if exploratory and S_[i] == 0 and i % 2 == 1 and 0 < int(gs[i]) <= 0xff:
                     continue
                 bad.append('wave%d s%d emu=%08x gpu=%08x' % (w, i, S_[i], gs[i]))
-        return (True, '; '.join(bad[:6])) if bad else (False, 'match on %d waves (%d soft upper-half cells)' % (len(snap), self.soft))
+        return (True, '; '.join(bad[:6])) if bad else (False, 'match on %d waves (%d heuristically ignored cells; not numerical qualification)' % (len(snap), self.soft))
 
 
 if __name__ == '__main__':
+    if os.environ.get('ULP', '0') != '0' and os.environ.get('BISECT_HEURISTIC_FILTERS', '0') != '1':
+        raise SystemExit('ULP requires BISECT_HEURISTIC_FILTERS=1 (exploratory diagnostics only)')
     key, flags = sys.argv[1], int(sys.argv[2], 0)
     seed = int(sys.argv[3]) if len(sys.argv) > 3 else 1
     wg = (int(sys.argv[4]), int(sys.argv[5])) if len(sys.argv) > 5 else (0, 0)
@@ -159,7 +185,8 @@ if __name__ == '__main__':
     if bad0 is not False: raise SystemExit('entry state inconsistent -> harness problem')
     lo, hi = 0, len(tr) - 1
     bad_hi, msg_hi = ctx.compare(tr[hi], 'phi'); print('probe at last:', bad_hi, msg_hi[:240], flush=True)
-    if not bad_hi: raise SystemExit('no divergence visible at the last visited instruction')
+    if bad_hi is None: raise SystemExit('GPU/checkpoint failure: ' + msg_hi)
+    if bad_hi is False: raise SystemExit('no divergence visible at the last visited instruction')
     while hi - lo > 1:
         mid = (lo + hi) // 2
         b, m = ctx.compare(tr[mid], 'p%d' % mid)

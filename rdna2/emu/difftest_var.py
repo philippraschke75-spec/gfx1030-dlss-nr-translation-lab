@@ -2,10 +2,15 @@
 
 Run inside the sandbox (python sandbox.py run <sb> <timeout> -- python rdna2/emu/difftest_var.py ...).
 usage: difftest_var.py <symbol-suffix e.g. 32_1> <flags,flags,...> [seed] [gx gy]
+                      [--height H] [--width W]
 """
-import sys, os, json, struct, subprocess, time
+import sys, os, json, struct, subprocess, time, re
 from pathlib import Path
 import numpy as np
+import queue
+import threading
+import hashlib
+import argparse
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gfx11emu as E, run_emu as R, run_var as V
 
@@ -27,8 +32,8 @@ def group_size(sym):
     raise KeyError(sym)
 
 
-def emulate(sym, lds, flags, seed, grid, H=16, W=16):
-    ka = V.make_kernarg(H=H, W=W, flags=flags, grid=grid)
+def emulate(sym, lds, flags, seed, grid, H=16, W=16, offset_x=-4, offset_y=-4):
+    ka = V.make_kernarg(H=H, W=W, offy=offset_x, offx=offset_y, flags=flags, grid=grid)
     prog = E.load_program(R.DIS, {sym})
     g, KA = V.build(seed, ka, len(V.PTR_FIELDS))
     init = g.regions[1].arr.copy()
@@ -40,10 +45,29 @@ def emulate(sym, lds, flags, seed, grid, H=16, W=16):
     return bytes(ka), init, g.regions[1].arr.copy(), steps, time.time() - t0
 
 
-def gpu(module, sym, tag, ka, init, grid):
+def gpu(module, sym, tag, ka, init, grid, preflight=None):
     d = OUT / tag; d.mkdir(parents=True, exist_ok=True)
     (d / 'kernarg.bin').write_bytes(ka); (d / 'arena.bin').write_bytes(init.tobytes())
-    r = subprocess.run([str(GPU), str(module), sym, str(d / 'kernarg.bin'), str(d / 'arena.bin'), hex(V.ARENA), str(grid[0]), str(grid[1]), '256'],
+    cmd = [str(GPU), str(module), sym, str(d / 'kernarg.bin'), str(d / 'arena.bin'), hex(V.ARENA), str(grid[0]), str(grid[1]), '256']
+    if preflight is not None:
+        p = subprocess.Popen(cmd + ['--preflight'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True,
+                             env=dict(os.environ, SWIN_TIMEOUT=os.environ.get('SWIN_TIMEOUT', '8')))
+        ready = queue.Queue()
+        threading.Thread(target=lambda: ready.put(p.stdout.readline()), daemon=True).start()
+        try:
+            line = ready.get(timeout=30)
+            match = re.fullmatch(r'READY arena_dev=0x([0-9a-fA-F]+)\s*', line)
+            if not match:
+                raise RuntimeError('allocation handshake failed: ' + line)
+            preflight(int(match[1], 16), (d / 'kernarg.bin.rebased').read_bytes())
+            stdout, stderr = p.communicate('GO\n', timeout=60)
+            return p.returncode, (line + stdout + stderr).strip(), (np.fromfile(d / 'arena.bin', np.uint8) if p.returncode == 0 else None)
+        finally:
+            if p.poll() is None:
+                p.kill()
+            p.wait()
+    r = subprocess.run(cmd,
                        capture_output=True, text=True, timeout=60, env=dict(os.environ, SWIN_TIMEOUT=os.environ.get('SWIN_TIMEOUT', '8')))
     return r.returncode, r.stdout.strip(), (np.fromfile(d / 'arena.bin', np.uint8) if r.returncode == 0 else None)
 
@@ -53,19 +77,68 @@ def where(idx):
     return 'slot%d(+%s)+0x%x' % (slot, hex(V.PTR_FIELDS[slot]) if slot < len(V.PTR_FIELDS) else '?', idx % V.SLOT)
 
 
+def parse_case(argv):
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('key', choices=SYMS)
+    p.add_argument('flags', help='comma-separated flag values')
+    p.add_argument('seed', type=int, nargs='?', default=1)
+    p.add_argument('gx', type=int, nargs='?', default=2)
+    p.add_argument('gy', type=int, nargs='?', default=2)
+    p.add_argument('--height', type=int, default=16)
+    p.add_argument('--width', type=int, default=16)
+    p.add_argument('--offset-x', type=int, default=-4)
+    p.add_argument('--offset-y', type=int, default=-4)
+    a = p.parse_args(argv)
+    if min(a.gx, a.gy, a.height, a.width) <= 0:
+        p.error('dimensions and grid counts must be positive')
+    a.flag_list = [int(x, 0) for x in a.flags.split(',')]
+    if any(x < 0 or x > 0xffffffff for x in a.flag_list):
+        p.error('flags must fit uint32')
+    return a
+
+
+def case_tag(key, flags, seed, grid, height, width, offset_x=-4, offset_y=-4):
+    return 'v%s_f%d_s%d_g%dx%d_h%d_w%d_x%d_y%d' % (key, flags, seed, *grid, height, width, offset_x, offset_y)
+
+
 if __name__ == '__main__':
-    key = sys.argv[1]; flag_list = [int(x, 0) for x in sys.argv[2].split(',')]
-    seed = int(sys.argv[3]) if len(sys.argv) > 3 else 1
-    grid = (int(sys.argv[4]), int(sys.argv[5])) if len(sys.argv) > 5 else (2, 2)
+    args = parse_case(sys.argv[1:])
+    key, flag_list, seed = args.key, args.flag_list, args.seed
+    grid = (args.gx, args.gy)
     sym, lds = SYMS[key]; lds = lds or group_size(sym)
     module = ROOT / 'build' / 'kernels-hw-scratch' / (sym + '.co')
     rows = []
     for flags in flag_list:
-        ka, init, ref, steps, secs = emulate(sym, lds, flags, seed, grid)
+        ka, init, ref, steps, secs = emulate(sym, lds, flags, seed, grid, args.height, args.width, args.offset_x, args.offset_y)
         changed = np.nonzero(ref != init)[0]
-        tag = 'v%s_f%d_s%d' % (key, flags, seed)
-        rc, msg, out = gpu(module, sym, tag, ka, init, grid)
+        tag = case_tag(key, flags, seed, grid, args.height, args.width, args.offset_x, args.offset_y)
+        def validate_device_fixture(dev, rebased):
+            V.ARENA = dev
+            actual_ka, actual_init, actual_ref, exact_steps, _ = emulate(sym, lds, flags, seed, grid, args.height, args.width, args.offset_x, args.offset_y)
+            if actual_ka != rebased or not np.array_equal(actual_init, init):
+                raise RuntimeError('device fixture differs from emulator preflight')
+            evidence = OUT / tag
+            (evidence / 'reference.bin').write_bytes(actual_ref.tobytes())
+            (evidence / 'preflight.json').write_text(json.dumps(dict(
+                device_base=hex(dev), steps=exact_steps,
+                module_sha256=hashlib.sha256(module.read_bytes()).hexdigest(),
+                kernarg_sha256=hashlib.sha256(rebased).hexdigest(),
+                input_sha256=hashlib.sha256(actual_init.tobytes()).hexdigest(),
+                reference_sha256=hashlib.sha256(actual_ref.tobytes()).hexdigest()), indent=2))
+        rc, msg, out = gpu(module, sym, tag, ka, init, grid, preflight=validate_device_fixture)
+        # The exploratory fixture has fields whose pointer-vs-scalar role is
+        # unresolved. Rebasing changes their numeric bits as seen by the GPU.
+        # Compare against a reference using the actual device base, retaining
+        # the original preflight before dispatch.
+        if out is not None:
+            match = re.search(r'arena_dev=0x([0-9a-fA-F]+)', msg)
+            if not match:
+                raise RuntimeError('missing device base; cannot compare rebased fixture')
+            V.ARENA = int(match[1], 16)
+            ka, init, ref, steps, secs = emulate(sym, lds, flags, seed, grid, args.height, args.width, args.offset_x, args.offset_y)
+            changed = np.nonzero(ref != init)[0]
         row = dict(kernel=sym, flags=flags, seed=seed, grid=grid, emu_steps=steps, emu_bytes_written=int(len(changed)),
+                   height=args.height, width=args.width, offset_x=args.offset_x, offset_y=args.offset_y,
                    emu_distinct=int(len(np.unique(ref[changed]))) if len(changed) else 0, gpu_rc=rc, gpu=msg)
         if out is None:
             row['status'] = 'GPU_FAIL'
@@ -74,6 +147,13 @@ if __name__ == '__main__':
             row['mismatches'] = int(len(diff)); row['status'] = 'PASS' if len(diff) == 0 and len(changed) > 0 else 'FAIL'
             if len(diff):
                 row['first_diffs'] = [where(int(i)) + ' emu=%02x gpu=%02x' % (ref[i], out[i]) for i in diff[:5]]
+        if out is not None:
+            row['output_sha256'] = hashlib.sha256(out.tobytes()).hexdigest()
+        (OUT / tag / 'result.json').write_text(json.dumps(row, indent=2) + '\n')
         rows.append(row); print(json.dumps(row), flush=True)
-    (OUT / ('results_%s_s%d.json' % (key, seed))).write_text(json.dumps(rows, indent=1))
+    summary = case_tag(key, flag_list[0], seed, grid, args.height, args.width, args.offset_x, args.offset_y)
+    summary += '_flags_' + '_'.join(map(str, flag_list))
+    (OUT / ('results_' + summary + '.json')).write_text(json.dumps(rows, indent=1))
     print('SUMMARY', [(r['flags'], r['status']) for r in rows])
+    # A printed FAIL must also fail the enclosing sandbox/CI command.
+    raise SystemExit(0 if rows and all(r['status'] == 'PASS' for r in rows) else 1)

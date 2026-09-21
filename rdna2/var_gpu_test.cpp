@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <vector>
 #include <chrono>
+#include <string>
 #define CHECK(x) do { auto e=(x); if(e!=hipSuccess){std::printf("%s: %s\n",#x,hipGetErrorString(e)); return 2;} } while(0)
 static std::vector<uint8_t> rd(const char* p){ FILE*f=std::fopen(p,"rb"); if(!f){std::printf("cannot open %s\n",p);std::exit(9);} std::fseek(f,0,SEEK_END); long n=std::ftell(f); std::fseek(f,0,SEEK_SET); std::vector<uint8_t> v(n); if(n&&std::fread(v.data(),1,n,f)!=(size_t)n)std::exit(9); std::fclose(f); return v; }
 int main(int argc,char**argv){
@@ -23,6 +24,15 @@ int main(int argc,char**argv){
  CHECK(hipMemcpy(d,host.data(),host.size(),hipMemcpyHostToDevice));
  uint64_t dev=(uint64_t)(d+PAD); int rebased=0;
  for(size_t o=0;o+8<=ka.size();o+=8){ uint64_t v; std::memcpy(&v,ka.data()+o,8); if(v>=base && v<base+arena.size()){ v=dev+(v-base); std::memcpy(ka.data()+o,&v,8); rebased++; } }
+ // Keep allocations alive while the parent validates these exact argument bits.
+ if(argc>9 && std::strcmp(argv[9],"--preflight")==0){
+    std::string path=std::string(argv[3])+".rebased";
+    FILE* fk=std::fopen(path.c_str(),"wb"); if(!fk) return 10;
+    bool ok=std::fwrite(ka.data(),1,ka.size(),fk)==ka.size(); std::fclose(fk); if(!ok) return 10;
+    std::printf("READY arena_dev=0x%llx\n",(unsigned long long)dev); std::fflush(stdout);
+    char permission[16]={};
+    if(!std::fgets(permission,sizeof permission,stdin) || std::strcmp(permission,"GO\n")) return 11;
+ }
  size_t sz=ka.size(); void* cfg[]={HIP_LAUNCH_PARAM_BUFFER_POINTER,ka.data(),HIP_LAUNCH_PARAM_BUFFER_SIZE,&sz,HIP_LAUNCH_PARAM_END};
  hipEvent_t e0,e1; hipEventCreate(&e0); hipEventCreate(&e1); hipEventRecord(e0);
  CHECK(hipModuleLaunchKernel(f,gx,gy,1,thr,1,1,0,nullptr,nullptr,cfg)); hipEventRecord(e1);
