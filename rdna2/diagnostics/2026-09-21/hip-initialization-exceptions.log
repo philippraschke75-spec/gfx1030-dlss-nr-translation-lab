@@ -1,0 +1,49 @@
+Exception observer installed; first-chance exceptions are not proof of a crash.
+EXCEPTION observed (may be handled) pid=5212 tid=25960 code=0xe06d7363
+exception address=00007FF930D8055C module=C:\Windows\System32\KERNELBASE.dll offset=0x6055c
+frame address=00007FF8F7531670 module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\plugins\DLSSNRCapture.asi offset=0x1670
+frame address=00007FF9339A813A module=C:\Windows\SYSTEM32\ntdll.dll offset=0x7813a
+frame address=00007FF93394E6A2 module=C:\Windows\SYSTEM32\ntdll.dll offset=0x1e6a2
+frame address=00007FF933984995 module=C:\Windows\SYSTEM32\ntdll.dll offset=0x54995
+frame address=00007FF930D8055C module=C:\Windows\System32\KERNELBASE.dll offset=0x6055c
+frame address=00007FF8781EF4D4 module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\GfnRuntimeSdk.dll offset=0x13f4d4
+frame address=00007FF87819D5D2 module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\GfnRuntimeSdk.dll offset=0xed5d2
+frame address=00007FF87819A2DE module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\GfnRuntimeSdk.dll offset=0xea2de
+frame address=00007FF87817FDB0 module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\GfnRuntimeSdk.dll offset=0xcfdb0
+frame address=00007FF878178E21 module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\GfnRuntimeSdk.dll offset=0xc8e21
+frame address=00007FF87816789F module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\GfnRuntimeSdk.dll offset=0xb789f
+frame address=00007FF87823DC89 module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\GfnRuntimeSdk.dll offset=0x18dc89
+frame address=00007FF931CD259D module=C:\Windows\System32\KERNEL32.DLL offset=0x1259d
+frame address=00007FF93398AF78 module=C:\Windows\SYSTEM32\ntdll.dll offset=0x5af78
+EXCEPTION observed (may be handled) pid=5212 tid=19756 code=0xe06d7363
+exception address=00007FF930D8055C module=C:\Windows\System32\KERNELBASE.dll offset=0x6055c
+frame address=00007FF8F7531670 module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\plugins\DLSSNRCapture.asi offset=0x1670
+frame address=00007FF9339A813A module=C:\Windows\SYSTEM32\ntdll.dll offset=0x7813a
+frame address=00007FF93394E6A2 module=C:\Windows\SYSTEM32\ntdll.dll offset=0x1e6a2
+frame address=00007FF933984995 module=C:\Windows\SYSTEM32\ntdll.dll offset=0x54995
+frame address=00007FF930D8055C module=C:\Windows\System32\KERNELBASE.dll offset=0x6055c
+frame address=00007FF8676888FF module=C:\Program Files\AMD\ROCm\6.4\bin\amdhip64_6.dll offset=0x8388ff
+frame address=00007FF867687E77 module=C:\Program Files\AMD\ROCm\6.4\bin\amdhip64_6.dll offset=0x837e77
+frame address=00007FF8676868B5 module=C:\Program Files\AMD\ROCm\6.4\bin\amdhip64_6.dll offset=0x8368b5
+frame address=00007FF866E53539 module=C:\Program Files\AMD\ROCm\6.4\bin\amdhip64_6.dll offset=0x3539
+frame address=00007FF866E6605F module=C:\Program Files\AMD\ROCm\6.4\bin\amdhip64_6.dll offset=0x1605f
+frame address=00007FF866EDD088 module=C:\Program Files\AMD\ROCm\6.4\bin\amdhip64_6.dll offset=0x8d088
+frame address=00007FF866E65CD9 module=C:\Program Files\AMD\ROCm\6.4\bin\amdhip64_6.dll offset=0x15cd9
+frame address=00007FF8670F4701 module=C:\Program Files\AMD\ROCm\6.4\bin\amdhip64_6.dll offset=0x2a4701
+frame address=00007FF866E93323 module=C:\Program Files\AMD\ROCm\6.4\bin\amdhip64_6.dll offset=0x43323
+frame address=00007FF866EA998B module=C:\Program Files\AMD\ROCm\6.4\bin\amdhip64_6.dll offset=0x5998b
+frame address=00007FF8F0102724 module=C:\Users\tes43\Documents\ChatGPT\dlss 5\rdna2\build\launch-capture-bridge\amdhip64_7.dll offset=0x2724
+frame address=00007FF867F5A814 module=C:\Users\tes43\Documents\ChatGPT\dlss 5\gfx1032-dlss-nr-research-main\version.dll offset=0xa814
+frame address=00007FF867F59C04 module=C:\Users\tes43\Documents\ChatGPT\dlss 5\gfx1032-dlss-nr-research-main\version.dll offset=0x9c04
+frame address=00007FF85523984D module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\amd_fidelityfx_framegeneration_dx12.dll offset=0x984d
+frame address=00007FF85523C0EB module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\amd_fidelityfx_framegeneration_dx12.dll offset=0xc0eb
+frame address=00007FF7C2F5C6D8 module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe offset=0x21c6d8
+frame address=00007FF7C2F5CE6E module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe offset=0x21ce6e
+frame address=00007FF7C2F2C46D module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe offset=0x1ec46d
+frame address=00007FF7C2F26334 module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe offset=0x1e6334
+frame address=00007FF7C36C5AFB module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe offset=0x985afb
+frame address=00007FF7C2E8324C module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe offset=0x14324c
+frame address=00007FF7C2EAD50E module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe offset=0x16d50e
+frame address=00007FF7C477ABF4 module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe offset=0x1a3abf4
+frame address=00007FF931CD259D module=C:\Windows\System32\KERNEL32.DLL offset=0x1259d
+frame address=00007FF93398AF78 module=C:\Windows\SYSTEM32\ntdll.dll offset=0x5af78

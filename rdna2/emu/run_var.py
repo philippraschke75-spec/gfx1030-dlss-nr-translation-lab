@@ -20,6 +20,9 @@ def make_kernarg(H=16, W=16, offy=-4, offx=-4, flags=0, grid=(1, 1), threads=256
     ka = bytearray(424)
     for k, off in enumerate(ptr_fields):
         struct.pack_into('<Q', ka, off, ARENA + k * SLOT)
+    # Legacy argument names are reversed: source s26 (+0x20) contributes to
+    # the X origin, s27 (+0x24) to Y (PC 0xb0360..0xb036c). Keep compatibility;
+    # difftest_var exposes correctly named --offset-x/--offset-y controls.
     struct.pack_into('<iiii', ka, 0x18, H, W, offy, offx)
     struct.pack_into('<I', ka, 0x28, flags)
     # 0xA8.. are HIP hidden arguments (explicit params end at 0xA8): the runtime fills them from the launch

@@ -13,6 +13,9 @@ VCC, M0, EXEC = 106, 124, 126
 SH_HI, PR_HI = 0x00010000, 0x00020000          # flat aperture high dwords chosen by the harness
 AR = np.arange(32, dtype=np.uint64)
 ONE = np.uint64(1)
+# Host diagnostic switch; disabled for the reference model. This is a
+# hypothesis probe, not an established gfx1100 ISA rule.
+MIX_F16_INPUT_FLUSH = False
 
 
 class MemFault(Exception):
@@ -790,6 +793,13 @@ class Exec:
         return run
 
     def _valu(s, b, P, mods):
+        def finish_f32(x):
+            # Saturation of finite values. NaN handling remains NumPy's
+            # propagation behavior pending explicit DX10-mode modeling.
+            if mods.get('clamp'):
+                x = np.clip(x, np.float32(0), np.float32(1))
+                x = np.where(x == 0, np.float32(0), x)
+            return fbits(x)
         BIN = {'v_add_nc_u32': lambda x, y: x + y, 'v_sub_nc_u32': lambda x, y: x - y, 'v_and_b32': lambda x, y: x & y,
                'v_or_b32': lambda x, y: x | y, 'v_xor_b32': lambda x, y: x ^ y,
                'v_mul_lo_u32': lambda x, y: (x.astype(np.uint64) * y.astype(np.uint64)) & np.uint64(M32),
@@ -815,11 +825,11 @@ class Exec:
              'v_max_f32': np.fmax, 'v_min_f32': np.fmin}
         if b in F:
             f = F[b]
-            return lambda w: w.wv(P[0], fbits(f(w.rf(P[1]), w.rf(P[2]))))
+            return lambda w: w.wv(P[0], finish_f32(f(w.rf(P[1]), w.rf(P[2]))))
         if b == 'v_mul_f16':
             return lambda w: w.wv(P[0], hbits(w.rh(P[1]) * w.rh(P[2])))
         if b == 'v_fma_f32':
-            return lambda w: w.wv(P[0], fbits(fma32(w.rf(P[1]), w.rf(P[2]), w.rf(P[3]))))
+            return lambda w: w.wv(P[0], finish_f32(fma32(w.rf(P[1]), w.rf(P[2]), w.rf(P[3]))))
         if b == 'v_fmac_f32':
             return lambda w: w.wv(P[0], fbits(fma32(w.rf(P[1]), w.rf(P[2]), w.RV[P[0]['i']].view(np.float32))))
         if b == 'v_med3_f32':
@@ -862,6 +872,9 @@ class Exec:
                     raw = w.r32(dict(P[1 + k], neg=False, abs=False))
                     if ohi[k]:
                         hv = (raw >> np.uint32(16)) if osel[k] else raw
+                        if MIX_F16_INPUT_FLUSH:
+                            hv = np.where((hv & np.uint32(0x7c00)) == 0,
+                                          hv & np.uint32(0x8000), hv)
                         x = (hv & np.uint32(0xffff)).astype(np.uint16).view(np.float16).astype(np.float32)
                     else:
                         x = raw.view(np.float32)
