@@ -1,0 +1,16 @@
+case0 {'seed': 1, 'H': 16, 'W': 16, 'offy': -4, 'offx': -4, 'mode': 'small'} emu steps=1231376 8.1s touched {'kernarg': ('0x0', '0x38'), 'dispatch': ('0x4', '0xc'), 'in': ('0x0', '0x1600'), 'out': ('0x0', '0x1600'), 'blob': ('0x0', '0x50b0')}
+  gpu rc=0 GPU dispatch OK: 0.460 ms, guards intact
+  emu wrote 4608 bytes; mismatching bytes: 0; first at []
+case1 {'seed': 2, 'H': 16, 'W': 16, 'offy': 0, 'offx': 0, 'mode': 'small_big'} emu steps=1493576 9.9s touched {'kernarg': ('0x0', '0x38'), 'dispatch': ('0x4', '0xc'), 'in': ('0x0', '0x2000'), 'out': ('0x0', '0x2000'), 'blob': ('0x0', '0x50b0')}
+  gpu rc=0 GPU dispatch OK: 0.483 ms, guards intact
+  emu wrote 8192 bytes; mismatching bytes: 0; first at []
+case2 {'seed': 3, 'H': 24, 'W': 16, 'offy': -4, 'offx': -4, 'mode': 'small'} emu steps=1907552 12.7s touched {'kernarg': ('0x0', '0x38'), 'dispatch': ('0x4', '0xc'), 'in': ('0x0', '0x2600'), 'out': ('0x0', '0x2600'), 'blob': ('0x0', '0x50b0')}
+  gpu rc=0 GPU dispatch OK: 0.471 ms, guards intact
+  emu wrote 7680 bytes; mismatching bytes: 0; first at []
+case3 {'seed': 4, 'H': 16, 'W': 16, 'offy': -4, 'offx': -4, 'mode': 'small_hi'} emu steps=1231408 8.2s touched {'kernarg': ('0x0', '0x38'), 'dispatch': ('0x4', '0xc'), 'in': ('0x0', '0x1600'), 'out': ('0x0', '0x1600'), 'blob': ('0x0', '0x50b0')}
+  gpu rc=0 GPU dispatch OK: 0.466 ms, guards intact
+  emu wrote 4608 bytes; mismatching bytes: 0; first at []
+case4 {'seed': 5, 'H': 16, 'W': 24, 'offy': -4, 'offx': -4, 'mode': 'small_tiny'} emu steps=1758978 11.6s touched {'kernarg': ('0x0', '0x38'), 'dispatch': ('0x4', '0xc'), 'in': ('0x0', '0x2200'), 'out': ('0x0', '0x2200'), 'blob': ('0x0', '0x50b0')}
+  gpu rc=0 GPU dispatch OK: 0.508 ms, guards intact
+  emu wrote 7680 bytes; mismatching bytes: 0; first at []
+[["case0", "PASS"], ["case1", "PASS"], ["case2", "PASS"], ["case3", "PASS"], ["case4", "PASS"]]

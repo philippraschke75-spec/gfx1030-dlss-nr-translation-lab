@@ -191,7 +191,7 @@ def translate(name,lines,policy,md,ro,rofile,out,binpath,private_lds=False,helpe
     if private and not hw:
         prefix += [f'v_mul_lo_u32 v{scratch+12}, v0, {private_stride}',
                    f'v_add_nc_u32 v{scratch+12}, {private_start}, v{scratch+12}']
-    code=prefix; changes=[]; addresses={a for a,_,_ in lines}
+    code=prefix; changes=[]; addresses={a for a,_,_ in lines}; helper_add_at=set()
     for i,(addr,text,raw) in enumerate(lines):
         code += [f'.Lpc_{addr:x}:','// original: '+text]
         op,*tail=text.split(None,1); args=tail[0] if tail else ''
@@ -200,13 +200,21 @@ def translate(name,lines,policy,md,ro,rofile,out,binpath,private_lds=False,helpe
             if op!='v_wmma_f32_16x16x16_f16': raise ValueError('unsupported WMMA form '+op)
             replacement=base.wmma(text,scratch)
         elif op=='s_getpc_b64': replacement=[text,f'.Lgetpc_{addr:x}:']
+        elif op=='s_addc_u32' and i and lines[i-1][0] in helper_add_at:
+            m=re.fullmatch(r's_addc_u32 (s\d+), (s\d+), (-1|0xffffffff)',text)
+            if m and m[1]!=m[2]: m=None
+            if not m: raise ValueError('unexpected high-word add after helper PC computation: '+text)
+            replacement=[f's_addc_u32 {m[1]}, {m[1]}, 0']
         elif i and lines[i-1][1].startswith('s_getpc_b64'):
             m=re.fullmatch(r's_add_u32 (s\d+), \1, (0x[0-9a-f]+)',text)
             if not m: raise ValueError('unsupported PC-relative sequence')
             offset=int(m[2],16);offset-=0x100000000 if offset>=0x80000000 else 0
             target=addr+offset
             if helper is not None and target==helper[0][0]:
+                # The helper is appended after the caller, so the delta is positive here
+                # (it was negative in the source); the following s_addc adds only the carry.
                 replacement=[f's_add_u32 {m[1]}, {m[1]}, .Lpc_{target:x}-.Lgetpc_{lines[i-1][0]:x}']
+                helper_add_at.add(addr)
             else:
                 if not ro['addr']<=target<ro['addr']+ro['size']:
                     raise ValueError('unsupported PC-relative reference outside rodata')
