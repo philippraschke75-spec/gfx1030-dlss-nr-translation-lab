@@ -1,0 +1,2 @@
+{"kernel": "_Z10k_swin_varILi32ELb0EEv9VarParams", "flags": 0, "seed": 1, "grid": [2, 2], "emu_steps": 362321, "emu_bytes_written": 20987, "emu_distinct": 213, "gpu_rc": 0, "gpu": "GPU dispatch OK: 0.284 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact", "mismatches": 0, "status": "PASS"}
+SUMMARY [(0, 'PASS')]

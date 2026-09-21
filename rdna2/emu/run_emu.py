@@ -2,7 +2,8 @@ import sys, time, struct, json
 import numpy as np
 sys.path.insert(0, '.')
 import gfx11emu as E
-DIS = '../../analysis/gfx1100-disassembly.txt'
+from pathlib import Path
+DIS = str(Path(__file__).resolve().parent.parent.parent / 'analysis' / 'gfx1100-disassembly.txt')
 KERNEL = '_Z16k_swin_1h_32_fp810SwinParams'
 HELPER = '_Z10swin_layerR7SwinLDSPKhRK10BlobLayouti'
 

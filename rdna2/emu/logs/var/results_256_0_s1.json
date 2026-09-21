@@ -1,0 +1,89 @@
+[
+ {
+  "kernel": "_Z10k_swin_varILi256ELb0EEv9VarParams",
+  "flags": 0,
+  "seed": 1,
+  "grid": [
+   2,
+   2
+  ],
+  "emu_steps": 7019881,
+  "emu_bytes_written": 167920,
+  "emu_distinct": 208,
+  "gpu_rc": 0,
+  "gpu": "GPU dispatch OK: 3.172 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact",
+  "mismatches": 0,
+  "status": "PASS"
+ },
+ {
+  "kernel": "_Z10k_swin_varILi256ELb0EEv9VarParams",
+  "flags": 1,
+  "seed": 1,
+  "grid": [
+   2,
+   2
+  ],
+  "emu_steps": 7022557,
+  "emu_bytes_written": 167928,
+  "emu_distinct": 203,
+  "gpu_rc": 0,
+  "gpu": "GPU dispatch OK: 3.221 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact",
+  "mismatches": 0,
+  "status": "PASS"
+ },
+ {
+  "kernel": "_Z10k_swin_varILi256ELb0EEv9VarParams",
+  "flags": 2,
+  "seed": 1,
+  "grid": [
+   2,
+   2
+  ],
+  "emu_steps": 7024777,
+  "emu_bytes_written": 167920,
+  "emu_distinct": 207,
+  "gpu_rc": 0,
+  "gpu": "GPU dispatch OK: 3.212 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact",
+  "mismatches": 0,
+  "status": "PASS"
+ },
+ {
+  "kernel": "_Z10k_swin_varILi256ELb0EEv9VarParams",
+  "flags": 4,
+  "seed": 1,
+  "grid": [
+   2,
+   2
+  ],
+  "emu_steps": 7389705,
+  "emu_bytes_written": 186352,
+  "emu_distinct": 208,
+  "gpu_rc": 0,
+  "gpu": "GPU dispatch OK: 3.339 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact",
+  "mismatches": 0,
+  "status": "PASS"
+ },
+ {
+  "kernel": "_Z10k_swin_varILi256ELb0EEv9VarParams",
+  "flags": 8,
+  "seed": 1,
+  "grid": [
+   2,
+   2
+  ],
+  "emu_steps": 7623083,
+  "emu_bytes_written": 167930,
+  "emu_distinct": 202,
+  "gpu_rc": 0,
+  "gpu": "GPU dispatch OK: 3.364 ms, 18 pointers rebased, arena_dev=0xa04010000, guards intact",
+  "mismatches": 19626,
+  "status": "FAIL",
+  "first_diffs": [
+   "slot1(+0x8)+0x2 emu=7e gpu=fe",
+   "slot1(+0x8)+0x3 emu=7e gpu=79",
+   "slot1(+0x8)+0x6 emu=7e gpu=fe",
+   "slot1(+0x8)+0xa emu=7e gpu=62",
+   "slot1(+0x8)+0xe emu=7e gpu=3b"
+  ]
+ }
+]
