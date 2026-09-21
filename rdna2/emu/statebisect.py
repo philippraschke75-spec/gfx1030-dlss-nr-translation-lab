@@ -122,7 +122,11 @@ class Ctx:
             e = V_[:self.nreg]; g = vec[w, :self.nreg]
             differ = (e != g) & (e != POISON)
             ptr = differ & (e >= np.uint32(0x8000)) & (e < np.uint32(0x140000))      # original image addresses (code/rodata pointers)
-            soft = (differ & (((e ^ g) & np.uint32(0xffff)) == 0)) | ptr             # upper-half-only or pointer-like
+            ulp = int(os.environ.get('ULP', '0'))
+            near = np.zeros_like(differ)
+            if ulp:                                                                  # float-noise tolerance (transcendentals differ per arch)
+                near = differ & (np.abs(e.view(np.int32).astype(np.int64) - g.view(np.int32).astype(np.int64)) <= ulp)
+            soft = (differ & (((e ^ g) & np.uint32(0xffff)) == 0)) | ptr | near      # upper-half-only, pointer-like or within ULP
             idx = np.argwhere(differ & ~soft)
             self.soft += int(soft.sum())
             for r, l in idx[:3]:
