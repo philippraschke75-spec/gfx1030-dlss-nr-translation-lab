@@ -1,0 +1,4 @@
+DXGI observation hooks active; neural rendering unavailable
+FRAME_METADATA swap=0x2e53c0811b0 queue=0x2c427b32f90 device=0x2c4279550c0 width=2560 height=1440 format=24 buffers=3 queue_type=0 valid_buffer=1
+FRAME_METADATA swap=0x2e53c0811b0 queue=0x2e53c19cdf0 device=0x2c4279550c0 width=2560 height=1440 format=24 buffers=3 queue_type=0 valid_buffer=1
+Observed Present; forwarding unchanged

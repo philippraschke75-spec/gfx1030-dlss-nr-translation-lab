@@ -16,10 +16,17 @@ ARENA = 0x7500_0000_0000
 PTR_FIELDS = [0x00, 0x08, 0x10, 0x30, 0x38, 0x40, 0x48, 0x50, 0x58, 0x60, 0x68, 0x70, 0x78, 0x80, 0x88, 0x90, 0x98, 0xA0]
 
 
+# Pointer fields the real host launcher (VARPARAMS_HOST_CONTRACT.md) fills; +0x40..+0x9f are zero there.
+REAL_PTR_FIELDS = [0x00, 0x08, 0x10, 0x30, 0x38, 0xA0]
+
+
 def make_kernarg(H=16, W=16, offy=-4, offx=-4, flags=0, grid=(1, 1), threads=256, ptr_fields=PTR_FIELDS):
+    import os
+    if os.environ.get('DLSSNR_REAL_LAYOUT'):
+        ptr_fields = [f for f in ptr_fields if f in REAL_PTR_FIELDS]
     ka = bytearray(424)
-    for k, off in enumerate(ptr_fields):
-        struct.pack_into('<Q', ka, off, ARENA + k * SLOT)
+    for off in ptr_fields:
+        struct.pack_into('<Q', ka, off, ARENA + PTR_FIELDS.index(off) * SLOT)
     # Legacy argument names are reversed: source s26 (+0x20) contributes to
     # the X origin, s27 (+0x24) to Y (PC 0xb0360..0xb036c). Keep compatibility;
     # difftest_var exposes correctly named --offset-x/--offset-y controls.
@@ -38,6 +45,10 @@ def build(seed, ka, nslots, mode='small'):
     g.add('kernarg', KA, np.frombuffer(bytes(ka), np.uint8).copy())
     e = rng.integers(2, 8, nslots * SLOT, dtype=np.uint8); m = rng.integers(0, 8, nslots * SLOT, dtype=np.uint8); s = rng.integers(0, 2, nslots * SLOT, dtype=np.uint8)
     arena = ((s << 7) | (e << 3) | m).astype(np.uint8)
+    import os
+    if os.environ.get('DLSSNR_WEIGHT_BLOB'):              # real WEIGHTS_HT record placed in the +0x10 slot (index 2)
+        w = np.frombuffer(open(os.environ['DLSSNR_WEIGHT_BLOB'], 'rb').read(), np.uint8)
+        assert len(w) <= SLOT; arena[2 * SLOT:2 * SLOT + len(w)] = w
     g.add('arena', ARENA, arena)
     # image .rodata (E4M3 lookup table initialised as the translator does) at its original address
     rdir = Path(__file__).resolve().parent.parent

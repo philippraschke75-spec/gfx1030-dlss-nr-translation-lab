@@ -1,0 +1,8 @@
+DXGI observation hooks active; neural rendering unavailable
+QUEUE_CANDIDATE swap=0x251aeff9380 candidate=0x230a88ae910 source=CreateSwapChainForHwnd depth=1 accepted=1 ambiguous=0 execute_module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll
+FRAME_METADATA swap=0x251aeff9380 queue=0x230a88ae910 device=0x230a86e55f0 width=2560 height=1440 format=24 buffers=3 queue_type=0 valid_buffer=1
+QUEUE_CANDIDATE swap=0x251aefef2e0 candidate=0x251bcb5e8e0 source=CreateSwapChainForHwnd depth=1 accepted=1 ambiguous=0 execute_module=c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll
+FRAME_METADATA swap=0x251aefef2e0 queue=0x251bcb5e8e0 device=0x230a86e55f0 width=2560 height=1440 format=24 buffers=3 queue_type=0 valid_buffer=1
+Observed Present; forwarding unchanged
+FRAME_CAPTURE_SAVED fence completed; PRESENT state restored
+CAPTURE_RESULT hr=0x00000000
