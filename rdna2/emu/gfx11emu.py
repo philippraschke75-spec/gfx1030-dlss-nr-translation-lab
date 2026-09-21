@@ -561,8 +561,9 @@ class Exec:
         if base == 's_or_saveexec_b32':
             def orsav(w):
                 old = w.S[EXEC]
+                src = w.rs(P[1])                 # read the source before the destination is overwritten (s6, s6 form)
                 w.ws(P[0], old)
-                w.S[EXEC] = (w.rs(P[1]) | old) & M32
+                w.S[EXEC] = (src | old) & M32
                 w.scc = int(w.S[EXEC] != 0)
             return orsav
         if base in ('s_mov_b32', 's_mov_b64'):

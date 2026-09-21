@@ -12,7 +12,7 @@ after the emulator has terminated without fault on the same bytes.
 | `<32,false>` | PASS | PASS | PASS | PASS | invalid (LDS need exceeds static size) | – | – | – | – |
 | `<64,false>` | PASS | PASS | PASS | PASS | PASS | – | – | – | – |
 | `<128,false>`| PASS | PASS | PASS | PASS | PASS | – | – | – | – |
-| `<256,false>`| PASS | PASS | PASS | PASS | FAIL 19,626 B | – | – | – | – |
+| `<256,false>`| PASS | PASS | PASS | PASS | PASS (was FAIL 19,626 B until the emulator's `s_or_saveexec_b32 s6,s6` bug was fixed) | – | – | – | – |
 
 PASS = 0 mismatching bytes, non-degenerate output (187-256 distinct byte values, 21-186 KB written).
 "–" = not run. Flags are the low bits of the u32 at kernarg +0x28 (bit tests at 0xB0248..0xB0344).
@@ -26,7 +26,7 @@ PASS = 0 mismatching bytes, non-degenerate output (187-256 distinct byte values,
   `statebisect.py` so far was an emulator/fixture defect, not a translation defect.
 
 ## Open
-- flags 16 / 32 on `<32,true>` and flag 8 on `<256,false>`: not yet root-caused. `statebisect.py` shows the
+- flags 16 / 32 on `<32,true>`: not yet root-caused (flag 16 begins with a 1-ULP `v_log_f32` difference but ~92 % of written bytes differ by >=8 e4m3 code steps, so it is not just ULP noise). `statebisect.py` shows the
   flag-32 divergence only in the final per-element f16 dot-product loop of one wave (sparse lanes).
 - gfx1030 preserves the upper 16 bits of a 16-bit VALU result; the emulator zero-extends. Unresolved whether
   gfx11 does either; the bisect classifies upper-half-only differences as "soft".
