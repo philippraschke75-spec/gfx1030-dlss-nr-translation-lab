@@ -1,0 +1,174 @@
+[
+ {
+  "kernel": "_Z10k_swin_varILi32ELb1EEv9VarParams",
+  "flags": 0,
+  "seed": 1,
+  "grid": [
+   2,
+   2
+  ],
+  "emu_steps": 371106,
+  "emu_bytes_written": 37352,
+  "emu_distinct": 256,
+  "gpu_rc": 0,
+  "gpu": "GPU dispatch OK: 0.307 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact",
+  "mismatches": 0,
+  "status": "PASS"
+ },
+ {
+  "kernel": "_Z10k_swin_varILi32ELb1EEv9VarParams",
+  "flags": 1,
+  "seed": 1,
+  "grid": [
+   2,
+   2
+  ],
+  "emu_steps": 371211,
+  "emu_bytes_written": 37348,
+  "emu_distinct": 256,
+  "gpu_rc": 0,
+  "gpu": "GPU dispatch OK: 0.289 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact",
+  "mismatches": 0,
+  "status": "PASS"
+ },
+ {
+  "kernel": "_Z10k_swin_varILi32ELb1EEv9VarParams",
+  "flags": 2,
+  "seed": 1,
+  "grid": [
+   2,
+   2
+  ],
+  "emu_steps": 371826,
+  "emu_bytes_written": 37352,
+  "emu_distinct": 256,
+  "gpu_rc": 0,
+  "gpu": "GPU dispatch OK: 0.316 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact",
+  "mismatches": 0,
+  "status": "PASS"
+ },
+ {
+  "kernel": "_Z10k_swin_varILi32ELb1EEv9VarParams",
+  "flags": 4,
+  "seed": 1,
+  "grid": [
+   2,
+   2
+  ],
+  "emu_steps": 393510,
+  "emu_bytes_written": 39656,
+  "emu_distinct": 256,
+  "gpu_rc": 0,
+  "gpu": "GPU dispatch OK: 0.357 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact",
+  "mismatches": 0,
+  "status": "PASS"
+ },
+ {
+  "kernel": "_Z10k_swin_varILi32ELb1EEv9VarParams",
+  "flags": 8,
+  "seed": 1,
+  "grid": [
+   2,
+   2
+  ],
+  "emu_steps": 404282,
+  "emu_bytes_written": 37357,
+  "emu_distinct": 256,
+  "gpu_rc": 0,
+  "gpu": "GPU dispatch OK: 0.314 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact",
+  "mismatches": 0,
+  "status": "PASS"
+ },
+ {
+  "kernel": "_Z10k_swin_varILi32ELb1EEv9VarParams",
+  "flags": 16,
+  "seed": 1,
+  "grid": [
+   2,
+   2
+  ],
+  "emu_steps": 525559,
+  "emu_bytes_written": 37339,
+  "emu_distinct": 256,
+  "gpu_rc": 0,
+  "gpu": "GPU dispatch OK: 0.312 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact",
+  "mismatches": 35977,
+  "status": "FAIL",
+  "first_diffs": [
+   "slot1(+0x8)+0x0 emu=6b gpu=68",
+   "slot1(+0x8)+0x1 emu=7e gpu=7b",
+   "slot1(+0x8)+0x2 emu=71 gpu=73",
+   "slot1(+0x8)+0x3 emu=79 gpu=6b",
+   "slot1(+0x8)+0x4 emu=5d gpu=e8"
+  ]
+ },
+ {
+  "kernel": "_Z10k_swin_varILi32ELb1EEv9VarParams",
+  "flags": 32,
+  "seed": 1,
+  "grid": [
+   2,
+   2
+  ],
+  "emu_steps": 402376,
+  "emu_bytes_written": 35042,
+  "emu_distinct": 256,
+  "gpu_rc": 0,
+  "gpu": "GPU dispatch OK: 0.321 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact",
+  "mismatches": 184,
+  "status": "FAIL",
+  "first_diffs": [
+   "slot11(+0x70)+0x46 emu=a0 gpu=00",
+   "slot11(+0x70)+0x47 emu=b4 gpu=00",
+   "slot11(+0x70)+0x68 emu=20 gpu=00",
+   "slot11(+0x70)+0x69 emu=3c gpu=00",
+   "slot11(+0x70)+0x6a emu=a2 gpu=00"
+  ]
+ },
+ {
+  "kernel": "_Z10k_swin_varILi32ELb1EEv9VarParams",
+  "flags": 31,
+  "seed": 1,
+  "grid": [
+   2,
+   2
+  ],
+  "emu_steps": 584015,
+  "emu_bytes_written": 39386,
+  "emu_distinct": 256,
+  "gpu_rc": 0,
+  "gpu": "GPU dispatch OK: 0.361 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact",
+  "mismatches": 31425,
+  "status": "FAIL",
+  "first_diffs": [
+   "slot1(+0x8)+0x0 emu=76 gpu=79",
+   "slot1(+0x8)+0x1 emu=7e gpu=7d",
+   "slot1(+0x8)+0x2 emu=f2 gpu=ec",
+   "slot1(+0x8)+0x3 emu=e3 gpu=db",
+   "slot1(+0x8)+0x4 emu=f0 gpu=f2"
+  ]
+ },
+ {
+  "kernel": "_Z10k_swin_varILi32ELb1EEv9VarParams",
+  "flags": 63,
+  "seed": 1,
+  "grid": [
+   2,
+   2
+  ],
+  "emu_steps": 586809,
+  "emu_bytes_written": 37078,
+  "emu_distinct": 256,
+  "gpu_rc": 0,
+  "gpu": "GPU dispatch OK: 0.390 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact",
+  "mismatches": 29368,
+  "status": "FAIL",
+  "first_diffs": [
+   "slot3(+0x30)+0xffee0 emu=76 gpu=79",
+   "slot3(+0x30)+0xffee2 emu=f2 gpu=ee",
+   "slot3(+0x30)+0xffee3 emu=e0 gpu=d9",
+   "slot3(+0x30)+0xffee4 emu=f1 gpu=f2",
+   "slot3(+0x30)+0xffee5 emu=f5 gpu=e7"
+  ]
+ }
+]
