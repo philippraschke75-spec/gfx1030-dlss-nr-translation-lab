@@ -1,0 +1,27 @@
+progress steps=1000000 pcs=['0x10e0b8', '0x10be40', '0x10b9b8', '0x10b9b8', '0x10b9b8', '0x10b9b8', '0x10b9b8', '0x10b9b8']
+progress steps=1000000 pcs=['0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10c048']
+progress steps=1000000 pcs=['0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10c148']
+progress steps=1000000 pcs=['0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10bd30', '0x10b990']
+{"kernel": "_Z10k_swin_varILi256ELb0EEv9VarParams", "flags": 0, "seed": 1, "grid": [2, 2], "emu_steps": 7019881, "emu_bytes_written": 167920, "emu_distinct": 208, "gpu_rc": 0, "gpu": "GPU dispatch OK: 3.172 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact", "mismatches": 0, "status": "PASS"}
+progress steps=1000000 pcs=['0x10e0b8', '0x10c2c0', '0x10b9b8', '0x10b9b8', '0x10b9b8', '0x10b9b8', '0x10b9b8', '0x10b9b8']
+progress steps=1000000 pcs=['0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10c280']
+progress steps=1000000 pcs=['0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10c384']
+progress steps=1000000 pcs=['0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10c108', '0x10b990']
+{"kernel": "_Z10k_swin_varILi256ELb0EEv9VarParams", "flags": 1, "seed": 1, "grid": [2, 2], "emu_steps": 7022557, "emu_bytes_written": 167928, "emu_distinct": 203, "gpu_rc": 0, "gpu": "GPU dispatch OK: 3.221 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact", "mismatches": 0, "status": "PASS"}
+progress steps=1000000 pcs=['0x10e0b8', '0x10be40', '0x10b9b8', '0x10b9b8', '0x10b9b8', '0x10b9b8', '0x10b9b8', '0x10b9b8']
+progress steps=1000000 pcs=['0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10c048']
+progress steps=1000000 pcs=['0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10c148']
+progress steps=1000000 pcs=['0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10bd30', '0x10b990']
+{"kernel": "_Z10k_swin_varILi256ELb0EEv9VarParams", "flags": 2, "seed": 1, "grid": [2, 2], "emu_steps": 7024777, "emu_bytes_written": 167920, "emu_distinct": 207, "gpu_rc": 0, "gpu": "GPU dispatch OK: 3.212 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact", "mismatches": 0, "status": "PASS"}
+progress steps=1000000 pcs=['0x10e0b8', '0x10be40', '0x10b9b8', '0x10b9b8', '0x10b9b8', '0x10b9b8', '0x10b9b8', '0x10b9b8']
+progress steps=1000000 pcs=['0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10c048']
+progress steps=1000000 pcs=['0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10c148']
+progress steps=1000000 pcs=['0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10bd30', '0x10b990']
+{"kernel": "_Z10k_swin_varILi256ELb0EEv9VarParams", "flags": 4, "seed": 1, "grid": [2, 2], "emu_steps": 7389705, "emu_bytes_written": 186352, "emu_distinct": 208, "gpu_rc": 0, "gpu": "GPU dispatch OK: 3.339 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact", "mismatches": 0, "status": "PASS"}
+progress steps=1000000 pcs=['0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10e0b8', '0x10c43c', '0x10b990']
+progress steps=1000000 pcs=['0x10b990', '0x10b990', '0x10b990', '0x10b990', '0x10b990', '0x10b990', '0x10b990', '0x10a044']
+progress steps=1000000 pcs=['0x10b990', '0x10b990', '0x10b990', '0x10b990', '0x10b990', '0x10b990', '0x10b990', '0x10a01c']
+progress steps=1000000 pcs=['0x10b990', '0x10b990', '0x10b990', '0x10a390', '0x1042f4', '0x1042f4', '0x1042f4', '0x1042f4']
+progress steps=2000000 pcs=['0x114390', '0x114390', '0x114390', '0x114390', '0x114390', '0x114390', '0x114390', '0x1153e4']
+{"kernel": "_Z10k_swin_varILi256ELb0EEv9VarParams", "flags": 8, "seed": 1, "grid": [2, 2], "emu_steps": 7623083, "emu_bytes_written": 167930, "emu_distinct": 202, "gpu_rc": 0, "gpu": "GPU dispatch OK: 3.364 ms, 18 pointers rebased, arena_dev=0xa04010000, guards intact", "mismatches": 19626, "status": "FAIL", "first_diffs": ["slot1(+0x8)+0x2 emu=7e gpu=fe", "slot1(+0x8)+0x3 emu=7e gpu=79", "slot1(+0x8)+0x6 emu=7e gpu=fe", "slot1(+0x8)+0xa emu=7e gpu=62", "slot1(+0x8)+0xe emu=7e gpu=3b"]}
+SUMMARY [(0, 'PASS'), (1, 'PASS'), (2, 'PASS'), (4, 'PASS'), (8, 'FAIL')]

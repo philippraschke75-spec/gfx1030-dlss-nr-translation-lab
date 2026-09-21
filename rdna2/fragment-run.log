@@ -1,0 +1,10 @@
+
+Algorithm : SHA256
+Hash      : 67289D13CDC4253E56677D61273D3A21DD4C2E319D8B07F2F2424EA3C776D82B
+Path      : C:\Users\tes43\Documents\ChatGPT\dlss 5\rdna2\build\fragment_test.exe
+
+Device=AMD Radeon RX 6900 XT arch=gfx1030 wave=32 runtime=60450101 driver=60450101
+Host negative controls: PASS (wrong value, NaN, guard overwrite)
+One dispatch: 8 blocks x 128 threads, 32 independent 16x16 tiles
+Compared 8192 outputs exactly; errors=0; guards=checked
+FRAGMENT TEST PASS

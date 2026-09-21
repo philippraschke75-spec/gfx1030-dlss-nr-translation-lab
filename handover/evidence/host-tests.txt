@@ -1,0 +1,64 @@
+ent_legacy         (not run)
+orig_legacy        (not run)
+ent_u32_16384      (not run)
+ent_u32_15872      (not run)
+ent_u32_65536      (not run)
+ent_t16_16384      (not run)
+orig_u32_16384     (not run)
+orig_t16_16384     (not run)
+ent_legacy_nz      (not run)
+ent_u32_16384_nz   (not run)
+orig_u32_16384_nz  (not run)
+test_f32_to_f16_round_trip_exact (test_emu_bits.TestF16.test_f32_to_f16_round_trip_exact) ... ok
+test_half_infinity (test_emu_bits.TestF16.test_half_infinity) ... ok
+test_known_half_patterns (test_emu_bits.TestF16.test_known_half_patterns) ... ok
+test_negative_control_biased_exponent (test_emu_bits.TestF16.test_negative_control_biased_exponent) ... ok
+test_bits_round_trip (test_emu_bits.TestF32Bits.test_bits_round_trip) ... ok
+test_negative_control_bit_width (test_emu_bits.TestF32Bits.test_negative_control_bit_width) ... ok
+test_negative_zero_is_not_positive_zero (test_emu_bits.TestF32Bits.test_negative_zero_is_not_positive_zero) ... ok
+test_infinity (test_emu_bits.TestF32ClassBits.test_infinity) ... ok
+test_negative_control_classes_are_distinct (test_emu_bits.TestF32ClassBits.test_negative_control_classes_are_distinct) ... ok
+test_positive_and_negative_differ (test_emu_bits.TestF32ClassBits.test_positive_and_negative_differ) ... ok
+test_zero (test_emu_bits.TestF32ClassBits.test_zero) ... ok
+test_in_range_passthrough (test_emu_bits.TestF32Saturation.test_in_range_passthrough) ... ok
+test_negative_control_sign_is_not_lost (test_emu_bits.TestF32Saturation.test_negative_control_sign_is_not_lost) ... ok
+test_overflow_saturates_to_infinity (test_emu_bits.TestF32Saturation.test_overflow_saturates_to_infinity) ... ok
+test_underflow_flushes_to_zero (test_emu_bits.TestF32Saturation.test_underflow_flushes_to_zero) ... ok
+test_every_published_module_imports (test_import_smoke.TestImportSmoke.test_every_published_module_imports) ... ok
+test_negative_control_import_check_can_fail (test_import_smoke.TestImportSmoke.test_negative_control_import_check_can_fail)
+The import check above must be able to fail. ... ok
+test_src_groups_are_populated (test_import_smoke.TestImportSmoke.test_src_groups_are_populated) ... ok
+test_bitcmp0_is_the_complement (test_oracle_scalar.TestBitCompare.test_bitcmp0_is_the_complement) ... ok
+test_bitcmp1_reads_high_bit (test_oracle_scalar.TestBitCompare.test_bitcmp1_reads_high_bit) ... ok
+test_negative_control_bitcmp0_and_bitcmp1_disagree (test_oracle_scalar.TestBitCompare.test_negative_control_bitcmp0_and_bitcmp1_disagree) ... ok
+test_negative_control_signed_unsigned_disagree (test_oracle_scalar.TestComparisonWritesScc.test_negative_control_signed_unsigned_disagree) ... ok
+test_signed_comparison_honours_sign_bit (test_oracle_scalar.TestComparisonWritesScc.test_signed_comparison_honours_sign_bit) ... ok
+test_unsigned_comparison_ignores_sign_bit (test_oracle_scalar.TestComparisonWritesScc.test_unsigned_comparison_ignores_sign_bit) ... ok
+test_negative_control_signed_and_unsigned_differ (test_oracle_scalar.TestMinMax.test_negative_control_signed_and_unsigned_differ) ... ok
+test_signed_min_max_respect_high_bit (test_oracle_scalar.TestMinMax.test_signed_min_max_respect_high_bit) ... ok
+test_unsigned_min_max_respect_high_bit (test_oracle_scalar.TestMinMax.test_unsigned_min_max_respect_high_bit) ... ok
+test_mul_hi_u32_high_word (test_oracle_scalar.TestMulHi.test_mul_hi_u32_high_word) ... ok
+test_negative_control_not_low_word (test_oracle_scalar.TestMulHi.test_negative_control_not_low_word) ... ok
+test_abs_of_int32_min_is_itself (test_oracle_scalar.TestSignedReinterpretation.test_abs_of_int32_min_is_itself) ... ok
+test_add_i32_wraps_into_sign_bit (test_oracle_scalar.TestSignedReinterpretation.test_add_i32_wraps_into_sign_bit) ... ok
+test_negative_control_sext_is_not_zero_extend (test_oracle_scalar.TestSignedReinterpretation.test_negative_control_sext_is_not_zero_extend) ... ok
+test_sext_i16 (test_oracle_scalar.TestSignedReinterpretation.test_sext_i16) ... ok
+test_sext_i8 (test_oracle_scalar.TestSignedReinterpretation.test_sext_i8) ... ok
+test_add_without_carry_clears_scc (test_oracle_scalar.TestUnsignedWrap.test_add_without_carry_clears_scc) ... ok
+test_add_wraps_and_sets_scc (test_oracle_scalar.TestUnsignedWrap.test_add_wraps_and_sets_scc) ... ok
+test_negative_control_not_infinite_precision (test_oracle_scalar.TestUnsignedWrap.test_negative_control_not_infinite_precision) ... ok
+test_sub_borrow (test_oracle_scalar.TestUnsignedWrap.test_sub_borrow) ... ok
+test_every_entry_declares_provenance_and_license (test_publication_contract.TestManifestIntegrity.test_every_entry_declares_provenance_and_license) ... ok
+test_every_listed_file_exists (test_publication_contract.TestManifestIntegrity.test_every_listed_file_exists) ... ok
+test_every_listed_file_matches_its_recorded_public_hash (test_publication_contract.TestManifestIntegrity.test_every_listed_file_matches_its_recorded_public_hash)
+The published bytes must equal what the manifest records. ... ok
+test_manifest_is_non_empty (test_publication_contract.TestManifestIntegrity.test_manifest_is_non_empty) ... ok
+test_negative_control_hash_check_can_fail (test_publication_contract.TestManifestIntegrity.test_negative_control_hash_check_can_fail)
+Prove the comparison above is not vacuous. ... ok
+test_normalisation_is_declared_where_it_happened (test_publication_contract.TestManifestIntegrity.test_normalisation_is_declared_where_it_happened)
+If published bytes differ from source bytes, it must be declared. ... ok
+
+----------------------------------------------------------------------
+Ran 44 tests in 0.068s
+
+OK

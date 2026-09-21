@@ -1,0 +1,38 @@
+C:\Users\tes43\Documents\ChatGPT\dlss 5\rdna2\final_head_test.cpp:69:22: warning: 'fopen' is deprecated: This function or variable may be unsafe. Consider using fopen_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details. [-Wdeprecated-declarations]
+   69 |         FILE* f=std::fopen("final-head-output.bin","wb");
+      |                      ^
+C:\Program Files (x86)\Windows Kits\10\include\10.0.26100.0\ucrt\stdio.h:212:20: note: 'fopen' has been explicitly marked deprecated here
+  212 |     _Check_return_ _CRT_INSECURE_DEPRECATE(fopen_s)
+      |                    ^
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\vcruntime.h:368:55: note: expanded from macro '_CRT_INSECURE_DEPRECATE'
+  368 |         #define _CRT_INSECURE_DEPRECATE(_Replacement) _CRT_DEPRECATE_TEXT(    \
+      |                                                       ^
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\vcruntime.h:358:47: note: expanded from macro '_CRT_DEPRECATE_TEXT'
+  358 | #define _CRT_DEPRECATE_TEXT(_Text) __declspec(deprecated(_Text))
+      |                                               ^
+1 warning generated when compiling for gfx1030.
+C:\Users\tes43\Documents\ChatGPT\dlss 5\rdna2\final_head_test.cpp:69:22: warning: 'fopen' is deprecated: This function or variable may be unsafe. Consider using fopen_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details. [-Wdeprecated-declarations]
+   69 |         FILE* f=std::fopen("final-head-output.bin","wb");
+      |                      ^
+C:\Program Files (x86)\Windows Kits\10\include\10.0.26100.0\ucrt\stdio.h:212:20: note: 'fopen' has been explicitly marked deprecated here
+  212 |     _Check_return_ _CRT_INSECURE_DEPRECATE(fopen_s)
+      |                    ^
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\vcruntime.h:368:55: note: expanded from macro '_CRT_INSECURE_DEPRECATE'
+  368 |         #define _CRT_INSECURE_DEPRECATE(_Replacement) _CRT_DEPRECATE_TEXT(    \
+      |                                                       ^
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\vcruntime.h:358:47: note: expanded from macro '_CRT_DEPRECATE_TEXT'
+  358 | #define _CRT_DEPRECATE_TEXT(_Text) __declspec(deprecated(_Text))
+      |                                               ^
+1 warning generated when compiling for host.
+
+Algorithm : SHA256
+Hash      : A9FE369B9EBEFA69AED2AD73F66A3098552DCEA9C901277F3BB0301E831B7943
+Path      : C:\Users\tes43\Documents\ChatGPT\dlss 5\rdna2\build\final_head_test.exe
+
+
+Algorithm : SHA256
+Hash      : C3416C86B09A7294135EA2040008A0AEDB222CFE581E8D83F9D0E935A58FF24F
+Path      : C:\Users\tes43\Documents\ChatGPT\dlss 5\rdna2\build\final-head\abi_probe.co
+
+GPU=AMD Radeon RX 6900 XT arch=gfx1030
+hipFuncGetAttributes(&attr,fn): invalid device symbol (13)

@@ -1,0 +1,323 @@
+{
+  "wmma_variants": {
+    "v_wmma_f32_16x16x16_f16": 203
+  },
+  "kernels": [
+    {
+      "symbol": "_Z10swin_layerR7SwinLDSPKhRK10BlobLayouti",
+      "gfx1100_instructions": 24652,
+      "gfx1030_instructions": 0,
+      "wmma_sites": 14,
+      "gfx1030_immediate_return": false,
+      "pc_relative": false,
+      "indirect_control": true
+    },
+    {
+      "symbol": "_Z16k_swin_1h_32_fp810SwinParams",
+      "gfx1100_instructions": 749,
+      "gfx1030_instructions": 6804,
+      "wmma_sites": 0,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": true
+    },
+    {
+      "symbol": "_Z21k_pre_block_1h_32_fp89PreParams",
+      "gfx1100_instructions": 1677,
+      "gfx1030_instructions": 7531,
+      "wmma_sites": 0,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": true
+    },
+    {
+      "symbol": "_Z22k_post_block_1h_32_fp810PostParams",
+      "gfx1100_instructions": 1347,
+      "gfx1030_instructions": 7343,
+      "wmma_sites": 0,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": true
+    },
+    {
+      "symbol": "_Z6k_ffwd10FfwdParams",
+      "gfx1100_instructions": 3446,
+      "gfx1030_instructions": 120,
+      "wmma_sites": 7,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z10k_conv_res10ConvParams",
+      "gfx1100_instructions": 1480,
+      "gfx1030_instructions": 773,
+      "wmma_sites": 2,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z10k_qkv_attn10AttnParams",
+      "gfx1100_instructions": 16062,
+      "gfx1030_instructions": 5986,
+      "wmma_sites": 7,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z7k_ffwd211Ffwd2Params",
+      "gfx1100_instructions": 5428,
+      "gfx1030_instructions": 272,
+      "wmma_sites": 7,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z11k_conv_res211Conv2Params",
+      "gfx1100_instructions": 6273,
+      "gfx1030_instructions": 4783,
+      "wmma_sites": 4,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z11k_qkv_attn210AttnParams",
+      "gfx1100_instructions": 5629,
+      "gfx1030_instructions": 2889,
+      "wmma_sites": 7,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z8k_expand12ExpandParams",
+      "gfx1100_instructions": 2358,
+      "gfx1030_instructions": 212,
+      "wmma_sites": 2,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z13k_conv_splitk12ConvParams1d",
+      "gfx1100_instructions": 1698,
+      "gfx1030_instructions": 644,
+      "wmma_sites": 1,
+      "gfx1030_immediate_return": false,
+      "pc_relative": false,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z5k_qkv9QkvParams",
+      "gfx1100_instructions": 13859,
+      "gfx1030_instructions": 7054,
+      "wmma_sites": 4,
+      "gfx1030_immediate_return": false,
+      "pc_relative": false,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z11k_attention12AttnParams1d",
+      "gfx1100_instructions": 7953,
+      "gfx1030_instructions": 375,
+      "wmma_sites": 5,
+      "gfx1030_immediate_return": false,
+      "pc_relative": false,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z9k_expand212ExpandParams",
+      "gfx1100_instructions": 3462,
+      "gfx1030_instructions": 191,
+      "wmma_sites": 4,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z11k_contract212ConvParams1d",
+      "gfx1100_instructions": 4535,
+      "gfx1030_instructions": 2905,
+      "wmma_sites": 4,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z6k_qkv29QkvParams",
+      "gfx1100_instructions": 3841,
+      "gfx1030_instructions": 2045,
+      "wmma_sites": 8,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z12k_attention212AttnParams1d",
+      "gfx1100_instructions": 1724,
+      "gfx1030_instructions": 658,
+      "wmma_sites": 3,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z14k_ffwd_inpview12FfwdPlParams",
+      "gfx1100_instructions": 3268,
+      "gfx1030_instructions": 120,
+      "wmma_sites": 7,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z16k_conv_res_views12ConvPlParams",
+      "gfx1100_instructions": 2360,
+      "gfx1030_instructions": 1062,
+      "wmma_sites": 2,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z12k_final_head10HeadParams",
+      "gfx1100_instructions": 1205,
+      "gfx1030_instructions": 57,
+      "wmma_sites": 2,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z8k_repack12RepackParams",
+      "gfx1100_instructions": 189,
+      "gfx1030_instructions": 154,
+      "wmma_sites": 0,
+      "gfx1030_immediate_return": false,
+      "pc_relative": false,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z14k_dec_upsample11DecUpParams",
+      "gfx1100_instructions": 2755,
+      "gfx1030_instructions": 220,
+      "wmma_sites": 2,
+      "gfx1030_immediate_return": false,
+      "pc_relative": false,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z6k_mean10MeanParams",
+      "gfx1100_instructions": 238,
+      "gfx1030_instructions": 208,
+      "wmma_sites": 0,
+      "gfx1030_immediate_return": false,
+      "pc_relative": false,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z8k_import12ImportParams",
+      "gfx1100_instructions": 954,
+      "gfx1030_instructions": 788,
+      "wmma_sites": 0,
+      "gfx1030_immediate_return": false,
+      "pc_relative": false,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z8k_export12ExportParams",
+      "gfx1100_instructions": 1219,
+      "gfx1030_instructions": 982,
+      "wmma_sites": 0,
+      "gfx1030_immediate_return": false,
+      "pc_relative": false,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z11k_reproject12ReprojParams",
+      "gfx1100_instructions": 2247,
+      "gfx1030_instructions": 1821,
+      "wmma_sites": 0,
+      "gfx1030_immediate_return": false,
+      "pc_relative": false,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z11k_flag_waitPjjj",
+      "gfx1100_instructions": 36,
+      "gfx1030_instructions": 35,
+      "wmma_sites": 0,
+      "gfx1030_immediate_return": false,
+      "pc_relative": false,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z13k_align_probePh",
+      "gfx1100_instructions": 9,
+      "gfx1030_instructions": 1,
+      "wmma_sites": 0,
+      "gfx1030_immediate_return": true,
+      "pc_relative": false,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z10k_flag_setPjjS_",
+      "gfx1100_instructions": 146,
+      "gfx1030_instructions": 83,
+      "wmma_sites": 0,
+      "gfx1030_immediate_return": false,
+      "pc_relative": false,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z10k_swin_varILi32ELb1EEv9VarParams",
+      "gfx1100_instructions": 14310,
+      "gfx1030_instructions": 5993,
+      "wmma_sites": 18,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z10k_swin_varILi32ELb0EEv9VarParams",
+      "gfx1100_instructions": 14982,
+      "gfx1030_instructions": 6467,
+      "wmma_sites": 18,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z10k_swin_varILi64ELb0EEv9VarParams",
+      "gfx1100_instructions": 16084,
+      "gfx1030_instructions": 4978,
+      "wmma_sites": 29,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z10k_swin_varILi128ELb0EEv9VarParams",
+      "gfx1100_instructions": 15131,
+      "gfx1030_instructions": 4826,
+      "wmma_sites": 23,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    },
+    {
+      "symbol": "_Z10k_swin_varILi256ELb0EEv9VarParams",
+      "gfx1100_instructions": 14950,
+      "gfx1030_instructions": 4828,
+      "wmma_sites": 23,
+      "gfx1030_immediate_return": false,
+      "pc_relative": true,
+      "indirect_control": false
+    }
+  ],
+  "caution": "Instruction counts are not correctness evidence or a complete porting estimate."
+}

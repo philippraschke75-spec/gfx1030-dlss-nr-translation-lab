@@ -1,0 +1,31 @@
+v_perm_b32 executed candidate sites: 65
+v_ldexp_f32 executed candidate sites: 410
+v_log_f32 executed candidate sites: 98
+v_rcp_f32 executed candidate sites: 99
+v_fma_mix_f32 executed candidate sites: 0
+v_med3_f32 executed candidate sites: 16
+v_fma_f32 executed candidate sites: 511
+v_div_fixup_f32 executed candidate sites: 99
+ds_bpermute_b32 executed candidate sites: 0
+v_perm_b32         @0x26c78 KILLED   mismatching bytes=1980 rc=0
+v_perm_b32         @0x12664 KILLED   mismatching bytes=3585 rc=0
+v_perm_b32         @0x29214 KILLED   mismatching bytes=1947 rc=0
+v_ldexp_f32        @0x291b4 KILLED   mismatching bytes=4169 rc=0
+v_ldexp_f32        @0xd4d8 KILLED   mismatching bytes=4565 rc=0
+v_ldexp_f32        @0xde3c KILLED   mismatching bytes=4403 rc=0
+v_log_f32          @0x16b2c KILLED   mismatching bytes=4416 rc=0
+v_log_f32          @0xde20 KILLED   mismatching bytes=4579 rc=0
+v_log_f32          @0x136c4 KILLED   mismatching bytes=4519 rc=0
+v_rcp_f32          @0x29080 KILLED   mismatching bytes=3737 rc=0
+v_rcp_f32          @0xd2c8 KILLED   mismatching bytes=4608 rc=0
+v_rcp_f32          @0x16224 KILLED   mismatching bytes=4533 rc=0
+v_med3_f32         @0x11d74 KILLED   mismatching bytes=3840 rc=0
+v_med3_f32         @0x10e50 KILLED   mismatching bytes=4078 rc=0
+v_med3_f32         @0x110e0 KILLED   mismatching bytes=4140 rc=0
+v_fma_f32          @0x14bf8 KILLED   mismatching bytes=4577 rc=0
+v_fma_f32          @0x14758 KILLED   mismatching bytes=4522 rc=0
+v_fma_f32          @0xd640 KILLED   mismatching bytes=3004 rc=0
+v_div_fixup_f32    @0x10998 SURVIVED mismatching bytes=0 rc=0
+v_div_fixup_f32    @0xdc48 SURVIVED mismatching bytes=0 rc=0
+v_div_fixup_f32    @0x17044 SURVIVED mismatching bytes=0 rc=0
+mutation score: 18 killed / 3 survived (of 21 executed-site mutants)

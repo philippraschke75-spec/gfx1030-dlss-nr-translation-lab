@@ -1,0 +1,16 @@
+first-visit trace length 7209
+end at first instr: 0 GPU dispatch OK: 0.216 ms, guards intact
+full kernel: 5 TIMEOUT after 4 s; exiting without further GPU calls
+endpgm at trace[3604]=15e74 -> rc=5 TIMEOUT after 4 s; exiting without further GPU calls
+endpgm at trace[1802]=ef1c -> rc=5 TIMEOUT after 4 s; exiting without further GPU calls
+endpgm at trace[901]=c860 -> rc=5 TIMEOUT after 4 s; exiting without further GPU calls
+endpgm at trace[450]=2d6ec -> rc=0 GPU dispatch OK: 0.191 ms, guards intact
+endpgm at trace[675]=be38 -> rc=5 TIMEOUT after 4 s; exiting without further GPU calls
+endpgm at trace[562]=2d950 -> rc=0 GPU dispatch OK: 0.307 ms, guards intact
+endpgm at trace[618]=2da70 -> rc=0 GPU dispatch OK: 0.196 ms, guards intact
+endpgm at trace[646]=bd94 -> rc=5 TIMEOUT after 4 s; exiting without further GPU calls
+endpgm at trace[632]=bd4c -> rc=5 TIMEOUT after 4 s; exiting without further GPU calls
+endpgm at trace[625]=bd28 -> rc=5 TIMEOUT after 4 s; exiting without further GPU calls
+endpgm at trace[621]=bd08 -> rc=5 TIMEOUT after 4 s; exiting without further GPU calls
+endpgm at trace[619]=bd00 -> rc=5 TIMEOUT after 4 s; exiting without further GPU calls
+LAST OK trace[618]=2da70 ; FIRST BAD trace[619]=bd00

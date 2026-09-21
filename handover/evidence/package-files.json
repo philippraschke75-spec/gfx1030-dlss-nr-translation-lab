@@ -1,0 +1,127 @@
+[
+  {
+    "path": "CODING_AGENT_BRIEF.md",
+    "bytes": 5758,
+    "sha256": "52dced2dd161294eeaf55d7cfa8d27da1c017a982a97a769cd09b4db6e1463c7"
+  },
+  {
+    "path": "evidence/host-tests.txt",
+    "bytes": 5631,
+    "sha256": "f0b2ec08d1ba479fb7f25b64932892ed189c402914e4a0e1677ec86931387e93"
+  },
+  {
+    "path": "evidence/inspection.json",
+    "bytes": 1398,
+    "sha256": "6d9c03302293b1f5ce6363cea15a06256572c90ccf09afccd8209d19d0735256"
+  },
+  {
+    "path": "GTA_V_ENHANCED_DEVELOPER_HANDOVER.md",
+    "bytes": 41066,
+    "sha256": "751ebb60bc7e185d65b2f316319ccaa5689014821b59824a02f35767ce46c6cd"
+  },
+  {
+    "path": "support/inspect_bundles.py",
+    "bytes": 2456,
+    "sha256": "49b10509d6425424c792e9f228adc5597c09728a4553c1de6adfc71176d17306"
+  },
+  {
+    "path": "support/rdna2/alignment-run.log",
+    "bytes": 373,
+    "sha256": "d7a0f4b00beef3c8c99edb9507ad620703403b9bb0bdee420e117989d9eb5c72"
+  },
+  {
+    "path": "support/rdna2/alignment_test.cpp",
+    "bytes": 2377,
+    "sha256": "0904cb058f1f8bf187acb8d804f26194d681f32a5697cddc86eb2b660bc186ec"
+  },
+  {
+    "path": "support/rdna2/final-head-abi-fixed.log",
+    "bytes": 678,
+    "sha256": "5e60441896e2e3dab6062915eff86b95d746e53591e78d6bc35b71aa7f89a571"
+  },
+  {
+    "path": "support/rdna2/final-head-abi.log",
+    "bytes": 3051,
+    "sha256": "1079662336d19061e96e8448e0de1338ff29c3a9fe8d940c53de4e54c5b7b1eb"
+  },
+  {
+    "path": "support/rdna2/final-head-artifact-hashes.json",
+    "bytes": 562,
+    "sha256": "5a05a07aa9b82f18706a1660b6c9748fa717df2a1098e952ec3c0d80f7976e91"
+  },
+  {
+    "path": "support/rdna2/final-head-constant.log",
+    "bytes": 538,
+    "sha256": "5ea0fe4856ba79af3ba59a65c5b5e4fdf89f68adc892f6d85a9117f65c199a99"
+  },
+  {
+    "path": "support/rdna2/final-head-initialized.log",
+    "bytes": 534,
+    "sha256": "204529a05aadad0056d12ba130ac378b61dbbd52600e51e3d70eae0a142069eb"
+  },
+  {
+    "path": "support/rdna2/final-head-multigroup.log",
+    "bytes": 827,
+    "sha256": "87e01def80111380fdeb30d2ab75ec2941a9a1511a93783afae03e7aedba1100"
+  },
+  {
+    "path": "support/rdna2/final-head-patterned.log",
+    "bytes": 819,
+    "sha256": "01c1575d1c439378599fb92e02187380be4b3cd9fe8ebc3c9b5f36c2af251817"
+  },
+  {
+    "path": "support/rdna2/FINAL_HEAD_RESULTS.md",
+    "bytes": 5783,
+    "sha256": "f30a67ccab06063ff608b01ba52475b3b65ecfbf275ee5eec2e5f7b03514dda7"
+  },
+  {
+    "path": "support/rdna2/final_head_test.cpp",
+    "bytes": 8096,
+    "sha256": "07c3956d264f204f1bbfbca73f30953bae7146ce0f7c0ee370297087d46493c4"
+  },
+  {
+    "path": "support/rdna2/fragment-run.log",
+    "bytes": 478,
+    "sha256": "8b965aecc7d550e74604519d4158aa143d67d50edba6d894169f4b0913ca0c59"
+  },
+  {
+    "path": "support/rdna2/fragment_test.cpp",
+    "bytes": 6632,
+    "sha256": "610d5a24ce18ff44681313d78de3692ba890f047c252ca692d04c0456c46b413"
+  },
+  {
+    "path": "support/rdna2/fragment_wmma.h",
+    "bytes": 1356,
+    "sha256": "97a3791c7144c734eb3d8570efc0d752932e2c922320fee0f84ff90772dfd776"
+  },
+  {
+    "path": "support/rdna2/inspect_kernel.py",
+    "bytes": 1131,
+    "sha256": "3f0badcaff43b339c7252f9962bf9146844fa4bb5bcaa3c86437566fb6319895"
+  },
+  {
+    "path": "support/rdna2/kernel_inventory.py",
+    "bytes": 2616,
+    "sha256": "c5a398812b2f9447846345d3083b97ef701dfacdb1c9564f8554a4caeff38e1c"
+  },
+  {
+    "path": "support/rdna2/README.md",
+    "bytes": 4329,
+    "sha256": "3caa096d234622b125ce487d9bf7a3316c857753b9fe22bfb4f66036956e9297"
+  },
+  {
+    "path": "support/rdna2/run_fragment_test.ps1",
+    "bytes": 1666,
+    "sha256": "85d1c41ec8c8f1dd34e2830d6ab6648dbb94b1e5d6ae944f71a999387ed5c304"
+  },
+  {
+    "path": "support/rdna2/translate_final_head.py",
+    "bytes": 10567,
+    "sha256": "acd8a82f63c195a8529662584b3ac239e3872fd8536adb0f52b39969c5862474"
+  },
+  {
+    "path": "support/REPRODUCTION_NOTES.md",
+    "bytes": 3278,
+    "sha256": "b6bbabba49a021ebf15cc76c353a31fa1d2a6ca6ab697303fca0019e7d5989ab"
+  }
+]

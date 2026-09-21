@@ -1,0 +1,11 @@
+{"kernel": "_Z10k_swin_varILi32ELb0EEv9VarParams", "flags": 1, "seed": 1, "grid": [2, 2], "emu_steps": 362433, "emu_bytes_written": 20981, "emu_distinct": 215, "gpu_rc": 0, "gpu": "GPU dispatch OK: 0.300 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact", "mismatches": 0, "status": "PASS"}
+{"kernel": "_Z10k_swin_varILi32ELb0EEv9VarParams", "flags": 2, "seed": 1, "grid": [2, 2], "emu_steps": 363041, "emu_bytes_written": 20987, "emu_distinct": 213, "gpu_rc": 0, "gpu": "GPU dispatch OK: 0.290 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact", "mismatches": 0, "status": "PASS"}
+{"kernel": "_Z10k_swin_varILi32ELb0EEv9VarParams", "flags": 4, "seed": 1, "grid": [2, 2], "emu_steps": 384581, "emu_bytes_written": 23291, "emu_distinct": 211, "gpu_rc": 0, "gpu": "GPU dispatch OK: 0.300 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact", "mismatches": 0, "status": "PASS"}
+Traceback (most recent call last):
+  File "C:\Users\tes43\AppData\Local\Temp\claude\C--Users-tes43-Documents-ChatGPT-dlss-5\fb527b4a-dd5a-418a-aa82-ac63e53c17b5\scratchpad\sandbox\rdna2\emu\difftest_var.py", line 64, in <module>
+    ka, init, ref, steps, secs = emulate(sym, lds, flags, seed, grid)
+  File "C:\Users\tes43\AppData\Local\Temp\claude\C--Users-tes43-Documents-ChatGPT-dlss-5\fb527b4a-dd5a-418a-aa82-ac63e53c17b5\scratchpad\sandbox\rdna2\emu\difftest_var.py", line 39, in emulate
+    steps += E.run_workgroup(prog, g, lds, 256, sg, max_steps=8_000_000)['steps']
+  File "C:\Users\tes43\AppData\Local\Temp\claude\C--Users-tes43-Documents-ChatGPT-dlss-5\fb527b4a-dd5a-418a-aa82-ac63e53c17b5\scratchpad\sandbox\rdna2\emu\gfx11emu.py", line 1098, in run_workgroup
+    raise type(err)('@%x wave%d %s %s :: %s' % (a_, w.wid, op_, args_, err)) from None
+AssertionError: @c6e90 wave0 ds_store_b16 v7, v11 :: lds oob [15616 15618 15620 15622]
