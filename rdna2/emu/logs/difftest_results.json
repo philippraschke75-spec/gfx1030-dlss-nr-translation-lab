@@ -1,0 +1,92 @@
+[
+  {
+    "case": "case0",
+    "cfg": {
+      "seed": 1,
+      "H": 16,
+      "W": 16,
+      "offy": -4,
+      "offx": -4,
+      "mode": "small"
+    },
+    "grid": [
+      2,
+      2
+    ],
+    "emu_bytes_written": 4608,
+    "mismatches": 0,
+    "status": "PASS"
+  },
+  {
+    "case": "case1",
+    "cfg": {
+      "seed": 2,
+      "H": 16,
+      "W": 16,
+      "offy": 0,
+      "offx": 0,
+      "mode": "small_big"
+    },
+    "grid": [
+      2,
+      2
+    ],
+    "emu_bytes_written": 8192,
+    "mismatches": 0,
+    "status": "PASS"
+  },
+  {
+    "case": "case2",
+    "cfg": {
+      "seed": 3,
+      "H": 24,
+      "W": 16,
+      "offy": -4,
+      "offx": -4,
+      "mode": "small"
+    },
+    "grid": [
+      2,
+      3
+    ],
+    "emu_bytes_written": 7680,
+    "mismatches": 0,
+    "status": "PASS"
+  },
+  {
+    "case": "case3",
+    "cfg": {
+      "seed": 4,
+      "H": 16,
+      "W": 16,
+      "offy": -4,
+      "offx": -4,
+      "mode": "small_hi"
+    },
+    "grid": [
+      2,
+      2
+    ],
+    "emu_bytes_written": 4608,
+    "mismatches": 0,
+    "status": "PASS"
+  },
+  {
+    "case": "case4",
+    "cfg": {
+      "seed": 5,
+      "H": 16,
+      "W": 24,
+      "offy": -4,
+      "offx": -4,
+      "mode": "small_tiny"
+    },
+    "grid": [
+      3,
+      2
+    ],
+    "emu_bytes_written": 7680,
+    "mismatches": 0,
+    "status": "PASS"
+  }
+]

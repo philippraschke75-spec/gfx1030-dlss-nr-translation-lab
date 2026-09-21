@@ -1,0 +1,10 @@
+GPU=AMD Radeon RX 6900 XT arch=gfx1030 symbol=_Z10k_swin_varILi32ELb1EEv9VarParams VGPRs=112 LDS=23808 maxThreads=256
+MODULE LOAD TEST: PASS
+GPU=AMD Radeon RX 6900 XT arch=gfx1030 symbol=_Z10k_swin_varILi32ELb0EEv9VarParams VGPRs=108 LDS=23824 maxThreads=256
+MODULE LOAD TEST: PASS
+GPU=AMD Radeon RX 6900 XT arch=gfx1030 symbol=_Z10k_swin_varILi64ELb0EEv9VarParams VGPRs=136 LDS=40192 maxThreads=256
+MODULE LOAD TEST: PASS
+GPU=AMD Radeon RX 6900 XT arch=gfx1030 symbol=_Z10k_swin_varILi128ELb0EEv9VarParams VGPRs=136 LDS=36096 maxThreads=256
+MODULE LOAD TEST: PASS
+GPU=AMD Radeon RX 6900 XT arch=gfx1030 symbol=_Z10k_swin_varILi256ELb0EEv9VarParams VGPRs=152 LDS=27392 maxThreads=256
+MODULE LOAD TEST: PASS

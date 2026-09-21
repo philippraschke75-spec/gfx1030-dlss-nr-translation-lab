@@ -1,0 +1,23 @@
+{
+  "date": "2026-09-20",
+  "device": "RX 6900 XT gfx1030",
+  "runtime": 60450101,
+  "geometry": {
+    "groups": 2,
+    "threads_per_group": 256
+  },
+  "fixture": "signed one-hot activation rows; every finite E4M3 weight encoding",
+  "checked_bytes": 32768,
+  "mismatches": 0,
+  "finite_weight_encodings": 254,
+  "watchdog_settings_modified": false,
+  "host_negative_control": "altered source rejected before generation",
+  "artifacts": {
+    "rdna2/translate_final_head.py": "0fd499d4b867b1c3c3945337e48fe6c6006362315d6e2de8069be04bc37af983",
+    "rdna2/final_head_test.cpp": "1a765bcb9c3d81426c6c6ddea3d9b16405ea7e1fa5f39ec87c7af0191b0e4d82",
+    "rdna2/run_fragment_test.ps1": "bcffb5f61769a63edb685336a411f6db55969149ea47c7fb4b4e7dd7fc08091e",
+    "rdna2/build/final_head_test.exe": "c9df522a4ce1201ee41b174ce269e9b00c45716c8b868c36658e66bc9eeac4a4",
+    "rdna2/build/final-head-selfcontained/final_head.co": "8b0243689bf2a400459d9d988b8dbad361c614fa563538ff1ec12a96c8bac7c3",
+    "rdna2/final-head-basis.log": "d30fe34ae2fd491a686cd8e51669500c892951534866e3908acaa120f4ac7fdf"
+  }
+}
