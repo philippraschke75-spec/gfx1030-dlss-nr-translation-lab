@@ -664,6 +664,33 @@ class Exec:
     def _mem(s, base, P, mods):
         kind, _, rest = base.partition('_')
         off = mods.get('offset', 0)
+        if rest == 'atomic_cmpswap_b32':
+            # ISA: tmp = MEM[ADDR]; src = DATA[31:0]; cmp = DATA[63:32];
+            #      MEM[ADDR] = (tmp == cmp) ? src : tmp; RETURN_DATA = tmp   (returned only under glc)
+            # With glc the destination VGPR is present and shifts the other operands along.
+            glc = bool(mods.get('glc'))
+            vd, va, data = (P[0], P[1], P[2]) if glc else (None, P[0], P[1])
+            sa = P[3] if glc else P[2]
+
+            def atomic(w):
+                idx = np.nonzero(w.em)[0]
+                if not len(idx):
+                    return
+                if sa is not None and sa['k'] == 's':
+                    a = np.int64(w.rs(sa)) + w.RV[va['i']].astype(np.int64) + off
+                else:
+                    a = w.r64(va).astype(np.int64) + off
+                src, cmp_ = w.RV[data['i']], w.RV[data['i'] + 1]
+                # Lanes are serialized in ascending order: two lanes hitting one address must not
+                # both see the original value, or a lock built on this would hand out two winners.
+                for l in idx:
+                    au = np.array([a[l]], np.uint64)
+                    tmp = ld_val(w.g.read(au, 4), 4, False).reshape(-1)[0]
+                    new = src[l] if tmp == cmp_[l] else tmp
+                    w.g.write(au, np.array([new], np.uint32).view(np.uint8).reshape(1, 4))
+                    if vd is not None:
+                        w.V[vd['i'], l] = tmp
+            return atomic
         m = re.fullmatch(r'(load|store)_(\w+)', rest)
         if not m:
             raise NotImplementedError('mem ' + rest)
