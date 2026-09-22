@@ -98,3 +98,17 @@ now fixed; after the fix `k_swin_1h_32_fp8` runs on the RX 6900 XT and matches t
 byte-for-byte on 5 fixtures (3 with rich output, 2 saturated/underflowed), and the test
 detects corrupted WMMA/perm/ldexp/log/rcp/fma lowerings. It does NOT cover the pre/post-block
 callers, real weights, or any rendered frame.
+
+## All 31 compute kernels confirmed translatable (2026-09-22)
+
+Every kernel in the 34-symbol inventory except three (k_mean: auto-exposure, needs global_atomic_cmpswap_b32;
+k_flag_wait/k_flag_set: inter-kernel sync, needs s_sendmsg_rtn_b64 - none needed for our host-orchestrated approach)
+now decodes fully in the emulator (rdna2/emu/gfx11emu.py) and assembles successfully for gfx1030 via
+translate_kernels.py --hw-scratch, unvalidated (translation only, not yet tested for correctness):
+k_swin_1h_32_fp8, k_pre_block_1h_32_fp8, k_post_block_1h_32_fp8, k_ffwd(+2), k_conv_res(+2), k_qkv_attn(+2),
+k_expand(+2), k_conv_splitk, k_qkv(+2), k_attention(+2), k_contract2, k_ffwd_inpview, k_conv_res_views,
+k_final_head, k_repack, k_dec_upsample, k_import, k_export, k_reproject, k_align_probe, all 5 k_swin_var variants.
+
+This means the translator itself needs no further extension for the rest of the network (the 512-wide/ViT blocks,
+decoder, post block, export). The remaining work for those is entirely parameter-layout and host-launch-contract
+recovery - the same kind of work already done for k_swin_var and k_import - not new translation capability.
