@@ -185,3 +185,32 @@ Cyberpunk pixels with 0 mismatches at every one of the 11 kernel dispatches chec
 blocks 1-8). Stages 3 (128-wide, blocks 9-14) and 4 (256-wide, blocks 15-22) are the same architecture and not yet
 tested on real chained data (though each kernel was individually verified with real weights and synthetic
 activations in the original 13/13 matrix).
+
+## Stage 3 (blocks 9-14) GPU-verified end to end on real pixels; fused pool confirmed a third time (2026-09-22)
+
+`gpu_verify_stage3_real.py`: same method as stage 2, extended through the 6-block, C=128 stage (`k_swin_var<128,false>`,
+H=W=16, real weights, fresh module a98343189d31d481). The stage's mode schedule (0,1,2,3,0,1, first/last flags on
+blocks 9 and 14) was read directly from VARPARAMS_HOST_CONTRACT.md's host-derived table, not re-guessed.
+
+| block | flags | origin | mismatches | bytes written | status |
+|---|---|---|---|---|---|
+| 9 | 1 | (0,0) | 0 | 98,202 | PASS |
+| 10 | 0 | (-4,-4) | 0 | 83,959 | PASS |
+| 11 | 0 | (-4,0) | 0 | 89,974 | PASS |
+| 12 | 0 | (0,-4) | 0 | 90,019 | PASS |
+| 13 | 0 | (0,0) | 0 | 98,160 | PASS |
+| 14 | 4 (last-in-stage) | (-4,-4) | 0 | 93,165 | PASS |
+
+Block 14 also writes its fused pooled output at +0x38 (9,214 bytes changed, within [0,16096)); expected size for
+C=256 (doubled from 128), H=W=8 (halved from 16): `256*ceil(8/4)*ceil(8/4)*16 = 16,384` bytes - consistent with the
+observed range, the same pattern now confirmed at three consecutive stage boundaries (4->5, 8->9, 14->15).
+
+Two things fixed while running this (documented so they are not repeated): the emulator step cap of 500,000 used for
+stages 1-2 is too low for the wider C=128/256 kernels (they legitimately take far more steps - one C=256 case earlier
+this session needed 7.5 million); raised to 8,000,000 throughout. Also added disk checkpointing (`pooled2_checkpoint.npy`,
+`blockN_checkpoint.npy`) so a run that hits a wall-clock bound can resume from the last completed block instead of
+recomputing the whole chain from scratch - this genuinely saved the second half of this run after a timeout.
+
+Stages 1-3 of the encoder (14 blocks, import, pre-block, and 3 stage transitions) are now GPU-verified on real
+captured Cyberpunk pixels with 0 mismatches at every one of 17 kernel dispatches checked. Stage 4 (256-wide,
+blocks 15-22) is the same architecture and not yet chained on real data.
