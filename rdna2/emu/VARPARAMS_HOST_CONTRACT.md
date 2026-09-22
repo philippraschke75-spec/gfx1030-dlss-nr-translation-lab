@@ -230,8 +230,25 @@ via the rebuilt `_Z10k_qkv_attn10AttnParams.co` module - **PASS, 0 mismatches**,
 output slot, 5.923 ms GPU time, arena guards intact. This is the same emulator-vs-hardware differential method
 used for every other kernel in this file.
 
-**Still open**: the exact real value of `+0x34` (currently a plausible guess, not read from the host launcher's
-own construction of that field - its source instruction wasn't traced); chaining real (not random/zeroed)
-input activations and weight-derived attn_scale/attn_bias sub-regions of the layer2 blob (currently the whole
-917,568-byte blob is copied to the weight pointer undifferentiated - the kernel's own internal offsets into it
-for qkv_weight vs attn_scale vs attn_bias were not decoded); and the separate `k_qkv_attn2`/ViT contract.
+**`+0x34`, checked against the host launcher (2026-09-22 continued):** searched the full host disassembly for any
+write to the stack slot that would correspond to kernarg `+0x34` on either dispatch path (`[rsp+0x1a4]` for the
+"expert" path, `[rsp+0x1d4]` for the dense/window path we resolved) - neither appears anywhere in the binary. It
+is not set by an explicit `mov` near the kernarg construction we traced, so it's most likely filled in by the
+`0x180065900`/`0x180065a60` trampoline calls themselves (not yet disassembled) rather than by this launcher
+directly. The real value therefore stays an open question; `+0x34=32`/`512` are working placeholders, not
+recovered ground truth.
+
+**`layer2` blob's internal sub-layout, derived by arithmetic (not yet disassembly-confirmed):** `DLL_HOST_EVIDENCE.md`
+names `layer2` as `qkv_weight+attn_scale+attn_bias` combined into one blob. For `C=512`, `heads=C/32=16`: `qkv_weight`
+(`3*C*C` bytes, e4m3 1 B/elem) = 786,432 B; `attn_bias`/the reference's "prior" (`heads*64*64*2` bytes, f16 64x64
+per head) = 131,072 B; `attn_scale` (`heads*4` bytes, f32 per-head) = 64 B. Sum = 917,568 B - an **exact** match to
+the real `block23.layer2.layer` size pulled from `nvngx_dlssnr.dll`. So the likely sub-offsets within the blob are
+`qkv_weight` at `+0`, `attn_bias` at `+786432`, `attn_scale` at `+917504` (or `attn_scale` first at `+0` and
+`qkv_weight` shifted by 64 - the order isn't pinned down, only the three sizes). Not yet used: the current GPU-
+verified test copies the whole blob to the weight pointer undifferentiated, which is fine for a termination/
+correctness-of-plumbing check but means the kernel's *output values* haven't been checked against a real reference
+render - only that it computes *something* deterministic and matches the emulator bit-for-bit on real hardware.
+
+**Still open**: the exact real value of `+0x34`; chaining real (not random/zeroed) input activations continuing
+from the already-GPU-verified encoder chain; confirming the `layer2` sub-offset order; and the separate
+`k_qkv_attn2`/ViT contract (handle `0x180066380`, blocks 31-38, no `attn_bias` term).
