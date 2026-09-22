@@ -163,50 +163,57 @@ reference, C=512 not 32, and the launcher's `test byte[0x18009b208],1` branch se
 different FFN paths we have not both traced), and the launch contracts for `k_qkv_attn`, `k_conv_res`/`k_conv_res2`,
 and the projection kernels this stage also needs.
 
-## k_qkv_attn (AttnParams): partial, real evidence only (2026-09-22)
+## k_qkv_attn (AttnParams): RESOLVED (2026-09-22)
 
 Kernel descriptor enables **both** `dispatch_ptr` (s[0:1]) and `kernarg_segment_ptr` (s[2:3]) - the same convention
 as the pre-block kernel, not the single-pointer convention `k_ffwd`/`k_swin_var` use. A modeled AQL dispatch packet
 is required to test it at all (reused the construction from `difftest_pre.py`).
 
-`trace_qkv_attn_kernarg.py` (kernarg-read trace, same method as resolved `k_ffwd`): with all of +0x00/+0x08/+0x10/
-+0x18/+0x20 set as valid pointers and +0x34 as a small scalar, the kernel reads exactly **+0x00 (16 B, a pointer
-pair), +0x10 (8 B, one pointer), +0x18 (16 B, another pointer pair), +0x34 (4 B, a scalar)** - i.e. 5 pointer fields
-total (0x00, 0x08, 0x10, 0x18, 0x20) plus the scalar, consistent with the OpenDLSS-NR reference's description of a
-QKV+attention block needing more buffers (input, output, qkv_weight, attn_scale, attn_bias) than the plain FFN did.
+**Handle and host launcher, recovered from the actual host binary** (embedded PE in
+`G:\dlss\dlssnr_on_amd_setup.exe` at file offset 0x47c00 - "MZ" header confirmed there; carved out and disassembled
+directly with `llvm-objdump -d --x86-asm-syntax=intel`, since the outer setup.exe's own PE headers hide this
+embedded payload from a direct disassembly pass). The registration table in `.rdata` pairs each kernel's name
+string with its handle slot (`lea rdx,[handle_slot]; lea r8,[name_string]; call 0x180065930`): `_Z10k_qkv_attn10AttnParams`'s
+name string lives at `0x18006ce25` and its handle slot is **`0x180066368`**. That handle is dispatched from the
+same launcher function that already handles `k_ffwd`/`k_ffwd2` (continuing past `0x180033660`), specifically the
+branch taken when `test byte[0x18009b208],0x4` is *not* set (the alternate branch dispatches handle `0x180066380`,
+presumably `k_qkv_attn2`, the mangled `_Z11k_qkv_attn210AttnParams`).
 
-**Not yet resolved, but substantially narrowed down (2026-09-22 continued):** with random-byte content in the
-un-typed pointer targets, the kernel does not terminate; most waves stall at one PC (`0x3958c`) while one wave
-alone keeps advancing. Reading the kernel's own disassembly around that address (`analysis/gfx1100-disassembly.txt`
-lines ~33863-33880) shows it's `s_barrier` + `buffer_gl0_inv` at the top of a real, bounded 16-iteration cooperative
-tile-load loop (`s26` counts 0 -> 0x1e0 step 32) - `s_barrier` is workgroup-wide and requires every wave to arrive
-the same number of times, so one wave racing ahead means it took a different, longer code path before its next
-barrier.
+**Kernarg construction at `0x180033c22`-`0x180033cda`** (this resolves and *corrects* the earlier partial finding -
+the previous read-trace's "+0x18 (16 B, another pointer pair)" was a wrong inference; it's one 128-bit load
+covering four 32-bit scalars, not two pointers):
 
-That longer path was located: an outer exec-mask-peeling loop at `+0x4d0` (`0x395d0`) wraps a second, *also
-correctly bounded* 16-iteration tile loop at `+0x584..+0xbd0` (`0x39684`-`0x39cd0`, same `s26` 0->0x1e0 pattern)
-that does the real attention math - two `v_wmma_f32_16x16x16_f16` matmuls per iteration, matching the reference's
-documented `S = q k^T + prior` and `O = P V` steps (`network.md`: "learned 64x64 per head bias as the MMA's C
-operand"). Neither of these loops is individually unbounded, yet the whole thing cycles for **13,000,000+ steps
-without terminating** - `trace_qkv_attn_zeroed.py` shows the exact same PC sequence at 1,000,000-step boundaries
-repeating with a ~13M-step period (steps 1M/14M/27M/40M all report identical PCs), so this is a real non-terminating
-loop, not just "needs a higher step cap" (tried up to 80,000,000 steps; confirmed periodic, not converging).
+| off | value | evidence |
+|---|---|---|
+| +0x00 | input ptr | `movups xmm0,[rsi+0x238]` -> `[rsp+0x170]` (kernarg base) |
+| +0x08 | output ptr | same 16 B move (input/output pair, like `k_swin_var`) |
+| +0x10 | weight ptr = `0x180031bc0(ctx, block_index, layer=2)` - this block's **layer2** tensor (`qkv_weight+attn_scale+attn_bias`, one combined blob per `DLL_HOST_EVIDENCE.md`'s layer-tensor naming) | `0x180033c9c..cac` |
+| +0x18 | H (i32), from `ctx_sub+4` where `ctx_sub=[rdi+0x10]` | `0x180033cb4..cbb` |
+| +0x1c | W (i32), from `ctx_sub+8` | `0x180033cc2..cc5` |
+| +0x20 | window origin X (i32), from the same mode table `0x180066410[mode]` `k_swin_var` uses | `0x180033c2b..c44`, `0x180033ccc` |
+| +0x24 | window origin Y (i32), table's second lane | `0x180033cd5..cda` |
+| +0x34 | a scalar (evidence below: it's a per-iteration stride/channel-count-like value, not yet pinned to an exact real number) | disassembly, see below |
 
-Two hypotheses were tested and ruled out:
-- **NaN from random attention data**: `trace_qkv_attn_zeroed.py` fills the whole arena with zeros instead of random
-  bytes and reproduces the *exact* same PC sequence at the exact same step counts as the random-data run. The
-  divergence does not depend on the floating-point content of the buffers at all.
-- **Wrong workgroup size**: the reference states the attention window is 8x8 = 64 tokens
-  ("Tokens are padded to a multiple of 64"), so `trace_qkv_attn_64thread.py` retried with `nthreads=64` (one
-  window, matching the reference) instead of the 256 threads copied from the encoder kernels. Same non-terminating
-  pattern, just with the wave count reduced from 8 to 2 - ruling out a workgroup-size mismatch as the cause.
+Grid: the launcher computes `(size - origin + 7) >> 3` per axis (0x180033c37-c5f) - the same 8-wide window-tile
+formula as `k_swin_var`, confirming the reference's "window is 8x8 tokens."
 
-Since the exhaustive kernarg-read trace proves the kernel reads nothing beyond the 5 pointer fields + the one
-scalar at `+0x34`, and the exec-mask/tile-loop trip counts (`0x1e0`/32 = 16 both times) are hardcoded immediates,
-not kernarg-derived, the runaway iteration count most likely comes from a value read from the *pointed-to buffer
-memory* (not kernarg) - e.g. a total-token or chunk count baked into one of the five buffers rather than passed as
-a scalar. With every buffer zeroed, a computation like `paddedTokens/64` or an unsigned `tokens - alreadyProcessed`
-reading that zero could underflow to a huge trip count. **Next step (not yet done)**: instrument reads against the
-five buffer base addresses (the same read-hooking technique already used for kernarg) to see which offset inside
-those buffers is read early in the exec-mask loop (around `0x395d0`-`0x395fc`) and drives the outer iteration count,
-then supply a small, plausible finite value there instead of zero.
+**Why the kernel hung before, precisely diagnosed by reading its own body, not guessed:**
+1. Feeding `+0x18`/`+0x20` a huge 64-bit arena pointer (as if it were a second pointer pair) instead of small H/W/
+   origin integers made the kernel's internal window/grid arithmetic operate on astronomically large "sizes,"
+   producing a loop that cycled with an exact ~13,000,000-step period and never converged even at an
+   80,000,000-step budget (`trace_qkv_attn_zeroed.py`, `trace_qkv_attn_64thread.py` - both hypotheses tested and
+   ruled out along the way: it wasn't NaN from random attention-shaped data, and it wasn't a workgroup-size
+   mismatch, since zeroed data and a 64-thread retry reproduced the identical non-terminating pattern).
+2. After fixing H/W/origin, a *second*, smaller bug appeared: `analysis/gfx1100-disassembly.txt` lines
+   33761-33767 (`0x3392f0`-`0x39930c` region... i.e. `0x3930c`) show a tight loop `v1 += s12; branch back` that
+   exits only once `v1 > 0x7fff`, where `s12` is `+0x34` masked to 16 bits (`s_load_b32 s8,s[2:3],0x34` /
+   `s_and_b32 s12,s8,0xffff` right at kernel entry). Leaving `+0x34 = 0` made `v1` never advance - a genuine
+   increment-by-zero infinite loop, the same failure class as `k_ffwd`'s original zero-divisor bug.
+
+**Verified**: `trace_qkv_attn_fixed.py` with `+0x18=8, +0x1c=8` (one 8x8 window), `+0x20=+0x24=0` (phase-0 origin),
+`+0x34=32` (an arbitrary plausible nonzero value, not yet confirmed as the *real* per-block number) terminates
+cleanly in ~14,000,000 steps (330 s), all 8 waves finishing normally, zeroed weight/bias data. **Still open**: the
+exact real value of `+0x34` for a given block (likely `C`-derived, same role as `k_ffwd`'s `+0x2c`), and GPU
+hardware verification with real captured weight bytes for whichever block actually dispatches this kernel (not
+yet identified among blocks 23+; `block31`/`block32` have a `layer2` tensor of a plausible size but this wasn't
+cross-checked against the real block graph).
