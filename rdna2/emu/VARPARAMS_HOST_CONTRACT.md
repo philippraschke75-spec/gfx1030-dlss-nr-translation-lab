@@ -534,9 +534,12 @@ With `k_final_head` and `k_export` both verified, the output path now has hardwa
 ends, where it previously had none.
 
 **Probed but not yet resolved:**
-* `k_conv_res2` (`Conv2Params`, 64 B = eight 8-byte fields). Treating all eight as pointers faults,
-  so some are scalars; a `k_conv_res_views`-shaped layout runs cleanly for 154k steps but writes
-  nothing, so it needs a count sweep like `k_ffwd2`'s `+0x28`.
+* `k_conv_res2` (`Conv2Params`, 64 B) - **now resolved and GPU-verified, 0 mismatches.** Shaped
+  like `ConvPlParams`: pointers at `+0x00`/`+0x10`/`+0x18`/`+0x28`, a null at `+0x08`, H/W at
+  `+0x30`/`+0x34`. The sweep puts its count at `+0x38`: only that field enables any write at all,
+  and it saturates at 4 for H=W=8 - the same `min(n*16, H*W)` rule as `k_ffwd2`'s `+0x28`. Output
+  lands in the `+0x18` slot, matching `k_conv_res_views`. Treating all eight 8-byte fields as
+  pointers faults, which is how the scalar positions were found.
 * `k_flag_set` needs `s_sendmsg(MSG_RTN_GET_REALTIME)` in the emulator - the realtime clock a
   spin-wait uses for backoff. `k_flag_set`/`k_flag_wait` are the inter-block sync primitives.
 * `k_attention`, `k_attention2` and `k_conv_splitk` scan to the very end of whatever arena they are
