@@ -989,3 +989,33 @@ experiment.
 
 Note the zeroed tail: the count field at `+0x38` that `k_conv_res2` needs is **0** here, consistent
 with this dispatch not using the token-count path.
+
+## The ViT block recipe, blocks 31-38 (2026-09-22)
+
+The ViT loop (`0x18002fd80`-`0x1800302d2`, counter `r15d` from `0x1f` to `0x27`) issues **five**
+dispatches per block, matching the five weight records blocks 31-38 carry:
+
+| step | dispatch at | kernel | weight layer | kernarg |
+|---|---|---|---|---|
+| 1 | `0x18002fe68` | `k_expand2` | 0 | `+0x00` input (`rdi`), `+0x08` `ctx+0x260`, `+0x10` weight |
+| 2 | `0x18002ff83` | `k_contract2` | 1 | `+0x00` `ctx+0x260`, `+0x08` `rdi`, `+0x10` `ctx+0x268`, `+0x18` weight, `+0x28` = **4** |
+| 3 | `0x180030070` | `k_qkv2` | 2 | kernarg at `rbp-0x20` |
+| 4 | `0x18003015d` | `k_attention2` | - (no lookup) | kernarg at `rbp+0x10` |
+| 5 | `0x180030278` | `k_contract2` | 4 | `+0x00` `ctx+0x288`, `+0x08` `ctx+0x268`, `+0x10` `r13`, `+0x18` weight, `+0x28` = **4** |
+
+**Why attention takes no weight lookup**: ViT `layer3` is only **2 bytes** (`block31.layer3.layer`),
+a scalar rather than a matrix - so `k_attention2` consumes a scale, not a weight record. The other
+four layers map cleanly onto expand / contract / qkv / projection.
+
+**The `+0x28 = 4` the host writes is the token-count field**, and 4 is exactly the value derived
+empirically for `k_contract2` from the `min(n*16, H*W)` sweep. Static and experimental agree.
+
+**Ping-pong**: the loop head swaps `rdi` and `r13` every iteration (`mov rax, rdi` / `mov rdi, r13` /
+`mov r13, rax` at `0x18002fd83`-`0x18002fd90`), so step 1 reads the current buffer and step 5 writes
+the other - the same alternation the encoder uses, with `ctx+0x260` / `ctx+0x268` / `ctx+0x288` as
+per-block intermediates (a distinct set from the C=512 blocks' `0x228`-`0x240`).
+
+**Not yet executed.** Unlike the C=512 block, this recipe has not been run as a chain, and doing so
+is expected to fail at step 4: `k_attention2` is one of the two kernels with an open numeric
+mismatch against the emulator. That makes the ViT chain the natural place to find out whether the
+mismatch is confined to that kernel or contaminates everything downstream of it.
