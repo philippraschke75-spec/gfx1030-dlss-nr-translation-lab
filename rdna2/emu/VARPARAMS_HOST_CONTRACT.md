@@ -1019,3 +1019,44 @@ per-block intermediates (a distinct set from the C=512 blocks' `0x228`-`0x240`).
 is expected to fail at step 4: `k_attention2` is one of the two kernels with an open numeric
 mismatch against the emulator. That makes the ViT chain the natural place to find out whether the
 mismatch is confined to that kernel or contaminates everything downstream of it.
+
+## k_attention's mismatch: root cause is the emulator, not the translation (2026-09-22)
+
+The mismatch had been characterized but not explained. Two experiments settled it.
+
+**It is not fixture realism.** Running `k_attention` with random bytes, zeroed inputs, and
+well-conditioned f32 gives **250 / 247 / 248** mismatches. Numerical sensitivity would vary with the
+data; a near-constant count across wildly different inputs means a specific operation is wrong.
+This retires the "softmax on extreme inputs quantised to opposite sides of an e4m3 boundary"
+hypothesis recorded earlier.
+
+**Narrowing by instruction set.** Comparing the instruction mix of the two failing attention kernels
+against twelve passing ones leaves only **five** instructions used by the failures and by no passing
+kernel:
+
+```
+ds_store_2addr_stride64_b32  x7      ds_load_2addr_stride64_b32  x6
+ds_store_2addr_b64           x1      v_lshrrev_b64               x2
+v_cmp_eq_u32_e64             x1
+```
+
+**The `stride64` LDS forms were being decoded and then ignored.** The emulator's `_ds` matcher
+captured the variant as a *non-capturing* group, `(?:stride64_)?`, so the flag was parsed and
+discarded, and the address used `offset * element_size`. Per the RDNA3 ISA the plain form is
+`ADDR_BASE + OFFSET * 4`, but the stride64 form is `ADDR_BASE + OFFSET * 4 * 64` ("with a larger
+stride"). Every stride64 access therefore aliased onto the wrong LDS row.
+
+Fixed by capturing the group and scaling by `element_size * 64`. **Mismatches drop 250 -> 214**
+(`k_attention2` likewise 248 -> 214), with all five emulator test files and every previously passing
+kernel unaffected.
+
+**The important consequence: this was an emulator defect, so the gfx1030 translation was right all
+along.** These difftests use the interpreter as the reference, so a wrong reference reads as a
+failing translation. Any future mismatch should be checked against the ISA before the translator is
+suspected.
+
+**Still open**: 214 mismatches remain, so there is a second defect. The residual suspects from the
+list above are `ds_store_2addr_b64`, `v_lshrrev_b64` (whose implementation reads correctly against
+the ISA) and `v_cmp_eq_u32_e64`; the 2addr **b64** store path is the most likely, since the b32
+paths are now exercised correctly by several passing kernels. `statebisect`'s first-divergent-
+instruction search is the tool for the rest.
