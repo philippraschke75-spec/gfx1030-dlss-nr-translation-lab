@@ -192,7 +192,10 @@ covering four 32-bit scalars, not two pointers):
 | +0x1c | W (i32), from `ctx_sub+8` | `0x180033cc2..cc5` |
 | +0x20 | window origin X (i32), from the same mode table `0x180066410[mode]` `k_swin_var` uses | `0x180033c2b..c44`, `0x180033ccc` |
 | +0x24 | window origin Y (i32), table's second lane | `0x180033cd5..cda` |
-| +0x34 | a scalar (evidence below: it's a per-iteration stride/channel-count-like value, not yet pinned to an exact real number) | disassembly, see below |
+AttnParams is **exactly 40 bytes** (`+0x00`-`+0x27`) - confirmed from the assembled `.s`'s own kernel metadata:
+`.args: [.offset 0, .size 40, .value_kind by_value]`, followed by the compiler-inserted HSA hidden-args block
+(`hidden_block_count_x/y/z` at `+0x28/0x2c/0x30`, `hidden_group_size_x/y/z` at `+0x34/0x36/0x38`, etc.) - see
+below, this resolves what an earlier pass of this section wrongly treated as a fifth AttnParams field.
 
 Grid: the launcher computes `(size - origin + 7) >> 3` per axis (0x180033c37-c5f) - the same 8-wide window-tile
 formula as `k_swin_var`, confirming the reference's "window is 8x8 tokens."
@@ -210,9 +213,11 @@ formula as `k_swin_var`, confirming the reference's "window is 8x8 tokens."
    `s_and_b32 s12,s8,0xffff` right at kernel entry). Leaving `+0x34 = 0` made `v1` never advance - a genuine
    increment-by-zero infinite loop, the same failure class as `k_ffwd`'s original zero-divisor bug.
 
-**Verified**: `trace_qkv_attn_fixed.py` with `+0x18=8, +0x1c=8` (one 8x8 window), `+0x20=+0x24=0` (phase-0 origin),
-`+0x34=32` (an arbitrary plausible nonzero value) terminates cleanly in ~14,000,000 steps (330 s), all 8 waves
-finishing normally, zeroed weight/bias data.
+**Verified**: `trace_qkv_attn_fixed.py` with `+0x18=8, +0x1c=8` (one 8x8 window), `+0x20=+0x24=0` (phase-0 origin)
+terminates cleanly in ~14,000,000 steps (330 s), all 8 waves finishing normally, zeroed weight/bias data. (This
+script's very first working version filled `+0x34` with an arbitrary placeholder before the hidden-args nature
+of that offset was understood - see below; the placeholder happened to be enough to avoid the increment-by-zero
+hang described next, which is why the kernel terminated even though the value's *meaning* was still wrong.)
 
 **Which real block dispatches this kernel, identified from weight sizes**: scanning `weights_ht_index.json` for
 every `blockN.layer2.layer` size shows two distinct families - blocks 23-30 and 40-47 at 917,568 B
@@ -224,19 +229,32 @@ resolved here), blocks 31-38 are the separate `k_qkv_attn2`/ViT variant (`_Z11k_
 `0x180066380`, not yet investigated). Block23 is the first block of the C=512 stage and continues directly from
 the already-GPU-verified encoder chain (block22's pooled output was C=512, H=W=4 - `RESULTS_REAL_CONFIG.md`).
 
-**GPU hardware-verified** (`difftest_qkv_attn.py`, real block23 `layer2.layer` weight bytes extracted from
-`nvngx_dlssnr.dll`, H=W=4 matching block22's output, origin (0,0), `+0x34=512`): dispatched on the real RX 6900 XT
-via the rebuilt `_Z10k_qkv_attn10AttnParams.co` module - **PASS, 0 mismatches**, 8,169 bytes written to the
-output slot, 5.923 ms GPU time, arena guards intact. This is the same emulator-vs-hardware differential method
-used for every other kernel in this file.
+**GPU hardware-verified with structural (random) data** (`difftest_qkv_attn.py`, real block23 `layer2.layer`
+weight bytes extracted from `nvngx_dlssnr.dll`, H=W=4 matching block22's output, origin (0,0)): dispatched on the
+real RX 6900 XT via the rebuilt `_Z10k_qkv_attn10AttnParams.co` module - **PASS, 0 mismatches**, 8,169 bytes
+written to the output slot, 5.923 ms GPU time, arena guards intact. This is the same emulator-vs-hardware
+differential method used for every other kernel in this file.
 
-**`+0x34`, checked against the host launcher (2026-09-22 continued):** searched the full host disassembly for any
-write to the stack slot that would correspond to kernarg `+0x34` on either dispatch path (`[rsp+0x1a4]` for the
-"expert" path, `[rsp+0x1d4]` for the dense/window path we resolved) - neither appears anywhere in the binary. It
-is not set by an explicit `mov` near the kernarg construction we traced, so it's most likely filled in by the
-`0x180065900`/`0x180065a60` trampoline calls themselves (not yet disassembled) rather than by this launcher
-directly. The real value therefore stays an open question; `+0x34=32`/`512` are working placeholders, not
-recovered ground truth.
+**`+0x34` is not a kernel-defined field - it's the compiler's HSA hidden-args block, resolved 2026-09-22:**
+chaining real (not random) input activations initially produced a real, reproducible **7,840/8,192-byte GPU-vs-
+emulator mismatch** (see `RESULTS_REAL_CONFIG.md`). The host launcher itself was searched for any explicit write
+to the stack slot corresponding to kernarg `+0x34` on either dispatch path and found none, which was the right
+signal that this offset isn't launcher-controlled at all. `statebisect_qkv_attn.py` (adapting the existing
+`statebisect.py` bisection tool to this kernel's dual dispatch_ptr/kernarg_ptr ABI - it needed two fixes: the
+dump prologue's "read the kernarg pointer" must use `s[2:3]` not `s[0:1]` for this ABI, and register comparison
+must skip both pointer pairs, `s0-s3`, not just `s0/s1`) bisected the exact first-diverging instruction:
+`s_load_b32 s8, s[2:3], 0x34` at kernel entry, where the emulator read whatever placeholder value the test had
+written (e.g. 512) while real hardware read `0x10100` - decodes as two packed u16 values `(256, 1)`, exactly the
+test's launch `workgroup_size_x, workgroup_size_y`. Cross-checked against `_Z10k_qkv_attn10AttnParams.s`'s own
+`.args` metadata: `AttnParams` is `.offset 0, .size 40, .value_kind by_value` - **exactly 40 bytes**, and offset
+`0x34` (52) falls inside the compiler-appended implicit-args block (`hidden_block_count_x/y/z` at `0x28/0x2c/0x30`,
+`hidden_group_size_x/y/z` at `0x34/0x36/0x38`, `hidden_remainder_x/y/z` at `0x3a/0x3c/0x3e`, `hidden_global_offset_x/y/z`
+at `0x50/0x58/0x60`, `hidden_grid_dims` at `0x68`) - fields HIP's runtime fills in from the real launch dimensions,
+overwriting whatever bytes a manually-constructed kernarg buffer places there. There was never a "channel-count
+scalar"; the earlier "+0x34" framing throughout this document's history was a misreading of a hidden-args offset
+as a kernel parameter. **Fixed** by populating the emulator's kernarg with the correct hidden-args values matching
+the real launch config instead of a guess - `gpu_verify_block23_real.py` re-run with this fix: **PASS, 0
+mismatches**, real chained encoder-pipeline input, real block23 weight data, real hardware dispatch.
 
 **`layer2` blob's internal sub-layout, derived by arithmetic (not yet disassembly-confirmed):** `DLL_HOST_EVIDENCE.md`
 names `layer2` as `qkv_weight+attn_scale+attn_bias` combined into one blob. For `C=512`, `heads=C/32=16`: `qkv_weight`
@@ -249,6 +267,8 @@ verified test copies the whole blob to the weight pointer undifferentiated, whic
 correctness-of-plumbing check but means the kernel's *output values* haven't been checked against a real reference
 render - only that it computes *something* deterministic and matches the emulator bit-for-bit on real hardware.
 
-**Still open**: the exact real value of `+0x34`; chaining real (not random/zeroed) input activations continuing
-from the already-GPU-verified encoder chain; confirming the `layer2` sub-offset order; and the separate
-`k_qkv_attn2`/ViT contract (handle `0x180066380`, blocks 31-38, no `attn_bias` term).
+**`k_qkv_attn`'s full contract is now closed**: 40-byte `AttnParams` + correct HSA hidden-args, real chained
+input from the encoder, real block23 weight data, GPU hardware-verified bit-exact against the emulator (see
+`RESULTS_REAL_CONFIG.md`). **Still open**: confirming the `layer2` sub-offset order (qkv_weight/attn_bias/
+attn_scale - sizes are confirmed, ordering is not); and the separate `k_qkv_attn2`/ViT contract (handle
+`0x180066380`, blocks 31-38, no `attn_bias` term, likely the same hidden-args lesson applies).

@@ -1,7 +1,14 @@
 """GPU hardware verification for k_qkv_attn (AttnParams), using the kernarg contract recovered by reading the
 real host launcher (see VARPARAMS_HOST_CONTRACT.md's 'k_qkv_attn (AttnParams): RESOLVED' section):
   +0x00 input ptr, +0x08 output ptr, +0x10 weight ptr (block's layer2 = qkv_weight+attn_scale+attn_bias),
-  +0x18 H (i32), +0x1c W (i32), +0x20 origin X (i32), +0x24 origin Y (i32), +0x34 scalar (channel-count-like).
+  +0x18 H (i32), +0x1c W (i32), +0x20 origin X (i32), +0x24 origin Y (i32).
+AttnParams is exactly 40 bytes (confirmed from the assembled .s metadata: ".args: [.offset 0, .size 40,
+.value_kind by_value]"). Everything at +0x28 and beyond is the compiler-inserted HSA hidden-args block
+(hidden_block_count_x/y/z, hidden_group_size_x/y/z, ...), auto-populated by the real launch dimensions on
+hardware - there is no "channel-count scalar" at +0x34, that offset is hidden_group_size_x. An earlier version
+of this test guessed an arbitrary value there, which the emulator read literally while real hardware overrode
+it with the true launch config; this only surfaced as a mismatch once fed real (not random) data - see
+RESULTS_REAL_CONFIG.md's "Attempted real-input chaining" section for the full bisection that found it.
 Weight: real block23.layer2.layer bytes (C=512, the first block of the post-encoder window-attention stage that
 continues the already-GPU-verified block0-22 chain). Input/output activations are still random (structural
 verification only - not yet chained to real pixel data). Kernel descriptor enables both dispatch_ptr and
@@ -33,9 +40,11 @@ def kernarg():
     struct.pack_into('<i', ka, 0x1c, W)
     struct.pack_into('<i', ka, 0x20, 0)
     struct.pack_into('<i', ka, 0x24, 0)
-    struct.pack_into('<i', ka, 0x34, 512)
-    struct.pack_into('<III', ka, KSIZE - 20, GX, GY, 1)
-    struct.pack_into('<HHH', ka, KSIZE - 8, 256, 1, 1)
+    struct.pack_into('<III', ka, 0x28, GX, GY, 1)       # hidden_block_count_x/y/z
+    struct.pack_into('<HHH', ka, 0x34, 256, 1, 1)        # hidden_group_size_x/y/z
+    struct.pack_into('<HHH', ka, 0x3a, 0, 0, 0)          # hidden_remainder_x/y/z
+    struct.pack_into('<QQQ', ka, 0x50, 0, 0, 0)          # hidden_global_offset_x/y/z
+    struct.pack_into('<H', ka, 0x68, 2)                  # hidden_grid_dims
     return ka
 
 

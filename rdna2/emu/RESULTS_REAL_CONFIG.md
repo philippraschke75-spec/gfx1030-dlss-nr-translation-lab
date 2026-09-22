@@ -270,32 +270,38 @@ Still open: chaining real input activations (continuing from the encoder chain i
 real `+0x34` value (currently a plausible placeholder), and decoding the internal qkv_weight/attn_scale/attn_bias
 sub-offsets within the combined `layer2` blob.
 
-## Attempted real-input chaining into block23: exposed a real-data-format gap, not a k_qkv_attn contract bug (2026-09-22)
+## Real-input chaining into block23: initial mismatch, root-caused and fixed - a kernarg bug, not a data or kernel bug (2026-09-22)
 
 `gpu_verify_block23_real.py` re-derived the whole real-pixel chain (import through block22, all emulator-only
 since already independently GPU-verified) to get block22's actual pooled output, then fed it directly as
 block23's `k_qkv_attn` input pointer, using the same real `block23.layer2.layer` weight as above.
 
-**Result: FAIL, 7,840/8,192 bytes mismatched between GPU and emulator** (`gpu_rc=0`, dispatch itself succeeded
-cleanly, guards intact - this is a value-level divergence, not a crash or a structural failure). The mismatch
-pattern is structured, not random: both GPU and emulator agree on a repeating 4-byte block layout, they simply
-disagree on the numeric values inside it.
+**First attempt: FAIL, 7,840/8,192 bytes mismatched between GPU and emulator** (`gpu_rc=0`, dispatch itself
+succeeded cleanly, guards intact - a value-level divergence, not a crash). Two dead-end hypotheses were checked
+and discarded along the way:
+- Decoding the real `pooled4` bytes as plain f16 gave implausible values (up to +-64,900, 12 NaNs), which first
+  looked like a missing E4M3 quantization step between encoder blocks - but this was simply the wrong decode:
+  re-decoded as **E4M3** (the format the encoder is documented, and previously confirmed via `VARPARAMS_HOST_CONTRACT.md`
+  line 121, to actually publish), the same bytes give a fully plausible distribution (median |value| 1.25, max
+  448 = the E4M3 saturation ceiling, 0 NaNs) - there was no data-format gap at all.
+- The WMMA software lowering (`translate_final_head.py`'s `wmma()`, needed because gfx1030/RDNA2 has no hardware
+  WMMA instruction, unlike gfx1100/RDNA3) was also suspected, but ruled out: `k_swin_var` uses the identical
+  lowering and had already passed 0-mismatch GPU verification with real structured pixel data across the entire
+  22-block encoder chain, so a lowering bug would very likely have shown up there first.
 
-**Root cause, found by inspecting the actual `pooled4` bytes** (not guessed): interpreted as f16, block22's raw
-pooled output contains values up to +-64,900 (near f16's ~65,504 max representable magnitude) and 12 outright
-NaNs, in only 4,096 elements. Real network activations don't look like this. The reference documents "every
-inter-layer boundary is an E4M3 publication" - meaning there is a quantization/format conversion between the
-encoder's raw per-block f16 buffer and whatever `k_qkv_attn` actually expects as its E4M3 input, which this
-project has never decoded (the encoder chain was only ever verified as "GPU output bit-matches the emulator for
-that kernel's own dispatch," a black-box equivalence - never checked for producing *semantically valid* activation
-magnitudes, since nothing downstream had consumed it as real input before now). Feeding NaN-laden, out-of-range
-raw bytes into cosine-normalization and the custom bit-trick exponential (both documented as NaN-sensitive by
-design, `numerics.md`: "NaN publishes as +0... load-bearing") is exactly the kind of edge case where a software
-float emulator and real silicon are likely to compute different (but both "valid" for garbage input) results.
+**Actual root cause, found by bisection**: `statebisect_qkv_attn.py` (adapted from the existing `statebisect.py`
+tool to this kernel's dual dispatch_ptr/kernarg_ptr ABI) binary-searched the instruction trace and found the
+*first* diverging instruction was the kernel's own entry-point read of kernarg `+0x34` - the emulator saw the
+placeholder value the test script had written there, while real hardware returned `(256, 1)` packed as two u16s,
+exactly the launch's `workgroup_size_x/y`. Cross-checked against `_Z10k_qkv_attn10AttnParams.s`'s own compiled
+metadata: `AttnParams` is `.size 40` - offset `0x34` was never part of the kernel's own parameter struct, it's
+the compiler-inserted HSA hidden-args block (`hidden_group_size_x` specifically), which HIP's runtime always
+auto-populates from the real launch dimensions on hardware, silently ignoring whatever a hand-built kernarg
+buffer places there. `VARPARAMS_HOST_CONTRACT.md`'s "k_qkv_attn" section carried this as an unresolved "+0x34
+scalar" for a while; it was never a real field, just a misread offset.
 
-**This does not retract the `k_qkv_attn` contract or its GPU verification above** - that test used well-formed
-(random-but-finite) data and passed with 0 mismatches; the kernarg field layout, weight pointer, and window-tile
-grid math are still confirmed correct. What's newly exposed is a *different*, previously-unknown gap: the missing
-E4M3 quantization/format step between the encoder's output and the attention stage's input. Next step: find the
-kernel or arithmetic that performs this conversion (likely folded into the pooling/channel-doubling step at
-block boundaries, or a separate small kernel not yet identified) before real end-to-end chaining can be trusted.
+**Fixed and reverified**: `gpu_verify_block23_real.py` and `difftest_qkv_attn.py` now populate the standard HSA
+hidden-args fields (`hidden_block_count_x/y/z`, `hidden_group_size_x/y/z`, `hidden_remainder_x/y/z`,
+`hidden_global_offset_x/y/z`, `hidden_grid_dims`) at their real compiler-declared offsets instead of guessing.
+Rerun with real chained encoder input and real block23 weight data: **PASS, 0 mismatches**, 8,192 bytes written,
+guards intact - `k_qkv_attn`'s contract is now closed end-to-end with real data on real hardware.
