@@ -1109,3 +1109,38 @@ fixed) plus reference-model rounding imprecision in WMMA. It should be reclassif
 defect" to "known reference-model imprecision", and it does **not** block building or validating the
 ViT path. Treating these difftests as a verdict on the translation, rather than on the pair
 (translation, reference model), is what made it look like a port bug for two sessions.
+
+## Decoder per-block dispatch verified; k_dec_upsample decoded (2026-09-22)
+
+**The decoder's per-block dispatch is the encoder's.** Its inner loop (`0x1800309d0`-`0x180030a6a`)
+calls **launcher A** (`0x180032df0`) with `(C,H,W)` from the reversed stage tuple, the per-block mode
+from an array at `[r13+0x10]`, and `in_ptr = ctx+0x2a8[r9d]` - the encoder skip buffer. Same
+launcher, same `k_swin_var` kernels, only the weights and tuple differ.
+
+Verified by execution rather than inspection: blocks **66-69** (C=32, the last decoder stage) run as
+a four-dispatch `net_run` chain with their real weight records and match the emulator with
+**0 mismatches**, 56,304 bytes written. The stage-chain script is now parameterised by block list,
+since encoder and decoder stages are the same construction.
+
+### `k_dec_upsample` (`DecUpParams`), built at `0x180030510`-`0x180030563`
+
+| off | value |
+|---|---|
+| +0x00 | `ctx+0x250` |
+| +0x08 | `ctx+0x250` |
+| +0x10 | `ctx+0x298` |
+| +0x18 | weight ptr, `0x180031bc0(ctx, block, layer=0)` |
+| +0x20 | weight-derived |
+
+Five pointers, matching the `DecUpParams` shape verified in the registry. This is the step that opens
+each decoder stage, alongside `k_repack`.
+
+## Registry sweep after the emulator fixes: 16 PASS / 2 FAIL
+
+Re-running the whole registry after the `stride64` and `v_cvt_f16_f32` fixes:
+
+* **`k_mean` now passes.** It had been failing with 4 mismatches and had been separately investigated
+  and localised to "ordinary per-lane arithmetic". It was the same `v_cvt_f16_f32` defect. That is a
+  second kernel whose "translation failure" was really the reference model.
+* The only remaining failures are `k_attention` / `k_attention2` at 214 each, now understood as
+  1-ULP WMMA rounding in the reference rather than translation defects.
