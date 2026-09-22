@@ -1127,9 +1127,9 @@ since encoder and decoder stages are the same construction.
 | off | value |
 |---|---|
 | +0x00 | `ctx+0x250` |
-| +0x08 | `ctx+0x250` |
+| +0x08 | `[rbp+0x690]`, a local (corrected - an intervening load made this look like `ctx+0x250`) |
 | +0x10 | `ctx+0x298` |
-| +0x18 | weight ptr, `0x180031bc0(ctx, block, layer=0)` |
+| +0x18 | weight ptr, `0x180031bc0(ctx, block=**39**, layer=0)` |
 | +0x20 | weight-derived |
 
 Five pointers, matching the `DecUpParams` shape verified in the registry. This is the step that opens
@@ -1144,3 +1144,33 @@ Re-running the whole registry after the `stride64` and `v_cvt_f16_f32` fixes:
   second kernel whose "translation failure" was really the reference model.
 * The only remaining failures are `k_attention` / `k_attention2` at 214 each, now understood as
   1-ULP WMMA rounding in the reference rather than translation defects.
+
+## Block 39 resolved: it is not a block, it is the decoder-transition weight (2026-09-22)
+
+Block 39 was carried as an unexplained "transition" with a single 525,312-byte record and no known
+dispatch. It is not dispatched as a block because it is not one: at `0x18003053a` the host does
+`mov edx, 0x27` (= **39**) immediately before the weight lookup that feeds **`k_dec_upsample`**
+(`0x180030542`, dispatch at `0x1800305a3`). Block 39 is simply the weight record for the first
+decoder upsample, fetched once on the way from the ViT into the decoder.
+
+The size corroborates it exactly: `525,312 = 1024*512 + 1024`, a C=1024 -> 512 projection plus a
+1024-entry bias/scale - precisely the channel-halving needed to bring the ViT's C=1024 output down
+to the decoder's C=512 path.
+
+Method note: every weight lookup in the driver was listed with how its block index is set. Only
+three use a literal - `edx=0` twice in the prologue (the pre-block, block 0), `edx=0x46` (= 70)
+twice in the epilogue (the final head), and `edx=0x27` (= 39) here. Everything else is a loop
+counter. That accounting is what showed block 39 had no loop to belong to.
+
+### All 71 weight blocks now have an owner
+
+| blocks | owner |
+|---|---|
+| 0 | pre-block (`k_swin_var<32,true>`, prologue, `edx=0`) |
+| 1-22 | encoder, 4 stages via launcher A |
+| 23-30 | C=512 attention via the block launcher `0x180033660` |
+| 31-38 | ViT loop |
+| **39** | **`k_dec_upsample` transition weight** |
+| 40-47 | C=512 attention via the same launcher |
+| 48-69 | decoder, 4 stages via launcher A |
+| 70 | final head (`edx=0x46`) |
