@@ -670,3 +670,56 @@ per-stage width/size, walking the encoder's stages in reverse.
 this file (4/4/6/8); the decoder's per-stage block counts come from that 3-dword table and have not
 been dumped yet. That table dump is the obvious next step - it should turn blocks 48-69 into a
 concrete per-stage schedule the same way the encoder's is.
+
+## The complete 71-block schedule (2026-09-22, second session)
+
+All 71 weight blocks are now accounted for, with the decoder resolved from two independent
+directions that agree exactly.
+
+| blocks | stage | C | dispatched by |
+|---|---|---|---|
+| 0 | pre-block | 32 | `k_swin_var<32,true>` (prologue) |
+| 1-4 / 5-8 / 9-14 / 15-22 | **encoder**, 4 stages (4/4/6/8) | 32 / 64 / 128 / 256 | launcher A |
+| 23-30 | C=512 attention | 512 | launcher B (`k_qkv_attn` path) |
+| 31-38 | **ViT** | 1024 | ViT loop: `k_qkv2`, `k_attention2`, `k_expand2`, `k_contract2` |
+| 39 | transition | - | single 525,312 B record |
+| 40-47 | C=512 attention | 512 | launcher B (`k_qkv_attn` path) |
+| 48-55 / 56-61 / 62-65 / 66-69 | **decoder**, 4 stages (8/6/4/4) | 256 / 128 / 64 / 32 | launcher A + launcher B |
+| 70 | final head | - | `k_final_head` (+ `layer0.blend_scale`) |
+
+### How the decoder schedule was established
+
+**From the code.** The decoder loop (`0x180030870`-`0x180030b18`) runs 4 iterations (`cmp r9d, 0x4`
+at entry and back edge) and indexes the stage-tuple table with **`3 - r9d`**
+(`mov eax,0x3` / `sub eax,r9d` / `lea rdx,[rax+2*rax]` at `0x180030870`-`0x180030878`), i.e. it walks
+the encoder's stages **in reverse**. The table base `[rbp+0x498]` is loaded from
+`lea rcx,[r13+0x190]` at `0x18002f5c7` - so it is **`ctx+0x190`, the very stage tuple table the
+encoder uses**, which this file previously listed as unread. Each iteration reads a 3-dword
+`(C,H,W)` triple into `[rbp+0x690]`/`[rbp+0x688]`/`[rbp+0x628]`.
+
+Per-stage descriptors live in a stack array of 40-byte entries at `rbp+0x560`
+(`lea r13,[8*rdi+0x560]`, `rdi = stage*5`), constructed at `0x18003067c`-`0x18003083b`, with
+`[r13]`=first block, `[r13+4]`=end, `[r13+0x10]`=per-block mode array - the same shape the encoder
+loop uses. The inner per-block loop (`0x1800309d0`-`0x180030a6a`) then calls **launcher A**
+(`k_swin_var`) with `(C,H,W)` from the stage tuple, plus a **launcher B** path at `0x180030a8e`.
+
+**From the weights, independently.** Grouping blocks 48-69 by `layer0` size gives
+`1+7 | 1+5 | 1+3 | 1+3` = **8/6/4/4 = 22 blocks**, the exact reverse of the encoder's documented
+`4/4/6/8`. The per-stage sizes are *identical* to the encoder's (689,232 / 197,184 / 61,760 /
+20,672), and the odd-sized block sits at the **end** of each encoder stage (the fused downsample,
+already documented) and at the **start** of each decoder stage (the upsample + skip concat):
+
+| C | encoder odd block | decoder odd block |
+|---|---|---|
+| 256 | block 22, 820,288 | block 48, 820,784 |
+| 128 | block 14, 229,936 | block 56, 230,176 |
+| 64 | block 8, 69,936 | block 62, 70,048 |
+| 32 | block 4, 22,720 | block 66, 22,784 |
+
+Two independent lines of evidence - control flow and weight-record topology - agreeing on 8/6/4/4
+in reverse order is strong. This is a U-net, and the decoder mirrors the encoder exactly.
+
+**Remaining for an offline frame:** the buffer ping-pong layout (the decoder reads three per-stage
+pointer arrays at `ctx+0x2a8` / `ctx+0x2c8` / `ctx+0x2e8`, indexed by stage - likely skip input,
+working buffer and output), and the `k_flag_set`/`k_flag_wait` sync protocol. The schedule itself is
+no longer the blocker.
