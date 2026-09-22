@@ -593,3 +593,60 @@ It already earned its keep once: it caught a `k_contract2` regression I introduc
 computes, bit for bit, what the gfx1100 interpreter computes for that fixture. It is *not* evidence
 that the network's numerics are right: the reference is `gfx11emu.py`, not a real gfx1100 GPU, and
 most fixtures use synthetic activations with real weights. Nothing here has rendered a frame.
+
+## The whole-network driver: schedule recovered (2026-09-22)
+
+The long-standing "still unread" items - decoder stages, ViT/1D stages, the post-block and
+final-head path - are now mapped. The entire network is driven by **one function,
+`0x18002ea60`-`0x180031465`** (~2,050 instructions, 139 calls to 29 targets). Its backward jumps
+give the stage skeleton directly:
+
+| region | range | what it dispatches |
+|---|---|---|
+| prologue | `0x18002ea60` | `k_pre_block_1h_32_fp8`, `k_swin_var<32,true>` |
+| **encoder loop** | `0x18002f630`-`0x18002f929` | launcher A (`k_swin_var<C>`), 4 stages / 22 blocks |
+| enc -> mid | `0x18002f929`-`0x18002fd80` | `k_repack`, `k_final_head` |
+| **ViT loop** | `0x18002fd80`-`0x1800302d2` | `k_expand2`, `k_contract2` x2, `k_qkv2`, `k_attention2` |
+| mid -> dec | `0x1800302d2`-`0x180030870` | `k_repack`, `k_dec_upsample`, launcher B x4 |
+| **decoder loop** | `0x180030870`-`0x180030b18` | launcher A x2, launcher B x3 |
+| epilogue | `0x180030b18`-`0x180031465` | `k_post_block_1h_32_fp8`, `k_swin_var<32,true>` |
+
+Handle -> kernel names were recovered properly rather than guessed: each registration site loads the
+handle into `rdx` and its mangled-name string into `r8`, so walking those pairs and reading the
+strings out of `.rdata` (image base `0x180000000`) yields all **29** mappings.
+
+### The two per-block launchers
+
+**Launcher A = `0x180032df0`** - the `k_swin_var` dispatcher already documented at the top of this
+file. It references the five `k_swin_var` handles (`0x18006e388`-`0x18006e3a8`) through the
+`(C-0x20) rol 27` jump table plus the window-mode origin table `0x180066410`. Used by the encoder
+**and** the decoder loop.
+
+**Launcher B = `0x180033600`** - the attention/FFN block dispatcher, and the answer to the
+"how does a C=512 block compose?" question this file has been circling. Its handle references in
+address order give the per-block recipe:
+
+| addr | kernel |
+|---|---|
+| `0x18003381e` | `k_ffwd_inpview` |
+| `0x1800338ea` | `k_ffwd` |
+| `0x180033a3b` | `k_ffwd2` |
+| `0x180033b4a` | `k_conv_res_views` |
+| `0x180033d23` | `k_qkv_attn2`  (ViT variant) |
+| `0x180033e4c` | `k_qkv_attn`   (window variant) |
+| `0x180033fc2` | `k_conv_res2` |
+| `0x1800340e9` | `k_conv_res_views` |
+| `0x180034204` | `k_conv_res2` |
+
+So one block is `[k_ffwd_inpview | k_ffwd] -> k_ffwd2 -> k_conv_res_views ->
+[k_qkv_attn2 | k_qkv_attn] -> [k_conv_res2 | k_conv_res_views]`, with the variant chosen by the
+branches at `0x1800336a9`/`0x1800336ca`/`0x180033728`/`0x180033a73`. **Every kernel in that recipe
+is GPU-verified** except `k_qkv_attn2`'s ViT sibling path.
+
+**Why this matters:** it also explains the `ctx+0x230` vs `ctx+0x238` puzzle from earlier - those are
+not two halves of one FFN, they are distinct stage buffers consumed by different kernels inside this
+launcher, which is why no explicit copy between them was ever found.
+
+**Still needed before an offline frame can run:** the per-stage loop bounds (which block indices each
+loop covers), the buffer allocation/ping-pong layout across stages, and the `k_flag_set`/`k_flag_wait`
+sync protocol. The kernels themselves are largely done; what is missing is the bookkeeping around them.
