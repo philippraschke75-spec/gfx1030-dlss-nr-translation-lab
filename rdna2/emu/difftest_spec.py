@@ -52,13 +52,14 @@ SPECS = {
         '_Z5k_qkv9QkvParams',
         pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3, 0x20: 4},
         weights={4: 'block31_layer2.bin'}),
+    # AttnParams1d is 4 pointers + H/W, NOT the 5-pointer shape its 40-byte size suggests: as five
+    # it reads off the end of any arena given to it (it faulted at exactly 6 MiB with 6 slots and
+    # exactly 24 MiB with 24). As four it runs cleanly and writes to +0x18, its output.
     'attention': lambda: K.Spec(                 # ViT 1-D attention
         '_Z11k_attention12AttnParams1d',
-        pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3, 0x20: 4},
-        # This one strides well past its base pointers - it faulted one slot past a 6-slot arena -
-        # so it needs a larger working buffer than the pointer count alone implies.
-        nslot=24,
-        weights={4: 'block31_layer2.bin'}),
+        pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3},
+        scalars={0x20: ('<i', 8), 0x24: ('<i', 8)},
+        weights={2: 'block31_layer2.bin'}),
     # The 48-byte ConvParams1d pair is NOT five pointers: it is four pointers, an H/W pair at +0x20
     # and a count at +0x28. k_contract2 passes in this form and faults when +0x20 is made a pointer,
     # which is the opposite of the 40-byte family above - so the shapes are per-struct, not uniform.
@@ -72,11 +73,11 @@ SPECS = {
         '_Z6k_qkv29QkvParams',
         pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3, 0x20: 4},
         weights={4: 'block31_layer2.bin'}),
-    'attention2': lambda: K.Spec(                # same shape as k_attention, same large-stride need
+    'attention2': lambda: K.Spec(                # same AttnParams1d shape as k_attention
         '_Z12k_attention212AttnParams1d',
-        pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3, 0x20: 4},
-        nslot=24,
-        weights={4: 'block31_layer2.bin'}),
+        pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3},
+        scalars={0x20: ('<i', 8), 0x24: ('<i', 8)},
+        weights={2: 'block31_layer2.bin'}),
     'conv_splitk': lambda: K.Spec(               # same 48-byte ConvParams1d shape as k_contract2
         '_Z13k_conv_splitk12ConvParams1d',
         pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3},

@@ -542,7 +542,18 @@ ends, where it previously had none.
   pointers faults, which is how the scalar positions were found.
 * `k_flag_set` needs `s_sendmsg(MSG_RTN_GET_REALTIME)` in the emulator - the realtime clock a
   spin-wait uses for backoff. `k_flag_set`/`k_flag_wait` are the inter-block sync primitives.
-* `k_attention`, `k_attention2` and `k_conv_splitk` scan to the very end of whatever arena they are
-  given (they faulted at exactly 6 MiB with a 6-slot arena and exactly 24 MiB with a 24-slot one),
-  which looks like a scan for a sentinel that neither random nor zeroed data ever produces. They
-  need a structured fixture rather than a larger buffer.
+* `k_attention` / `k_attention2` (`AttnParams1d`). The end-of-arena scanning was **my own layout
+  error**, not kernel behaviour: as five pointers they read off the end of any arena, but
+  `AttnParams1d` is **4 pointers + H/W** like `ConvParams1d`, with `+0x18` the output. In that form
+  both run cleanly and write to the right slot - but they still **mismatch** (250 of 2023 bytes for
+  `k_attention`, 248 of 2022 for `k_attention2`), so they are *not* verified.
+
+  Characterising the mismatch: 88% of written bytes agree exactly, and the differing ones are far
+  too large to be rounding (mean |delta| 62, max 199, with a pronounced cluster near 128 - i.e. sign
+  bit flips in e4m3 bytes). WMMA is **not** the suspect: `k_qkv` (4 WMMA) and `k_contract2` (4 WMMA)
+  both pass with the same software lowering, as does the fully verified `k_swin_var`. What
+  distinguishes these kernels is transcendentals - `k_attention` has **328** exp/log/rcp/sqrt ops
+  (softmax) against 37 in `k_contract2`. Two candidates remain, and they need separating rather than
+  guessing: a genuine divergence in a transcendental's translated approximation, or fixture realism,
+  since random bytes make softmax inputs extreme and e4m3's 4-bit exponent then quantizes
+  near-boundary values to opposite sides. Realistic activations plus `statebisect` is the way in.
