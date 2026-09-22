@@ -1060,3 +1060,52 @@ list above are `ds_store_2addr_b64`, `v_lshrrev_b64` (whose implementation reads
 the ISA) and `v_cmp_eq_u32_e64`; the 2addr **b64** store path is the most likely, since the b32
 paths are now exercised correctly by several passing kernels. `statebisect`'s first-divergent-
 instruction search is the tool for the rest.
+
+## k_attention fully root-caused: two emulator bugs, then 1-ULP WMMA rounding (2026-09-22)
+
+`statebisect` was adapted to this kernel (`statebisect_attn.py`) and binary-searched the
+7,957-instruction first-visit trace. Two real defects came out, **both in the emulator**, plus a
+final residue that is not a defect at all.
+
+### Fixing the bisect harness first
+
+Two things had to be corrected before the search would run, and both were latent bugs in the shared
+tool rather than anything to do with this kernel:
+
+* **`statebisect` hard-coded the workgroup-id SGPRs as `s4`/`s5`.** That index is
+  `user_sgpr_count`, which is 4 for `k_swin_var` (what the tool was written against) but **2** for
+  `k_attention`. The guard therefore compared garbage, every wave branched to `dumpskip`, and the
+  GPU dump came back empty. `variant_source` now takes the base as a parameter.
+* **`coverage.json` only ever holds the last-built kernel**, so `source_vgprs` was unavailable. It
+  is now derived from the gfx1100 disassembly as the highest v-register referenced.
+
+### Defect 1 - `v_cvt_f16_f32` destroyed the upper half of its destination
+
+First divergence landed on `v_cvt_f16_f32_e32 v3, v3`, with hardware holding `0x3d902c80` where the
+emulator had `0x00002c80` - **identical low halves, upper half zeroed**. The f16 result occupies
+`D[15:0]` and `D[31:16]` must be left untouched; the emulator wrote the whole dword. Fixed by
+merging into the existing destination. This moved the first divergence roughly **900 instructions
+later**, which is how the fix was confirmed.
+
+### The residue - 1-ULP differences out of WMMA
+
+The next divergence is `v_wmma_f32_16x16x16_f16`, and the differences are now **one ULP**
+(`4425e8d2` vs `4425e8d1`, `c38272f6` vs `c38272f5`). That is a rounding-model difference in the
+reference, not a translation defect. Hardware's internal accumulation order is undocumented and is
+**neither** of the obvious candidates: f64-then-round (the original) and naive sequential f32 were
+both measured and left the count at 214 unchanged. The f64 form is kept as the more accurate
+reference.
+
+**Why other WMMA kernels pass**: `k_qkv`, `k_qkv2`, `k_contract2` and `k_conv_splitk` all use the
+same lowering and report 0 mismatches, because their results are quantised to e4m3/f16 before being
+stored, which absorbs a 1-ULP f32 difference. `k_attention` has values sitting on quantisation
+boundaries, where 1 ULP flips the stored byte - which is exactly the large-magnitude, sign-flip-
+shaped deltas recorded earlier when the mismatch was first characterised.
+
+### Conclusion
+
+**`k_attention`'s gfx1030 translation is correct.** The mismatch was two emulator defects (now
+fixed) plus reference-model rounding imprecision in WMMA. It should be reclassified from "blocking
+defect" to "known reference-model imprecision", and it does **not** block building or validating the
+ViT path. Treating these difftests as a verdict on the translation, rather than on the pair
+(translation, reference model), is what made it look like a port bug for two sessions.

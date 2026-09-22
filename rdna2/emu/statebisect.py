@@ -27,10 +27,14 @@ SG_LIST = list(range(64)) + [100, 101, 102]   # s0..s63, then saved EXEC, SCC, V
 MARK = 0x600DF00D
 
 
-def variant_source(src_text, nreg, addr, name, wg=(0, 0)):
+def variant_source(src_text, nreg, addr, name, wg=(0, 0), wgsgpr=4):
+    # wgsgpr: the SGPR holding workgroup_id_x, which is just user_sgpr_count - the system SGPRs
+    # follow the user ones. k_swin_var has 4 user SGPRs so its id lands in s4, but k_attention has
+    # 2 and uses s2. Hard-coding s4 made the guard below compare garbage, so every wave branched to
+    # dumpskip and the GPU dump came back empty.
     lines = src_text.split('\n'); out = []
     entry = ['s_load_dwordx2 s[104:105], s[0:1], 0x0', 's_waitcnt lgkmcnt(0)', 's_add_u32 s104, s104, 0x%x' % DUMP_OFF,
-             's_addc_u32 s105, s105, 0', 'v_mov_b32 v250, v0', 's_mov_b32 s98, s4', 's_mov_b32 s99, s5'] + ['v_mov_b32 v%d, 0x%x' % (r, POISON) for r in range(1, nreg)]
+             's_addc_u32 s105, s105, 0', 'v_mov_b32 v250, v0', 's_mov_b32 s98, s%d' % wgsgpr, 's_mov_b32 s99, s%d' % (wgsgpr + 1)] + ['v_mov_b32 v%d, 0x%x' % (r, POISON) for r in range(1, nreg)]
     guard = ['s_cselect_b32 s101, 1, 0', 's_cmp_lg_u32 s98, %d' % wg[0], 's_cbranch_scc1 .Ldumpskip_%x' % addr, 's_cmp_lg_u32 s99, %d' % wg[1], 's_cbranch_scc1 .Ldumpskip_%x' % addr]
     dump = ['s_mov_b32 s100, exec_lo', 's_mov_b32 s102, vcc_lo', 's_mov_b32 exec_lo, -1',
             'v_mbcnt_lo_u32_b32 v251, -1, 0', 'v_and_b32 v252, 0x3ff, v250', 'v_lshrrev_b32 v252, 5, v252',
@@ -102,7 +106,7 @@ class Ctx:
             raise RuntimeError('checkpoint unreachable at allocated device address')
 
     def gpu_dump(self, addr, tag):
-        txt = variant_source(self.src, self.nreg, addr, self.sym, self.wg)
+        txt = variant_source(self.src, self.nreg, addr, self.sym, self.wg, getattr(self, 'wgsgpr', 4))
         s = W / (tag + '.s'); s.write_text(txt)
         o, co = W / (tag + '.o'), W / (tag + '.co')
         subprocess.run([str(BIN / 'llvm-mc.exe'), '-triple=amdgcn-amd-amdhsa', '-mcpu=gfx1030', '-filetype=obj', str(s), '-o', str(o)], check=True, capture_output=True)
