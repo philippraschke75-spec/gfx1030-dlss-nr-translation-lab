@@ -99,3 +99,31 @@ Ruled out by reading the AMD port host code:
 Not yet checked: whether the transition is handled inside `k_swin_var` itself via an unexplored flag combination (only
 1, 4, 0x14, 16, 32, 63 have been exercised - see RESULTS_VAR.md/RESULTS_REAL_CONFIG.md), or by a host function this
 disassembly excerpt does not cover. This blocks extending the real-pixel chain (RESULTS_REAL_CONFIG.md) past stage 1.
+
+## Resolved: the stage-1 -> stage-2 transition is fused into the last block's own kernel call (2026-09-22)
+
+A partner's independent reimplementation, [OpenDLSS-NR](https://github.com/maanHimself/OpenDLSS-NR) (Vulkan/NVIDIA,
+not run or executed by us - only its documentation and source were read), describes the transition as a 2x2 box
+pool of the last block's raw output (`((a+b)+(c+d))*0.25`, all in half) followed by a channel-doubling GEMM, and
+its source shows this can be fused directly into the last block's own kernel dispatch as a second output pointer
+(`pooledOutput` in `nr_graph.cpp`). Independent corroboration for that project's credibility: its documented window
+phase origins `(0,0),(-4,-4),(-4,0),(0,-4)` and the tensor name `block70.layer0.blend_scale` match what we found
+ourselves from the AMD port disassembly and the WEIGHTS_HT container, before either side could have seen the other's
+work on those specific details.
+
+This was then independently checked against OUR OWN translated kernel (`k_swin_var<32,false>`, host-only, emulator
+only): `trace_block4_pool.py` shows that with `flags=4` (last-in-stage) and *only* then, the kernel writes to
+kernarg **+0x38** - previously one of the "unclear semantics" pointer fields - in addition to its normal output at
++0x08. At H=W=32 the write is exactly 16,384 bytes; at H=W=16 the earlier documented activation-buffer formula gives
+`C(64) * ceil(H(16)/4) * ceil(W(16)/4) * 16 = 16,384` - an exact match, confirming the buffer is C=64 (doubled),
+H=W halved. `probe_real_transition.py` fed this real +0x38 output (real captured pixels, real block0-4 weights) into
+`k_swin_var<64,false>` (block5) as its +0x00 input at H=W=32: it terminates cleanly and produces non-degenerate
+output. The output's magnitude distribution (E4M3-decoded median ~96, some values at the 448 saturation ceiling) is
+plausible but not yet confirmed correct - block5's own real flags/origin/mode and whatever else may be needed have
+not been independently verified, and this was checked in the emulator only, not on the GPU.
+
+**+0x30 remains unexplained** (not written in this trace for any tested flags value; may be a third output, an input,
+or unused for the encoder path).
+
+Next: verify this on the GPU (byte-exact against the emulator, the way every other stage in RESULTS_REAL_CONFIG.md
+was), then extend the real-pixel chain (RESULTS_REAL_CONFIG.md) through blocks 5-8 (stage 2) using this mechanism.
