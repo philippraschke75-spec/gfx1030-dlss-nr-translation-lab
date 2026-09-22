@@ -655,6 +655,10 @@ class Exec:
                     reg = w.RV[P[3]['i'] + j].view(np.float32)
                     C[2 * j, :] = reg[:16]
                     C[2 * j + 1, :] = reg[16:]
+                # Hardware's internal accumulation order for this instruction is not documented and
+                # is neither f64-then-round nor naive sequential f32 - both were measured against it
+                # and left k_attention's residual 1-ULP differences unchanged. f64 is kept because it
+                # is the more accurate reference; see VARPARAMS_HOST_CONTRACT.md.
                 D = (A.astype(np.float64) @ B.astype(np.float64).T + C).astype(np.float32)
                 for j in range(8):
                     w.V[P[0]['i'] + j] = np.ascontiguousarray(np.concatenate([D[2 * j, :], D[2 * j + 1, :]])).view(np.uint32)
@@ -907,7 +911,13 @@ class Exec:
         if b == 'v_cvt_f32_f16':
             return lambda w: w.wv(P[0], fbits(w.rh(P[1]).astype(np.float32)))
         if b == 'v_cvt_f16_f32':
-            return lambda w: w.wv(P[0], hbits(w.rf(P[1]).astype(np.float16)))
+            # The f16 result lands in D[15:0] and D[31:16] is left ALONE. Writing the whole dword
+            # (i.e. zeroing the top half) is what statebisect caught in k_attention: hardware had
+            # 0x3d902c80 where the emulator had 0x00002c80 - same low half, upper half destroyed.
+            def cvt_f16_f32(w):
+                lo = hbits(w.rf(P[1]).astype(np.float16)) & np.uint32(0xffff)
+                w.wv(P[0], (w.r32(P[0]) & np.uint32(0xffff0000)) | lo)
+            return cvt_f16_f32
         if b in ('v_fma_mix_f32', 'v_fma_mixlo_f16'):
             osel, ohi = mods.get('op_sel', [0, 0, 0]), mods.get('op_sel_hi', [0, 0, 0])
 
