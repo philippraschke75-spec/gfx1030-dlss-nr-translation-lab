@@ -152,6 +152,13 @@ hung with +0x2c=0) and shows a coherent access pattern: input +0x00 fully read (
 dense `32 -> 128 -> 32` FFN structure for narrow blocks. This is a structural/plausibility result (synthetic weights,
 guessed channel count), not yet a GPU-verified or real-data-chained result.
 
-Still unknown: the exact row/token-count field (if separate from the channel scalar), the real host values for block
-23-30's launch (they use the "expert" grouped-FFN variant per the reference, C=512 not 32), and the launch contracts
-for `k_qkv_attn`, `k_conv_res`/`k_conv_res2`, and the projection kernels this stage also needs.
+**FfwdParams is now fully resolved for the fields that matter**: a kernarg-read trace (`trace_ffwd_kernarg.py`, hooking
+every scalar load against the kernarg base directly, not just the arena pointer slots) shows the kernel reads *only*
++0x00 (16 B, the input+output pointer pair), +0x10 (8 B, weight pointer) and +0x2c (4 B, channel count) - nothing else
+in the 288-byte kernarg is ever touched. There is no separate row/token-count field: the amount of work is derived
+entirely from the dispatch grid size (1D, `workgroup_id_x` only), the same way `k_import`'s bounds come from its grid.
+
+Still unknown: the real host values for block 23-30's launch (they use the "expert" grouped-FFN variant per the
+reference, C=512 not 32, and the launcher's `test byte[0x18009b208],1` branch selects between at least two structurally
+different FFN paths we have not both traced), and the launch contracts for `k_qkv_attn`, `k_conv_res`/`k_conv_res2`,
+and the projection kernels this stage also needs.
