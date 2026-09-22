@@ -84,8 +84,11 @@ SPECS = {
         weights={3: 'block31_layer4.bin'}),
     'ffwd_inpview': lambda: K.Spec(              # 32 B: s_load_b256 at +0x00, hidden_group_size_x at +0x2c
         '_Z14k_ffwd_inpview12FfwdPlParams',
-        pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3},
-        weights={3: 'block23_layer1.bin'}),
+        # Three pointers plus an H/W pair, not four pointers: as four it faults on a garbage
+        # 0x765f00000000. Same per-struct shape question as ConvParams1d, same answer.
+        pointers={0x00: 0, 0x08: 1, 0x10: 2},
+        scalars={0x18: ('<i', 8), 0x1c: ('<i', 8)},
+        weights={2: 'block23_layer1.bin'}),
     'align_probe': lambda: K.Spec(               # a single pointer
         '_Z13k_align_probePh',
         pointers={0x00: 0}),

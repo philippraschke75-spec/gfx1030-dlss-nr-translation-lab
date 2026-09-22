@@ -433,6 +433,8 @@ weight bytes:
 | `k_contract2` | 48 B | 4 pointers + H/W + count | `block31.layer4` = `1024*1024` + 2048 |
 | `k_conv_splitk` | 48 B | 4 pointers + H/W + count | `block31.layer4` |
 | `k_repack` | 32 B | 2 pointers + four i32 | none |
+| `k_ffwd_inpview` | 32 B | 3 pointers + H/W | `block23.layer1` |
+| `k_export` | 64 B | 3 pointers + dims/mode + two f32 strengths | none |
 | `k_mean` | 32 B | ptr, three i32, ptr at `+0x18` | none |
 
 **The 40-byte structs are five pointers - but this does not generalize by load pattern.** For the
