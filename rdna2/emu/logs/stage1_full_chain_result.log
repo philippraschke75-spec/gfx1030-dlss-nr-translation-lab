@@ -1,0 +1,6 @@
+STAGE import {"stage": "import", "rc": 0, "gpu": "GPU dispatch OK: 0.184 ms, 2 pointers rebased, arena_dev=0x404010000, guards intact", "mismatches": 0, "bytes_written": 48928, "status": "PASS"}
+STAGE preblock {"stage": "preblock", "rc": 0, "gpu": "GPU dispatch OK: 0.317 ms, 7 pointers rebased, arena_dev=0x404010000, guards intact", "mismatches": 0, "bytes_written": 685636, "status": "PASS"}
+STAGE block1 {"stage": "block1", "rc": 0, "gpu": "GPU dispatch OK: 0.285 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact", "mismatches": 0, "bytes_written": 392729, "status": "PASS"}
+STAGE block2 {"stage": "block2", "rc": 0, "gpu": "GPU dispatch OK: 0.254 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact", "mismatches": 0, "bytes_written": 377231, "status": "PASS"}
+STAGE block3 {"stage": "block3", "rc": 0, "gpu": "GPU dispatch OK: 0.258 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact", "mismatches": 0, "bytes_written": 384292, "status": "PASS"}
+STAGE block4 {"stage": "block4", "rc": 0, "gpu": "GPU dispatch OK: 0.274 ms, 18 pointers rebased, arena_dev=0x404010000, guards intact", "mismatches": 0, "bytes_written": 445786, "status": "PASS"}
