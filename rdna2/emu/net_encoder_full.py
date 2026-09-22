@@ -26,9 +26,14 @@ STAGES = [('32_0', [1, 2, 3, 4]), ('64_0', [5, 6, 7, 8]),
 MODES = [(0, 0), (-4, -4), (-4, 0), (0, -4)]
 POOL = 0x38                                    # VarParams pooled-output pointer
 
-PP = [0, 1]                                    # per-stage ping-pong
-STAGE_IN = [2, 3, 4, 5]                        # one input buffer per stage
-WSLOT0 = 6
+# Everything must sit BEYOND the VarParams pointer slots. make_kernarg maps each of the 18
+# PTR_FIELDS to slots 0..17, and the fields this test does not override still point there - notably
+# the scratch pointer at +0xA0, which is slot 17. An earlier version put weights at slot 6 and had
+# scratch overwrite block 12's weight record mid-chain.
+BASE0 = len(V.PTR_FIELDS)                      # 18
+PP = [BASE0, BASE0 + 1]                        # per-stage ping-pong
+STAGE_IN = [BASE0 + 2, BASE0 + 3, BASE0 + 4, BASE0 + 5]
+WSLOT0 = BASE0 + 6
 ALLB = [b for _, bs in STAGES for b in bs]
 NSLOT = WSLOT0 + len(ALLB)
 S = lambda i: V.ARENA + i * V.SLOT

@@ -1202,3 +1202,33 @@ network: each stage type has its own.
 Buffer **sizes** come from the activation formula `C * ceil(H/4) * ceil(W/4) * 16` with `(C,H,W)`
 from the `ctx+0x190` stage tuple, so a runner can allocate these itself rather than reproducing the
 host allocator.
+
+## The full encoder runs as one chain on hardware (2026-09-22)
+
+All **22 blocks across four stages** (C=32/64/128/256, 4/4/6/8) execute as a single `net_run`
+dispatch sequence and match the emulator running the identical chain with **0 mismatches**,
+175,633 bytes written.
+
+This adds the piece the single-stage runs could not: the **fused stage transitions**. The slots
+written are exactly what the schedule predicts and nothing else -
+
+| slot | meaning |
+|---|---|
+| 18, 19 | the within-stage ping-pong pair |
+| 21, 22, 23 | `STAGE_IN[1..3]` - all three transitions fired, each stage's last block emitting the next stage's input through `VarParams +0x38` |
+| 17 | per-workgroup scratch (`+0xA0`) |
+| 4 | block 22's pooled output, which correctly keeps the default slot because stage 4 has no successor |
+| 24-45 | **untouched** - the weight records are not written |
+
+### A fixture bug worth recording
+
+The first version of this run also reported PASS with 0 mismatches, and was **wrong**. Weights were
+placed from slot 6, which overlaps the 18 `VarParams` pointer slots that `make_kernarg` fills; the
+scratch pointer at `+0xA0` is slot 17, so scratch overwrote block 12's weight record partway through
+the chain. Emulator and GPU did the same wrong thing, so translation equality genuinely held and the
+test passed while blocks 12-22 ran on corrupted weights.
+
+This is the same failure mode as `k_ffwd2` "passing" while writing zero bytes: a bit-exact result
+says the two implementations agree, not that the fixture asked a meaningful question. Any chain test
+must place its buffers **beyond `len(V.PTR_FIELDS)`**, and checking that no weight slot appears in
+the written set is a cheap way to catch it - which is why that slot list is recorded above.
