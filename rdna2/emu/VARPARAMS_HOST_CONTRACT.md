@@ -1174,3 +1174,31 @@ counter. That accounting is what showed block 39 had no loop to belong to.
 | 40-47 | C=512 attention via the same launcher |
 | 48-69 | decoder, 4 stages via launcher A |
 | 70 | final head (`edx=0x46`) |
+
+## The ctx buffer map (2026-09-22)
+
+Every ctx-relative qword slot referenced as a pointer by the frame-level function, the network
+driver, launcher A or the block launcher. This is the allocation a runner has to reproduce.
+
+| ctx offset | used by | role |
+|---|---|---|
+| `+0x0f8` | frame-fn, `k_export` | float-RGB copy from `k_import` - the export blend source |
+| `+0x100` | frame-fn, driver, `k_export` | **network result** |
+| `+0x108` / `+0x110` / `+0x118` | frame-fn | input-side buffers |
+| `+0x140` / `+0x148` | frame-fn (x57 / x27) | a list/vector pair, not a single buffer |
+| `+0x180` / `+0x188` | driver, launcher A | per-workgroup **scratch** (launcher A's `+0xa0`) |
+| `+0x218` / `+0x220` | driver, frame-fn | pre-block buffers |
+| **`+0x228`** | block launcher | **C=512 persistent activation** - block output and next block's input |
+| **`+0x230` / `+0x238` / `+0x240`** | block launcher | C=512 intermediates (FFN out, attn in, attn out) |
+| `+0x248` | driver | the extra passed on the **last** block of a C=512 stage |
+| `+0x250` / `+0x258` / `+0x298` | driver | decoder upsample |
+| **`+0x260` / `+0x268` / `+0x288`** | driver | **ViT** intermediates |
+| `+0x2a0`, `+0x2a8[4]` | driver | stage tuple / **per-stage skip buffers** (U-net) |
+
+The three distinct working sets - `0x228`-`0x240` for C=512 blocks, `0x260`-`0x288` for the ViT,
+and `0x2a8[]` for the encoder/decoder skips - are why no single ping-pong pair explains the whole
+network: each stage type has its own.
+
+Buffer **sizes** come from the activation formula `C * ceil(H/4) * ceil(W/4) * 16` with `(C,H,W)`
+from the `ctx+0x190` stage tuple, so a runner can allocate these itself rather than reproducing the
+host allocator.
