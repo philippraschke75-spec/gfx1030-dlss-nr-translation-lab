@@ -557,3 +557,39 @@ ends, where it previously had none.
   guessing: a genuine divergence in a transcendental's translated approximation, or fixture realism,
   since random bytes make softmax inputs extreme and e4m3's 4-bit exponent then quantizes
   near-boundary values to opposite sides. Realistic activations plus `statebisect` is the way in.
+
+## Registry sweep baseline (2026-09-22, seed 1, real RX 6900 XT)
+
+`for k in $(py difftest_spec.py --list); do ... difftest_spec.py $k 1; done` - a regression baseline
+for the whole registry. **15 PASS / 3 FAIL**, and all three failures are investigated above rather
+than merely observed.
+
+| kernel | status | bytes written | out slots |
+|---|---|---|---|
+| align_probe | PASS | 2 | 0 |
+| attention | **FAIL** (250 mism) | 2023 | 3 |
+| attention2 | **FAIL** (248 mism) | 2022 | 3 |
+| contract2 | PASS | 8159 | 2 |
+| conv_res2 | PASS | 8167 | 2 |
+| conv_res_views | PASS | 8167 | 2 |
+| conv_splitk | PASS | 2038 | 2 |
+| dec_upsample | PASS | 8168 | 2 |
+| expand | PASS | 65306 | 1 |
+| expand2 | PASS | 8157 | 1 |
+| export | PASS | 128 | 1 |
+| ffwd2 | PASS | 4083 | 2 |
+| ffwd_inpview | PASS | 8167 | 1 |
+| final_head | PASS | 16330 | 1 |
+| mean | **FAIL** (4 mism) | 4 | 1 |
+| qkv | PASS | 1529 | 1,2,3 |
+| qkv2 | PASS | 6122 | 1,2,3 |
+| repack | PASS | 8167 | 1 |
+
+Run this before and after touching `gfx11emu.py`, `translate_kernels.py` or `translate_final_head.py`.
+It already earned its keep once: it caught a `k_contract2` regression I introduced by generalizing
+`k_qkv`'s five-pointer layout onto `ConvParams1d`, which does not share it.
+
+**What this does and does not establish.** Each row is translation equality - the gfx1030 module
+computes, bit for bit, what the gfx1100 interpreter computes for that fixture. It is *not* evidence
+that the network's numerics are right: the reference is `gfx11emu.py`, not a real gfx1100 GPU, and
+most fixtures use synthetic activations with real weights. Nothing here has rendered a frame.
