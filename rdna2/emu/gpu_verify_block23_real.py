@@ -121,6 +121,10 @@ GX, GY = 1, 1
 
 
 def kernarg23():
+    # AttnParams is only 40 bytes (.s metadata: ".args: [.offset 0, .size 40, .value_kind by_value]");
+    # everything from +0x28 on is the compiler-inserted HSA implicit-args block, which HIP auto-fills from
+    # the real launch dimensions on the GPU - +0x34 is hidden_group_size_x, NOT a kernel-defined scalar.
+    # Populate it here to match, so the emulator sees what real hardware actually provides.
     ka = bytearray(KSIZE)
     S = lambda k: V.ARENA + k * V.SLOT
     struct.pack_into('<Q', ka, 0x00, S(0))
@@ -130,9 +134,11 @@ def kernarg23():
     struct.pack_into('<i', ka, 0x1c, W)
     struct.pack_into('<i', ka, 0x20, 0)
     struct.pack_into('<i', ka, 0x24, 0)
-    struct.pack_into('<i', ka, 0x34, 512)
-    struct.pack_into('<III', ka, KSIZE - 20, GX, GY, 1)
-    struct.pack_into('<HHH', ka, KSIZE - 8, 256, 1, 1)
+    struct.pack_into('<III', ka, 0x28, GX, GY, 1)       # hidden_block_count_x/y/z
+    struct.pack_into('<HHH', ka, 0x34, 256, 1, 1)        # hidden_group_size_x/y/z
+    struct.pack_into('<HHH', ka, 0x3a, 0, 0, 0)          # hidden_remainder_x/y/z
+    struct.pack_into('<QQQ', ka, 0x50, 0, 0, 0)          # hidden_global_offset_x/y/z
+    struct.pack_into('<H', ka, 0x68, 2)                  # hidden_grid_dims
     return ka
 
 
