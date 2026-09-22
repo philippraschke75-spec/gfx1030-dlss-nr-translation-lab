@@ -680,7 +680,10 @@ class Exec:
                     a = np.int64(w.rs(sa)) + w.RV[va['i']].astype(np.int64) + off
                 else:
                     a = w.r64(va).astype(np.int64) + off
-                src, cmp_ = w.RV[data['i']], w.RV[data['i'] + 1]
+                # Copy both sources up front: the destination commonly aliases the data pair
+                # (global_atomic_cmpswap_b32 v0, v2, v[0:1]), and writing the per-lane result below
+                # would otherwise clobber src for the lanes not yet processed.
+                src, cmp_ = w.RV[data['i']].copy(), w.RV[data['i'] + 1].copy()
                 # Lanes are serialized in ascending order: two lanes hitting one address must not
                 # both see the original value, or a lock built on this would hand out two winners.
                 for l in idx:

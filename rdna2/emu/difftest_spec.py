@@ -65,15 +65,47 @@ SPECS = {
         scalars={0x28: ('<i', 4)},
         weights={4: 'block31_layer4.bin'}),
 
+    'qkv2': lambda: K.Spec(                      # same 5-pointer shape as k_qkv
+        '_Z6k_qkv29QkvParams',
+        pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3, 0x20: 4},
+        weights={4: 'block31_layer2.bin'}),
+    'attention2': lambda: K.Spec(                # same shape as k_attention, same large-stride need
+        '_Z12k_attention212AttnParams1d',
+        pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3, 0x20: 4},
+        nslot=24,
+        weights={4: 'block31_layer2.bin'}),
+    'conv_splitk': lambda: K.Spec(               # same 48-byte shape as k_contract2
+        '_Z13k_conv_splitk12ConvParams1d',
+        pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3, 0x20: 4},
+        scalars={0x28: ('<i', 4)},
+        nslot=24,                                # strides past a 6-slot arena, like k_attention
+        weights={4: 'block31_layer4.bin'}),
+    'ffwd_inpview': lambda: K.Spec(              # 32 B: s_load_b256 at +0x00, hidden_group_size_x at +0x2c
+        '_Z14k_ffwd_inpview12FfwdPlParams',
+        pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3},
+        weights={3: 'block23_layer1.bin'}),
+    'align_probe': lambda: K.Spec(               # a single pointer
+        '_Z13k_align_probePh',
+        pointers={0x00: 0}),
+
     'repack': lambda: K.Spec(                    # 2 pointers then four i32 (+0x10/+0x14/+0x18/+0x1c)
         '_Z8k_repack12RepackParams',
         pointers={0x00: 0, 0x08: 1},
         scalars={0x10: ('<i', 8), 0x14: ('<i', 8), 0x18: ('<i', 8), 0x1c: ('<i', 8)}),
-    'mean': lambda: K.Spec(                      # ptr, three i32, then a second pointer at +0x18
+    'mean': lambda: K.Spec(                      # ptr, four i32, then a second pointer at +0x18
         '_Z6k_mean10MeanParams',
         pointers={0x00: 0, 0x18: 1},
+        # A sweep shows +0x0c and +0x10 scale the step count identically (an H/W pair) while +0x08
+        # and +0x14 do not affect control flow at all.
         scalars={0x08: ('<i', 8), 0x0c: ('<i', 8), 0x10: ('<i', 8), 0x14: ('<i', 8)},
-        fill={0: 'f32'}),
+        # Two fixture requirements, both learned the hard way. The input must be well-conditioned
+        # f32: random bytes read as f32 span ~60 orders of magnitude and include NaNs, making the
+        # summation order-dependent so emulator and hardware disagree for non-translation reasons.
+        # The output must start zeroed because this kernel CAS-accumulates into it - over random
+        # bytes it writes nothing at all. With both, the result scales exactly linearly with the
+        # workgroup count (0.6227 at 1x1, 1.2455 at 2x1, 2.4910 at 4x1), as a cross-workgroup
+        # accumulating reduction should.
+        fill={0: 'f32', 1: 'zero'}),
 }
 
 if len(sys.argv) > 1 and sys.argv[1] == '--list':

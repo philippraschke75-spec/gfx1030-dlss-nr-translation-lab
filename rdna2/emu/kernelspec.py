@@ -7,11 +7,10 @@ and that is what a Spec captures.
 
 Two things this centralizes that were repeatedly gotten wrong by hand:
 
-* **Hidden-args offsets are derived, not guessed.** They sit immediately after the kernel's own
-  explicit struct, whose size comes from the .s `.args:` metadata - not at a fixed offset. Getting
-  this wrong is what made `k_qkv_attn` mismatch on real data for a whole session (a field believed
-  to be a kernel parameter at +0x34 was really `hidden_group_size_x`). `hidden_offsets()` computes
-  them from the explicit size using the deltas the ABI fixes.
+* **Hidden-args offsets are read from the kernel's own metadata, not guessed.** They sit after the
+  explicit struct, whose size varies per kernel, and not every kernel declares the full set.
+  Guessing this is what made `k_qkv_attn` mismatch on real data for a whole session: a field
+  believed to be a kernel parameter at +0x34 was really `hidden_group_size_x`.
 * **A kernel that writes nothing is a failed test, not a passing one.** `k_ffwd2` dispatched
   cleanly on both the emulator and real hardware while writing zero bytes, because a count field
   was left at 0. `run_difftest` treats an empty write set as FAIL.
@@ -21,16 +20,6 @@ from pathlib import Path
 import numpy as np
 import gfx11emu as E, run_emu as R, run_var as V, difftest_var as D
 
-# Offsets of each hidden-arg relative to the START of the hidden block (which begins immediately
-# after the kernel's explicit struct). Fixed by the AMDGPU ABI; see external-docs/README.md.
-_HIDDEN = {
-    'block_count_x': (0, 'I'), 'block_count_y': (4, 'I'), 'block_count_z': (8, 'I'),
-    'group_size_x': (12, 'H'), 'group_size_y': (14, 'H'), 'group_size_z': (16, 'H'),
-    'remainder_x': (18, 'H'), 'remainder_y': (20, 'H'), 'remainder_z': (22, 'H'),
-    'global_offset_x': (40, 'Q'), 'global_offset_y': (48, 'Q'), 'global_offset_z': (56, 'Q'),
-    'grid_dims': (64, 'H'),
-}
-
 
 def kernel_meta(sym):
     """Read explicit-struct size, total kernarg size and LDS bytes from the kernel's own .s file."""
@@ -39,8 +28,16 @@ def kernel_meta(sym):
     kernarg = int(re.search(r'\.amdhsa_kernarg_size (\d+)', kd)[1])
     lds = int(re.search(r'\.amdhsa_group_segment_fixed_size (\d+)', kd)[1])
     md = s.split('amdhsa.kernels:', 1)[1]
-    explicit = int(re.search(r'\.offset:\s*0\s*\n\s*\.size:\s*(\d+)\s*\n\s*\.value_kind:\s*by_value', md)[1])
-    return explicit, kernarg, lds
+    # The explicit struct is everything before the compiler's hidden args, which is not always a
+    # single by_value blob - a kernel taking a raw pointer (k_align_probe) declares a global_buffer
+    # arg instead. Take the extent of every non-hidden arg.
+    args = re.findall(r'\.offset:\s*(\d+)\s*\n\s*\.size:\s*(\d+)\s*\n\s*\.value_kind:\s*(\w+)', md)
+    explicit = max((int(o) + int(sz) for o, sz, kind in args if not kind.startswith('hidden_')), default=0)
+    # Take the hidden args exactly as declared rather than deriving them: not every kernel has the
+    # full set (k_align_probe, which takes a bare pointer, declares none at all and has an 8-byte
+    # kernarg), and the declaration is authoritative anyway.
+    hidden = {kind[len('hidden_'):]: (int(o), int(sz)) for o, sz, kind in args if kind.startswith('hidden_')}
+    return explicit, kernarg, lds, hidden
 
 
 class Spec:
@@ -60,15 +57,12 @@ class Spec:
         # order-dependent - emulator and hardware then disagree for reasons that are not translation
         # bugs. Reduction kernels (k_mean) need this; byte-oriented kernels do not care.
         self.fill = dict(fill or {})
-        self.explicit, self.kernarg_size, self.lds = kernel_meta(sym)
+        self.explicit, self.kernarg_size, self.lds, self.hidden = kernel_meta(sym)
         need = max(list(pointers.values()) + list(self.weights)) + 1
         for slot, fn in self.weights.items():                 # a weight may span several 1 MiB slots
             n = (D.ROOT / 'build' / 'weights' / fn).stat().st_size
             need = max(need, slot + -(-n // V.SLOT))
         self.nslot = nslot or need + 1
-
-    def hidden_offsets(self):
-        return {k: (self.explicit + rel, fmt) for k, (rel, fmt) in _HIDDEN.items()}
 
     def kernarg(self):
         ka = bytearray(self.kernarg_size)
@@ -77,13 +71,13 @@ class Spec:
         for off, (fmt, val) in self.scalars.items():
             struct.pack_into(fmt, ka, off, val)
         gx, gy = self.grid
-        h = self.hidden_offsets()
         vals = {'block_count_x': gx, 'block_count_y': gy, 'block_count_z': 1,
                 'group_size_x': self.threads, 'group_size_y': 1, 'group_size_z': 1,
                 'remainder_x': 0, 'remainder_y': 0, 'remainder_z': 0,
                 'global_offset_x': 0, 'global_offset_y': 0, 'global_offset_z': 0, 'grid_dims': 2}
-        for name, (off, fmt) in h.items():
-            struct.pack_into('<' + fmt, ka, off, vals[name])
+        for name, (off, size) in self.hidden.items():
+            if name in vals:
+                struct.pack_into('<' + {1: 'B', 2: 'H', 4: 'I', 8: 'Q'}[size], ka, off, vals[name])
         return ka
 
     def arena(self, seed):

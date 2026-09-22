@@ -457,3 +457,47 @@ for this. `k_mean` still needs a scalar sweep to find a non-degenerate config.
 
 **Still open**: `k_attention` (`AttnParams1d`) strides past a 6-slot arena, so it needs a larger
 working buffer than its pointer count implies; and `k_mean`'s scalars need a sweep like `k_ffwd2`'s.
+
+## k_mean: fixture solved, but a real emulator/hardware divergence remains open (2026-09-22)
+
+`MeanParams` is 32 bytes: a pointer at `+0x00`, four i32 at `+0x08`/`+0x0c`/`+0x10`/`+0x14`, and a
+second pointer at `+0x18`. A scalar sweep shows `+0x0c` and `+0x10` scale the emulator step count
+identically (0 -> 782, 1/2/4 -> 868, 16 -> 1126, 64 -> 1838, 256 -> 4046), i.e. a symmetric H/W
+pair, while `+0x08` and `+0x14` do not affect control flow at all.
+
+Two fixture requirements, both of which silently produce a *vacuous* test if missed:
+
+* **The input must be well-conditioned f32.** Random bytes read as f32 span ~60 orders of magnitude
+  and include NaNs, which makes the summation order-dependent; the emulator and hardware then
+  disagree for reasons that have nothing to do with translation.
+* **The output must start zeroed**, because this kernel CAS-accumulates into it. Over random bytes
+  it writes nothing whatsoever. With a zeroed accumulator the result scales exactly linearly with
+  the workgroup count (0.6227 at 1x1, 1.2455 at 2x1, 2.4910 at 4x1), as a cross-workgroup
+  accumulating reduction should.
+
+**Open, reproducible divergence.** With correct fixtures the emulator and the real GPU still
+disagree on the value: emulator 0.6227, hardware 0.1514, for a single workgroup with no concurrency
+at all. Evidence gathered so far, which should save the next investigator the same steps:
+
+* It is **not** a concurrency artifact - it reproduces at grid 1x1, and the hardware result is
+  byte-identical at 1x1 and 4x1 while the emulator's scales with the grid.
+* It is **not** the newly added `global_atomic_cmpswap_b32`. Instrumenting the arena shows exactly
+  **one** write into the output slot, carrying the already-divergent value, so the wrong number is
+  computed upstream of the atomic.
+* It is **not** a mistranslation of the atomic: `translate_kernels.py` maps
+  `global_atomic_cmpswap_b32` to RDNA2's `global_atomic_cmpswap` with identical operands, which is
+  what the generated `.s` contains.
+* It is **not** a cross-lane lowering problem: the kernel has no DPP, permlane, swizzle or bpermute
+  at all. Its only lane-id op is a single `v_mbcnt_lo_u32_b32`, whose emulator implementation is
+  correct for wave32.
+
+So the defect is in the ordinary per-lane reduction arithmetic somewhere in this kernel's 257
+instructions. `statebisect.py`'s methodology (binary-search the first divergent instruction against
+saved hardware state) is the right next tool; it was built for exactly this and resolved the
+`k_qkv_attn` case.
+
+**Emulator additions this round:** `global_atomic_cmpswap_b32`, implemented from the RDNA3 ISA
+(`tmp = MEM; src = DATA[31:0]; cmp = DATA[63:32]; MEM = tmp==cmp ? src : tmp; RETURN_DATA = tmp`),
+serializing lanes in ascending order so two lanes contending on one address cannot both observe the
+original value, and copying both source registers up front because the destination commonly aliases
+the data pair (`global_atomic_cmpswap_b32 v0, v2, v[0:1]`).
