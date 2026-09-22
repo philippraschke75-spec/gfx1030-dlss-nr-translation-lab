@@ -175,10 +175,38 @@ pair), +0x10 (8 B, one pointer), +0x18 (16 B, another pointer pair), +0x34 (4 B,
 total (0x00, 0x08, 0x10, 0x18, 0x20) plus the scalar, consistent with the OpenDLSS-NR reference's description of a
 QKV+attention block needing more buffers (input, output, qkv_weight, attn_scale, attn_bias) than the plain FFN did.
 
-**Not yet resolved**: with random-byte content in the un-typed pointer targets, the kernel does not terminate (hits
-the step limit; most lanes stall at one PC while lane 0 alone keeps advancing, a pattern consistent with a cross-lane
-or cross-workgroup synchronization wait, not a simple divide-by-zero like `k_ffwd`'s was). Random bytes reinterpreted
-as attention scale/bias values readily produce NaN, and the reference documents the network's cosine-normalization
-and softmax steps as NaN-sensitive by design (`numerics.md`: "NaN publishes as +0... load-bearing"), so plausible next
-steps are testing with well-formed (small, finite) synthetic values in the scale/bias-shaped fields rather than random
-bytes, or reading more of the kernel's own body to find what specifically that stalled PC (0x3958c) is waiting on.
+**Not yet resolved, but substantially narrowed down (2026-09-22 continued):** with random-byte content in the
+un-typed pointer targets, the kernel does not terminate; most waves stall at one PC (`0x3958c`) while one wave
+alone keeps advancing. Reading the kernel's own disassembly around that address (`analysis/gfx1100-disassembly.txt`
+lines ~33863-33880) shows it's `s_barrier` + `buffer_gl0_inv` at the top of a real, bounded 16-iteration cooperative
+tile-load loop (`s26` counts 0 -> 0x1e0 step 32) - `s_barrier` is workgroup-wide and requires every wave to arrive
+the same number of times, so one wave racing ahead means it took a different, longer code path before its next
+barrier.
+
+That longer path was located: an outer exec-mask-peeling loop at `+0x4d0` (`0x395d0`) wraps a second, *also
+correctly bounded* 16-iteration tile loop at `+0x584..+0xbd0` (`0x39684`-`0x39cd0`, same `s26` 0->0x1e0 pattern)
+that does the real attention math - two `v_wmma_f32_16x16x16_f16` matmuls per iteration, matching the reference's
+documented `S = q k^T + prior` and `O = P V` steps (`network.md`: "learned 64x64 per head bias as the MMA's C
+operand"). Neither of these loops is individually unbounded, yet the whole thing cycles for **13,000,000+ steps
+without terminating** - `trace_qkv_attn_zeroed.py` shows the exact same PC sequence at 1,000,000-step boundaries
+repeating with a ~13M-step period (steps 1M/14M/27M/40M all report identical PCs), so this is a real non-terminating
+loop, not just "needs a higher step cap" (tried up to 80,000,000 steps; confirmed periodic, not converging).
+
+Two hypotheses were tested and ruled out:
+- **NaN from random attention data**: `trace_qkv_attn_zeroed.py` fills the whole arena with zeros instead of random
+  bytes and reproduces the *exact* same PC sequence at the exact same step counts as the random-data run. The
+  divergence does not depend on the floating-point content of the buffers at all.
+- **Wrong workgroup size**: the reference states the attention window is 8x8 = 64 tokens
+  ("Tokens are padded to a multiple of 64"), so `trace_qkv_attn_64thread.py` retried with `nthreads=64` (one
+  window, matching the reference) instead of the 256 threads copied from the encoder kernels. Same non-terminating
+  pattern, just with the wave count reduced from 8 to 2 - ruling out a workgroup-size mismatch as the cause.
+
+Since the exhaustive kernarg-read trace proves the kernel reads nothing beyond the 5 pointer fields + the one
+scalar at `+0x34`, and the exec-mask/tile-loop trip counts (`0x1e0`/32 = 16 both times) are hardcoded immediates,
+not kernarg-derived, the runaway iteration count most likely comes from a value read from the *pointed-to buffer
+memory* (not kernarg) - e.g. a total-token or chunk count baked into one of the five buffers rather than passed as
+a scalar. With every buffer zeroed, a computation like `paddedTokens/64` or an unsigned `tokens - alreadyProcessed`
+reading that zero could underflow to a huge trip count. **Next step (not yet done)**: instrument reads against the
+five buffer base addresses (the same read-hooking technique already used for kernarg) to see which offset inside
+those buffers is read early in the exec-mask loop (around `0x395d0`-`0x395fc`) and drives the outer iteration count,
+then supply a small, plausible finite value there instead of zero.
