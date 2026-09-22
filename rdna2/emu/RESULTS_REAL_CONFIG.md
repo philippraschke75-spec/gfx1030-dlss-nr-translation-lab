@@ -269,3 +269,33 @@ encoder chain, since all of that chain's results were already committed).
 Still open: chaining real input activations (continuing from the encoder chain instead of random bytes), the
 real `+0x34` value (currently a plausible placeholder), and decoding the internal qkv_weight/attn_scale/attn_bias
 sub-offsets within the combined `layer2` blob.
+
+## Attempted real-input chaining into block23: exposed a real-data-format gap, not a k_qkv_attn contract bug (2026-09-22)
+
+`gpu_verify_block23_real.py` re-derived the whole real-pixel chain (import through block22, all emulator-only
+since already independently GPU-verified) to get block22's actual pooled output, then fed it directly as
+block23's `k_qkv_attn` input pointer, using the same real `block23.layer2.layer` weight as above.
+
+**Result: FAIL, 7,840/8,192 bytes mismatched between GPU and emulator** (`gpu_rc=0`, dispatch itself succeeded
+cleanly, guards intact - this is a value-level divergence, not a crash or a structural failure). The mismatch
+pattern is structured, not random: both GPU and emulator agree on a repeating 4-byte block layout, they simply
+disagree on the numeric values inside it.
+
+**Root cause, found by inspecting the actual `pooled4` bytes** (not guessed): interpreted as f16, block22's raw
+pooled output contains values up to +-64,900 (near f16's ~65,504 max representable magnitude) and 12 outright
+NaNs, in only 4,096 elements. Real network activations don't look like this. The reference documents "every
+inter-layer boundary is an E4M3 publication" - meaning there is a quantization/format conversion between the
+encoder's raw per-block f16 buffer and whatever `k_qkv_attn` actually expects as its E4M3 input, which this
+project has never decoded (the encoder chain was only ever verified as "GPU output bit-matches the emulator for
+that kernel's own dispatch," a black-box equivalence - never checked for producing *semantically valid* activation
+magnitudes, since nothing downstream had consumed it as real input before now). Feeding NaN-laden, out-of-range
+raw bytes into cosine-normalization and the custom bit-trick exponential (both documented as NaN-sensitive by
+design, `numerics.md`: "NaN publishes as +0... load-bearing") is exactly the kind of edge case where a software
+float emulator and real silicon are likely to compute different (but both "valid" for garbage input) results.
+
+**This does not retract the `k_qkv_attn` contract or its GPU verification above** - that test used well-formed
+(random-but-finite) data and passed with 0 mismatches; the kernarg field layout, weight pointer, and window-tile
+grid math are still confirmed correct. What's newly exposed is a *different*, previously-unknown gap: the missing
+E4M3 quantization/format step between the encoder's output and the attention stage's input. Next step: find the
+kernel or arithmetic that performs this conversion (likely folded into the pooling/channel-doubling step at
+block boundaries, or a separate small kernel not yet identified) before real end-to-end chaining can be trusted.
