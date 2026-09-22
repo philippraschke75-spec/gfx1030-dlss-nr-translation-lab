@@ -160,3 +160,28 @@ GPU-verified end to end on real captured game data, not just plausible in the em
 
 Still open: block5's own real flags/origin/mode for a launch that also needs a *second* pooled output at its own
 `+0x38` (it is not last-in-stage here, so this run did not exercise that), and blocks 6-8 to complete stage 2.
+
+## Stage 2 (blocks 5-8) GPU-verified end to end on real pixels; the fused-pool pattern repeats at the next boundary (2026-09-22)
+
+`gpu_verify_stage2_real.py`: real captured pixels through import -> pre-block -> blocks 1-4 (emulator only, already
+GPU-verified above) -> blocks 5-8 (`k_swin_var<64,false>`, C=64, H=W=32, real weights, fresh module ca6f810e19694682),
+each independently GPU-dispatched and checked against the emulator at the device's real allocation base.
+
+| block | flags | origin | mismatches | bytes written | status |
+|---|---|---|---|---|---|
+| 5 | 1 | (0,0) | 0 | 196,484 | PASS |
+| 6 | 0 | (-4,-4) | 0 | 181,235 | PASS |
+| 7 | 0 | (-4,0) | 0 | 188,031 | PASS |
+| 8 | 4 (last-in-stage) | (0,-4) | 0 | 216,776 | PASS |
+
+Block 8 also writes its own fused pooled output at kernarg +0x38 (28,648 bytes changed, within [0, 32736)) - the same
+mechanism found at block4, now confirmed at the stage 2 -> stage 3 boundary too. Expected size for C=128 (doubled
+from 64), H=W=16 (halved from 32): `128 * ceil(16/4) * ceil(16/4) * 16 = 32,768` bytes; the observed changed range
+sits almost exactly at that bound, consistent (not every byte of the slot is written, matching the encoder matrix's
+earlier observation that window coverage is not always a clean 100% of the allocated slot).
+
+Stage 1 and stage 2 of the encoder, and both stage transitions between them, are now GPU-verified on real captured
+Cyberpunk pixels with 0 mismatches at every one of the 11 kernel dispatches checked so far (import, pre-block,
+blocks 1-8). Stages 3 (128-wide, blocks 9-14) and 4 (256-wide, blocks 15-22) are the same architecture and not yet
+tested on real chained data (though each kernel was individually verified with real weights and synthetic
+activations in the original 13/13 matrix).
