@@ -790,11 +790,15 @@ class Exec:
                 w.wv(P[0], data[src])
             return bperm
         o0, o1 = mods.get('offset0', 0), mods.get('offset1', 0)
-        m = re.fullmatch(r'(load|store)_(2addr_)?(?:stride64_)?(\w+?)(_d16_hi)?', rest)
+        m = re.fullmatch(r'(load|store)_(2addr_)?(stride64_)?(\w+?)(_d16_hi)?', rest)
         if not m:
             raise NotImplementedError('ds ' + rest)
-        ld, two, t, d16 = m[1] == 'load', bool(m[2]), m[3], bool(m[4])
+        ld, two, t, d16 = m[1] == 'load', bool(m[2]), m[4], bool(m[5])
         n = WIDTH[t]
+        # ISA: the plain 2addr forms scale each offset by the element size, the stride64 forms scale
+        # by element size * 64 ("with a larger stride"). This factor was previously dropped, which
+        # silently aliased every stride64 access onto the wrong LDS row.
+        ostride = n * (64 if m[3] else 1)
 
         def run(w):
             idx = np.nonzero(w.em)[0]
@@ -807,7 +811,7 @@ class Exec:
             a = w.RV[va['i']][idx].astype(np.int64)
             if two:
                 for j, oo in ((0, o0), (1, o1)):
-                    p = (a + oo * n) & M32
+                    p = (a + oo * ostride) & M32
                     assert (p + n <= len(w.lds)).all(), 'lds oob'
                     if ld:
                         v = ld_val(w.lds[p[:, None] + np.arange(n)], n, False)
