@@ -214,3 +214,36 @@ recomputing the whole chain from scratch - this genuinely saved the second half 
 Stages 1-3 of the encoder (14 blocks, import, pre-block, and 3 stage transitions) are now GPU-verified on real
 captured Cyberpunk pixels with 0 mismatches at every one of 17 kernel dispatches checked. Stage 4 (256-wide,
 blocks 15-22) is the same architecture and not yet chained on real data.
+
+## Stage 4 (blocks 15-22) GPU-verified end to end on real pixels; the entire 4-stage encoder is now complete (2026-09-22)
+
+`gpu_verify_stage4_real.py`: same method, extended through the 8-block, C=256 stage (`k_swin_var<256,false>`, H=W=8,
+real weights, fresh module 38c8344cc4b4738e). Mode schedule 0,1,2,3,0,1,2,3 (first/last flags on blocks 15/22), again
+read from VARPARAMS_HOST_CONTRACT.md's host-derived table.
+
+| block | flags | origin | mismatches | bytes written | status |
+|---|---|---|---|---|---|
+| 15 | 1 | (0,0) | 0 | (see log) | PASS |
+| 16 | 0 | (-4,-4) | 0 | 36,856 | PASS |
+| 17 | 0 | (-4,0) | 0 | 40,889 | PASS |
+| 18 | 0 | (0,-4) | 0 | 40,887 | PASS |
+| 19 | 0 | (0,0) | 0 | 49,023 | PASS |
+| 20 | 0 | (-4,-4) | 0 | 36,859 | PASS |
+| 21 | 0 | (-4,0) | 0 | 40,863 | PASS |
+| 22 | 4 (last-in-stage) | (0,-4) | 0 | 44,949 | PASS |
+
+Block 22 also writes its fused pooled output at +0x38 (4,084 bytes changed, within [0,8160)); expected size for
+C=512 (doubled from 256), H=W=4 (halved from 8): `512*ceil(4/4)*ceil(4/4)*16 = 8,192` bytes - consistent. The fused
+transition mechanism has now been confirmed at all four encoder stage boundaries (4->5, 8->9, 14->15, 22->[next]).
+
+**The entire 4-stage encoder (import, pre-block, and all 22 numbered blocks - 24 kernel dispatches total) is now
+GPU-verified end to end on real captured Cyberpunk pixels, 0 mismatches at every single dispatch.** This is the
+largest verified real-data chain in the project so far. Next: the transition into the 512-wide blocks (23-30, a
+different FFN structure per the OpenDLSS-NR reference - not yet translated/tested), then the ViT (31-38), the
+decoder, and the output head.
+
+Harness note: a PowerShell `Start-Job`/`Wait-Job` wrapper used for one attempt at this stage did not stream output
+incrementally (unlike Bash's direct redirection) and appeared to hang for ~35 minutes while actually computing
+correctly in the background; killing it lost no data (checkpoints had already saved blocks 15-21) but wasted the
+GPU verification of block22, which was then quickly redone. Prefer Bash background execution with direct output
+redirection for these long-running sandboxed scripts; it streams progress live and its timeouts fire reliably.
