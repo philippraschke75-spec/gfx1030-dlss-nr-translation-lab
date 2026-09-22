@@ -1,0 +1,14 @@
+{
+  "checked": "2026-09-21T19:43:26.3342872+02:00",
+  "pid": 1452,
+  "modules": [
+    {
+      "ModuleName": "DLSSNRCapture.asi",
+      "FileName": "c:\\program files (x86)\\steam\\steamapps\\common\\Cyberpunk 2077\\bin\\x64\\plugins\\DLSSNRCapture.asi"
+    },
+    {
+      "ModuleName": "DLSSNRGraphicsProbe.asi",
+      "FileName": "c:\\program files (x86)\\steam\\steamapps\\common\\Cyberpunk 2077\\bin\\x64\\plugins\\DLSSNRGraphicsProbe.asi"
+    }
+  ]
+}
