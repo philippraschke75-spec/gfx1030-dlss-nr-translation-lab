@@ -1,0 +1,525 @@
+THREAD 6864 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff933974c3a C:\Windows\SYSTEM32\ntdll.dll +0x44c3a
+  01 0x7ff933974c3a C:\Windows\SYSTEM32\ntdll.dll +0x44c3a
+  02 0x7ff93397476a C:\Windows\SYSTEM32\ntdll.dll +0x4476a
+  03 0x7ff933969a1e C:\Windows\SYSTEM32\ntdll.dll +0x39a1e
+  04 0x7ff93396c374 C:\Windows\SYSTEM32\ntdll.dll +0x3c374
+  05 0x7ff93396b041 C:\Windows\SYSTEM32\ntdll.dll +0x3b041
+  06 0x7ff92e619408 C:\Windows\SYSTEM32\dxgi.dll +0x9408
+  07 0x7ff92e621673 C:\Windows\SYSTEM32\dxgi.dll +0x11673
+  08 0x7ff92e616432 C:\Windows\SYSTEM32\dxgi.dll +0x6432
+  09 0x7ff86d0eb4bc c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\libxess_fg.dll +0x19b4bc
+  10 0x7ff86d125a08 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\libxess_fg.dll +0x1d5a08
+  11 0x7ff86d11f11d c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\libxess_fg.dll +0x1cf11d
+  12 0x7ff86d11a864 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\libxess_fg.dll +0x1ca864
+  13 0x7ff86d11a8bb c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\libxess_fg.dll +0x1ca8bb
+  14 0x7ff86d0d553c c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\libxess_fg.dll +0x18553c
+  15 0x7ff86d16be41 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\libxess_fg.dll +0x21be41
+  16 0x7ff86d161947 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\libxess_fg.dll +0x211947
+  17 0x7ff86d1505bc c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\libxess_fg.dll +0x2005bc
+  18 0x7ff7c4a97751 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1d57751
+  19 0x7ff7c4a97502 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1d57502
+  20 0x7ff7c4a80b1a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1d40b1a
+  21 0x7ff7c352279c c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x7e279c
+  22 0x7ff7c3ccab69 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0xf8ab69
+  23 0x7ff7c350b25b c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x7cb25b
+  24 0x7ff7c34f1f2a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x7b1f2a
+  25 0x7ff7c34f30d2 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x7b30d2
+  26 0x7ff7c34f33a3 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x7b33a3
+  27 0x7ff7c3733720 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x9f3720
+  28 0x7ff7c373330f c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x9f330f
+  29 0x7ff7c3733283 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x9f3283
+  30 0x7ff7c3733994 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x9f3994
+  31 0x7ff7c4614dd1 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x18d4dd1
+  32 0x7ff7c464599a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x190599a
+  33 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  34 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 16164 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d4a54 C:\Windows\SYSTEM32\ntdll.dll +0xa4a54
+  01 0x7ff9339d4a54 C:\Windows\SYSTEM32\ntdll.dll +0xa4a54
+  02 0x7ff9339658ae C:\Windows\SYSTEM32\ntdll.dll +0x358ae
+  03 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  04 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 24432 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d4a54 C:\Windows\SYSTEM32\ntdll.dll +0xa4a54
+  01 0x7ff9339d4a54 C:\Windows\SYSTEM32\ntdll.dll +0xa4a54
+  02 0x7ff9339658ae C:\Windows\SYSTEM32\ntdll.dll +0x358ae
+  03 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  04 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 12016 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d4a54 C:\Windows\SYSTEM32\ntdll.dll +0xa4a54
+  01 0x7ff9339d4a54 C:\Windows\SYSTEM32\ntdll.dll +0xa4a54
+  02 0x7ff9339658ae C:\Windows\SYSTEM32\ntdll.dll +0x358ae
+  03 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  04 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 9380 previous_suspend=0 context=1 resume_result=1
+  00 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  01 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  02 0x7ff933964133 C:\Windows\SYSTEM32\ntdll.dll +0x34133
+  03 0x7ff933951d44 C:\Windows\SYSTEM32\ntdll.dll +0x21d44
+  04 0x7ff933951b32 C:\Windows\SYSTEM32\ntdll.dll +0x21b32
+  05 0x7ff93396fdf1 C:\Windows\SYSTEM32\ntdll.dll +0x3fdf1
+  06 0x7ff93396d289 C:\Windows\SYSTEM32\ntdll.dll +0x3d289
+  07 0x7ff8671ee824 C:\Users\<user>\Documents\ChatGPT\dlss 5\gfx1032-dlss-nr-research-main\version.dll +0x4e824
+  08 0x7ff8671db9d3 C:\Users\<user>\Documents\ChatGPT\dlss 5\gfx1032-dlss-nr-research-main\version.dll +0x3b9d3
+  09 0x7ff8671c1311 C:\Users\<user>\Documents\ChatGPT\dlss 5\gfx1032-dlss-nr-research-main\version.dll +0x21311
+  10 0x7ff8671a9d4d C:\Users\<user>\Documents\ChatGPT\dlss 5\gfx1032-dlss-nr-research-main\version.dll +0x9d4d
+  11 0x7ff8671a90ba C:\Users\<user>\Documents\ChatGPT\dlss 5\gfx1032-dlss-nr-research-main\version.dll +0x90ba
+  12 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  13 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 23148 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff7c2e84cf3 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x144cf3
+  01 0x7ff7c2e84cf3 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x144cf3
+  02 0x7ff7c2e849fe c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1449fe
+  03 0x7ff7c2e848c9 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1448c9
+  04 0x7ff7c2e83e8e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x143e8e
+  05 0x7ff7c32439b1 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x5039b1
+  06 0x7ff7c2e8aac6 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14aac6
+  07 0x7ff7c334dc58 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x60dc58
+  08 0x7ff7c2f767fb c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x2367fb
+  09 0x7ff7c34f95e0 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x7b95e0
+  10 0x7ff7c34f9520 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x7b9520
+  11 0x7ff7c4aaa24e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1d6a24e
+  12 0x7ff7c2f7136b c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x23136b
+  13 0x7ff7c2f715b1 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x2315b1
+  14 0x7ff7c2f717fc c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x2317fc
+  15 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  16 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  17 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  18 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 20032 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 26868 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 9476 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 15180 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 8216 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 14956 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 13064 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 12980 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 18068 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 2000 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 19044 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 16236 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 13428 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 4920 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 2312 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 16092 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 21576 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 4484 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 5404 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2e8311a c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x14311a
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 12196 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  01 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  02 0x7ff93399981b C:\Windows\SYSTEM32\ntdll.dll +0x6981b
+  03 0x7ff930d8fcf9 C:\Windows\System32\KERNELBASE.dll +0x6fcf9
+  04 0x7ff86eb664d5 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x6264d5
+  05 0x7ff86eb667d2 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x6267d2
+  06 0x7ff86ecc9f51 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x789f51
+  07 0x7ff86ecdcb98 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x79cb98
+  08 0x7ff86ebd8208 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x698208
+  09 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  10 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 20824 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  01 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  02 0x7ff93399981b C:\Windows\SYSTEM32\ntdll.dll +0x6981b
+  03 0x7ff930d8fcf9 C:\Windows\System32\KERNELBASE.dll +0x6fcf9
+  04 0x7ff86eb66529 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x626529
+  05 0x7ff86eb66707 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x626707
+  06 0x7ff86e7847d0 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x2447d0
+  07 0x7ff86e784019 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x244019
+  08 0x7ff86ecdcb98 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x79cb98
+  09 0x7ff86ebd8208 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x698208
+  10 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  11 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 16120 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  01 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  02 0x7ff93399981b C:\Windows\SYSTEM32\ntdll.dll +0x6981b
+  03 0x7ff930d8fcf9 C:\Windows\System32\KERNELBASE.dll +0x6fcf9
+  04 0x7ff86eb664d5 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x6264d5
+  05 0x7ff86eb667d2 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x6267d2
+  06 0x7ff86ed1cefc c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x7dcefc
+  07 0x7ff86ecdcb98 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x79cb98
+  08 0x7ff86ebd8208 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x698208
+  09 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  10 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 4764 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  01 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  02 0x7ff93399981b C:\Windows\SYSTEM32\ntdll.dll +0x6981b
+  03 0x7ff930d8fcf9 C:\Windows\System32\KERNELBASE.dll +0x6fcf9
+  04 0x7ff86eb664d5 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x6264d5
+  05 0x7ff86eb667d2 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x6267d2
+  06 0x7ff86ed1cefc c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x7dcefc
+  07 0x7ff86ecdcb98 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x79cb98
+  08 0x7ff86ebd8208 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x698208
+  09 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  10 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 12952 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  01 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  02 0x7ff93399981b C:\Windows\SYSTEM32\ntdll.dll +0x6981b
+  03 0x7ff930d8fcf9 C:\Windows\System32\KERNELBASE.dll +0x6fcf9
+  04 0x7ff86eb664d5 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x6264d5
+  05 0x7ff86eb667d2 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x6267d2
+  06 0x7ff86ed1cefc c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x7dcefc
+  07 0x7ff86ecdcb98 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x79cb98
+  08 0x7ff86ebd8208 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x698208
+  09 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  10 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 9396 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  01 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  02 0x7ff93399981b C:\Windows\SYSTEM32\ntdll.dll +0x6981b
+  03 0x7ff930d8fcf9 C:\Windows\System32\KERNELBASE.dll +0x6fcf9
+  04 0x7ff86eb664d5 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x6264d5
+  05 0x7ff86eb667d2 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x6267d2
+  06 0x7ff86ed1cefc c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x7dcefc
+  07 0x7ff86ecdcb98 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x79cb98
+  08 0x7ff86ebd8208 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDGalaxy64.dll +0x698208
+  09 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  10 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 24048 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d1954 C:\Windows\SYSTEM32\ntdll.dll +0xa1954
+  01 0x7ff9339d1954 C:\Windows\SYSTEM32\ntdll.dll +0xa1954
+  02 0x7ff930d76869 C:\Windows\System32\KERNELBASE.dll +0x56869
+  03 0x7ff9332394cd C:\Windows\System32\combase.dll +0xd94cd
+  04 0x7ff93323933a C:\Windows\System32\combase.dll +0xd933a
+  05 0x7ff93323912f C:\Windows\System32\combase.dll +0xd912f
+  06 0x7ff933239029 C:\Windows\System32\combase.dll +0xd9029
+  07 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  08 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 24776 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d4a54 C:\Windows\SYSTEM32\ntdll.dll +0xa4a54
+  01 0x7ff9339d4a54 C:\Windows\SYSTEM32\ntdll.dll +0xa4a54
+  02 0x7ff9339658ae C:\Windows\SYSTEM32\ntdll.dll +0x358ae
+  03 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  04 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 16420 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d4a54 C:\Windows\SYSTEM32\ntdll.dll +0xa4a54
+  01 0x7ff9339d4a54 C:\Windows\SYSTEM32\ntdll.dll +0xa4a54
+  02 0x7ff9339658ae C:\Windows\SYSTEM32\ntdll.dll +0x358ae
+  03 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  04 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 11080 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d1484 C:\Windows\SYSTEM32\ntdll.dll +0xa1484
+  01 0x7ff9339d1484 C:\Windows\SYSTEM32\ntdll.dll +0xa1484
+  02 0x7ff9339856d3 C:\Windows\SYSTEM32\ntdll.dll +0x556d3
+  03 0x7ff930d6a3ed C:\Windows\System32\KERNELBASE.dll +0x4a3ed
+  04 0x7ff7c2ead8e4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d8e4
+  05 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  06 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  07 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  08 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 5156 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d4a54 C:\Windows\SYSTEM32\ntdll.dll +0xa4a54
+  01 0x7ff9339d4a54 C:\Windows\SYSTEM32\ntdll.dll +0xa4a54
+  02 0x7ff9339658ae C:\Windows\SYSTEM32\ntdll.dll +0x358ae
+  03 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  04 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 3536 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  01 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  02 0x7ff933999364 C:\Windows\SYSTEM32\ntdll.dll +0x69364
+  03 0x7ff930d8fc39 C:\Windows\System32\KERNELBASE.dll +0x6fc39
+  04 0x7ff7c352a58e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x7ea58e
+  05 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  06 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  07 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  08 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 21324 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d1954 C:\Windows\SYSTEM32\ntdll.dll +0xa1954
+  01 0x7ff9339d1954 C:\Windows\SYSTEM32\ntdll.dll +0xa1954
+  02 0x7ff930d76869 C:\Windows\System32\KERNELBASE.dll +0x56869
+  03 0x7ff930a856a7 C:\Windows\System32\CRYPT32.dll +0x456a7
+  04 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  05 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 15268 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d4a54 C:\Windows\SYSTEM32\ntdll.dll +0xa4a54
+  01 0x7ff9339d4a54 C:\Windows\SYSTEM32\ntdll.dll +0xa4a54
+  02 0x7ff9339658ae C:\Windows\SYSTEM32\ntdll.dll +0x358ae
+  03 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  04 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 2140 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  01 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  02 0x7ff93399981b C:\Windows\SYSTEM32\ntdll.dll +0x6981b
+  03 0x7ff930d8fcf9 C:\Windows\System32\KERNELBASE.dll +0x6fcf9
+  04 0x7ff87842ecc5 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\GfnRuntimeSdk.dll +0xfecc5
+  05 0x7ff87842ef6e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\GfnRuntimeSdk.dll +0xfef6e
+  06 0x7ff8783f89fe c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\GfnRuntimeSdk.dll +0xc89fe
+  07 0x7ff8783f8e15 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\GfnRuntimeSdk.dll +0xc8e15
+  08 0x7ff8783e789f c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\GfnRuntimeSdk.dll +0xb789f
+  09 0x7ff8784bdc89 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\GfnRuntimeSdk.dll +0x18dc89
+  10 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  11 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 2372 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d1484 C:\Windows\SYSTEM32\ntdll.dll +0xa1484
+  01 0x7ff9339d1484 C:\Windows\SYSTEM32\ntdll.dll +0xa1484
+  02 0x7ff9339856d3 C:\Windows\SYSTEM32\ntdll.dll +0x556d3
+  03 0x7ff930d6a3ed C:\Windows\System32\KERNELBASE.dll +0x4a3ed
+  04 0x7ff7c2eadb05 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16db05
+  05 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  06 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  07 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  08 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 2144 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff7c2ead94f c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d94f
+  04 0x7ff7c2ead50e c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x16d50e
+  05 0x7ff7c477abf4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe +0x1a3abf4
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 16936 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d1484 C:\Windows\SYSTEM32\ntdll.dll +0xa1484
+  01 0x7ff9339d1484 C:\Windows\SYSTEM32\ntdll.dll +0xa1484
+  02 0x7ff9339856d3 C:\Windows\SYSTEM32\ntdll.dll +0x556d3
+  03 0x7ff930d6a3ed C:\Windows\System32\KERNELBASE.dll +0x4a3ed
+  04 0x7ff91a9d7bd7 C:\Windows\SYSTEM32\MSVCP140.dll +0x17bd7
+  05 0x7ff8ed74e5b8 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\CChromaEditorLibrary64.dll +0xe5b8
+  06 0x7ff8ed74f512 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\CChromaEditorLibrary64.dll +0xf512
+  07 0x7ff8ed74f649 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\CChromaEditorLibrary64.dll +0xf649
+  08 0x7ff9314d9333 C:\Windows\System32\ucrtbase.dll +0x29333
+  09 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  10 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 25632 previous_suspend=1 context=1 resume_result=2
+  00 0x7ff9339d1954 C:\Windows\SYSTEM32\ntdll.dll +0xa1954
+  01 0x7ff9339d1954 C:\Windows\SYSTEM32\ntdll.dll +0xa1954
+  02 0x7ff930d76869 C:\Windows\System32\KERNELBASE.dll +0x56869
+  03 0x7ff930d7676e C:\Windows\System32\KERNELBASE.dll +0x5676e
+  04 0x7ff88bd86f08 C:\Windows\SYSTEM32\RzChromaSDK64.dll +0x16f08
+  05 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  06 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 27384 previous_suspend=0 context=1 resume_result=1
+  00 0x7ff9339d1954 C:\Windows\SYSTEM32\ntdll.dll +0xa1954
+  01 0x7ff9339d1954 C:\Windows\SYSTEM32\ntdll.dll +0xa1954
+  02 0x7ff930d76869 C:\Windows\System32\KERNELBASE.dll +0x56869
+  03 0x7ff930d7676e C:\Windows\System32\KERNELBASE.dll +0x5676e
+  04 0x7ff88bd87109 C:\Windows\SYSTEM32\RzChromaSDK64.dll +0x17109
+  05 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  06 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 21288 previous_suspend=0 context=1 resume_result=1
+  00 0x7ff9339d1954 C:\Windows\SYSTEM32\ntdll.dll +0xa1954
+  01 0x7ff9339d1954 C:\Windows\SYSTEM32\ntdll.dll +0xa1954
+  02 0x7ff930d76869 C:\Windows\System32\KERNELBASE.dll +0x56869
+  03 0x7ff930d7676e C:\Windows\System32\KERNELBASE.dll +0x5676e
+  04 0x7ff88bd87530 C:\Windows\SYSTEM32\RzChromaSDK64.dll +0x17530
+  05 0x7ff88bd77ab1 C:\Windows\SYSTEM32\RzChromaSDK64.dll +0x7ab1
+  06 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  07 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 2392 previous_suspend=0 context=1 resume_result=1
+  00 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  01 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  02 0x7ff93399981b C:\Windows\SYSTEM32\ntdll.dll +0x6981b
+  03 0x7ff930d8fcf9 C:\Windows\System32\KERNELBASE.dll +0x6fcf9
+  04 0x7ff91a9d76ea C:\Windows\SYSTEM32\MSVCP140.dll +0x176ea
+  05 0x7ff91975a12d c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\sl.interposer.dll +0x3a12d
+  06 0x7ff91975decf c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\sl.interposer.dll +0x3decf
+  07 0x7ff9314d9333 C:\Windows\System32\ucrtbase.dll +0x29333
+  08 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  09 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 12108 previous_suspend=0 context=1 resume_result=1
+  00 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  01 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  02 0x7ff93399981b C:\Windows\SYSTEM32\ntdll.dll +0x6981b
+  03 0x7ff930d8fcf9 C:\Windows\System32\KERNELBASE.dll +0x6fcf9
+  04 0x7ff8769d6649 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0x96649
+  05 0x7ff87698053c c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0x4053c
+  06 0x7ff876aa84b4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0x1684b4
+  07 0x7ff8769e398f c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0xa398f
+  08 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  09 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 8980 previous_suspend=0 context=1 resume_result=1
+  00 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  01 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  02 0x7ff93399981b C:\Windows\SYSTEM32\ntdll.dll +0x6981b
+  03 0x7ff930d8fcf9 C:\Windows\System32\KERNELBASE.dll +0x6fcf9
+  04 0x7ff8769d6649 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0x96649
+  05 0x7ff87698053c c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0x4053c
+  06 0x7ff876aa84b4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0x1684b4
+  07 0x7ff8769e398f c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0xa398f
+  08 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  09 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 23732 previous_suspend=0 context=1 resume_result=1
+  00 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  01 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  02 0x7ff93399981b C:\Windows\SYSTEM32\ntdll.dll +0x6981b
+  03 0x7ff930d8fcf9 C:\Windows\System32\KERNELBASE.dll +0x6fcf9
+  04 0x7ff8769d6649 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0x96649
+  05 0x7ff87698053c c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0x4053c
+  06 0x7ff876aa84b4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0x1684b4
+  07 0x7ff8769e398f c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0xa398f
+  08 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  09 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 20512 previous_suspend=0 context=1 resume_result=1
+  00 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  01 0x7ff9339d49f4 C:\Windows\SYSTEM32\ntdll.dll +0xa49f4
+  02 0x7ff93399981b C:\Windows\SYSTEM32\ntdll.dll +0x6981b
+  03 0x7ff930d8fcf9 C:\Windows\System32\KERNELBASE.dll +0x6fcf9
+  04 0x7ff8769d6649 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0x96649
+  05 0x7ff87698053c c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0x4053c
+  06 0x7ff876aa84b4 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0x1684b4
+  07 0x7ff8769e398f c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\D3D12\D3D12Core.dll +0xa398f
+  08 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  09 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78
+THREAD 8504 previous_suspend=0 context=1 resume_result=1
+  00 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  01 0x7ff9339d0e84 C:\Windows\SYSTEM32\ntdll.dll +0xa0e84
+  02 0x7ff930d59d0e C:\Windows\System32\KERNELBASE.dll +0x39d0e
+  03 0x7ff8f0148220 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\sl.pcl.dll +0x18220
+  04 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  05 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78

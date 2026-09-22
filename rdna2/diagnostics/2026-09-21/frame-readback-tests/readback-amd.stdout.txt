@@ -1,0 +1,4 @@
+Adapter vendor=0x1002 device=0x73bf hardware=1
+PASS fenced GPU pixel readback, pitch removal, resize, unknown/conflicting queue rejection
+PASS exact D3D12 queue/device/backbuffer metadata and resize lifecycle
+PASS D3D12 Present/Present1 test calls observed, allocator workers joined: 2/1

@@ -1,0 +1,11 @@
+THREAD 3040 previous_suspend=0 context=1 resume_result=1
+  00 0x7ff9339d1954 C:\Windows\SYSTEM32\ntdll.dll +0xa1954
+  01 0x7ff9339d1954 C:\Windows\SYSTEM32\ntdll.dll +0xa1954
+  02 0x7ff930d76869 C:\Windows\System32\KERNELBASE.dll +0x56869
+  03 0x7ff930d7676e C:\Windows\System32\KERNELBASE.dll +0x5676e
+  04 0x7ff6d27099ad c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDEngineErrorReporter.exe +0x99ad
+  05 0x7ff6d2709fc1 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDEngineErrorReporter.exe +0x9fc1
+  06 0x7ff6d2701a17 c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDEngineErrorReporter.exe +0x1a17
+  07 0x7ff6d270c0cc c:\program files (x86)\steam\steamapps\common\Cyberpunk 2077\bin\x64\REDEngineErrorReporter.exe +0xc0cc
+  08 0x7ff931cd259d C:\Windows\System32\KERNEL32.DLL +0x1259d
+  09 0x7ff93398af78 C:\Windows\SYSTEM32\ntdll.dll +0x5af78

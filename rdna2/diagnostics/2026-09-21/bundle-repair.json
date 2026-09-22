@@ -1,0 +1,52 @@
+{
+  "source_sha256": "fa616204dd68521217875fb41835d3189c89e7c87c3050e069df16bafc458a05",
+  "repaired_sha256": "c206fb29a1265200b12dcb46b6123154fc549506ba4849c76b0742e5d7fe2979",
+  "change": "compact descriptor header by eight bytes; payloads untouched",
+  "entries": [
+    {
+      "target": "host-x86_64-unknown-linux-gnu-",
+      "offset": 4096,
+      "size": 0
+    },
+    {
+      "target": "hipv4-amdgcn-amd-amdhsa--gfx1032",
+      "offset": 4096,
+      "size": 563008
+    },
+    {
+      "target": "hipv4-amdgcn-amd-amdhsa--gfx11-generic",
+      "offset": 569344,
+      "size": 1172152
+    },
+    {
+      "target": "hipv4-amdgcn-amd-amdhsa--gfx1100",
+      "offset": 1744896,
+      "size": 1163904
+    },
+    {
+      "target": "hipv4-amdgcn-amd-amdhsa--gfx1101",
+      "offset": 2912256,
+      "size": 1163904
+    },
+    {
+      "target": "hipv4-amdgcn-amd-amdhsa--gfx1102",
+      "offset": 4079616,
+      "size": 1172152
+    },
+    {
+      "target": "hipv4-amdgcn-amd-amdhsa--gfx1200",
+      "offset": 5255168,
+      "size": 425120
+    },
+    {
+      "target": "hipv4-amdgcn-amd-amdhsa--gfx1201",
+      "offset": 5681152,
+      "size": 425120
+    },
+    {
+      "target": "hipv4-amdgcn-amd-amdhsa--gfx9-generic",
+      "offset": 6107136,
+      "size": 541888
+    }
+  ]
+}
