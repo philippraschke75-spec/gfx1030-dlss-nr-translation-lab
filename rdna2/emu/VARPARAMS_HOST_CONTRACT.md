@@ -890,3 +890,44 @@ buffers for both C=512 stages. Combined with the per-block kernel recipe and the
 kernarg field-to-ctx-buffer mappings for each of those kernels, the remaining gap is narrow - the
 per-block H/W and the count fields (the `+0x28`/`+0x38`-style token counts that `k_ffwd2` and
 `k_conv_res2` need, whose semantics are already known: `min(n*16, H*W)`).
+
+## The frame-level pipeline, and why a first frame needs no depth or motion vectors (2026-09-22)
+
+The 71-block network driver is not the top of the pipeline. It is called from an **outer
+frame-level function** which also owns the input and output kernels. Dispatches in address order:
+
+```
+0x18002d64f   k_import
+0x18002d6f2   -> call the network driver (71 blocks)
+0x18002d876   k_export
+0x18002d983   k_mean
+0x18002dced   k_reproject
+0x18002dd15   -> call the network driver (71 blocks)
+```
+
+There are **two paths**, and the distinction matters a great deal for what a first render requires:
+
+* **Colour-only path**: `k_import` -> network -> `k_export`. No depth, no motion vectors.
+* **Temporal path**: `k_mean` -> `k_reproject` -> network. This is where motion vectors and depth
+  enter, via `k_reproject` (`ReprojParams`, 128 B, still unverified).
+
+`INPUT_CONTRACT_CYBERPUNK_FSR3.md` lists "how depth/motion vectors are packed for the network" as an
+open unknown, and it has been carried as a blocker for an offline frame. **It is not one for a first
+frame**: reprojection sits on the temporal branch, so a reset/first frame runs the colour-only path,
+and `k_import` is already GPU-verified on the real capture at full resolution.
+
+This removes the last item that could have been an unbounded surprise. What remains between here and
+a full-network render is enumerable:
+
+1. the internals of the attention/FFN launcher `0x180033660` for blocks 23-30 and 40-47 (call sites
+   and per-block mode already decoded; the per-kernel kernarg field layouts are all documented)
+2. the ViT loop's per-block wiring, blocks 31-38
+3. the decoder's per-block wiring, blocks 48-69 (launcher A, the same one the encoder uses)
+4. the block 39 transition
+5. extending the encoder run from stage 1 to all four stages (the pattern is proven and bit-exact)
+6. whole-network buffer allocation and the `ctx` pointer roles
+7. `k_attention`'s mismatch - a correctness problem for the ViT region, not a blocker on getting a
+   render to happen
+
+None of these is an unknown unknown; each is bounded reverse-engineering or integration against
+kernels that are already verified.
