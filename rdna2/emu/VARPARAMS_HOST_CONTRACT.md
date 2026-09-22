@@ -650,3 +650,23 @@ launcher, which is why no explicit copy between them was ever found.
 **Still needed before an offline frame can run:** the per-stage loop bounds (which block indices each
 loop covers), the buffer allocation/ping-pong layout across stages, and the `k_flag_set`/`k_flag_wait`
 sync protocol. The kernels themselves are largely done; what is missing is the bookkeeping around them.
+
+### Stage loop bounds (partial, 2026-09-22 - investigation was mid-flight)
+
+**ViT loop - CONFIRMED, blocks 31..38.** The loop counter is initialised
+`mov r15d, 0x1f` (=31) at `0x18002fd55`, compared `cmp r15d, 0x27` (=39) at `0x18002fd93`, and the
+body indexes relative to it with `lea eax, [r15 - 0x1f]` at `0x1800302cb` before the back edge at
+`0x1800302d2`. That is blocks **31-38 inclusive**, independently confirming the ViT block range that
+was previously only inferred from the 5-layer weight-record shape.
+
+**Decoder loop - 4 stages, like the encoder.** `cmp r9d, 0x4` guards both entry (`0x18003085a`) and
+the back edge (`0x180030b14`), so `r9d` runs 0..3. Each iteration reads a **3-dword table entry**:
+`lea rdx, [rax + 2*rax]` (i.e. `rax*3`) then `mov r10d, dword ptr [r8 + 4*rdx]` with the table base
+at `[rbp+0x498]` (`0x180030878`-`0x180030883`). A 4-entry table of (C,H,W)-shaped triples mirrors
+the encoder's own stage tuple table at `ctx+0x190`, so the decoder is almost certainly 4 stages with
+per-stage width/size, walking the encoder's stages in reverse.
+
+**Not yet read:** the encoder loop's own per-stage block counts are already documented at the top of
+this file (4/4/6/8); the decoder's per-stage block counts come from that 3-dword table and have not
+been dumped yet. That table dump is the obvious next step - it should turn blocks 48-69 into a
+concrete per-stage schedule the same way the encoder's is.
