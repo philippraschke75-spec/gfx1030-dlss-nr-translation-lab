@@ -127,3 +127,31 @@ or unused for the encoder path).
 
 Next: verify this on the GPU (byte-exact against the emulator, the way every other stage in RESULTS_REAL_CONFIG.md
 was), then extend the real-pixel chain (RESULTS_REAL_CONFIG.md) through blocks 5-8 (stage 2) using this mechanism.
+
+## k_ffwd (FfwdParams): first real progress on the 512-wide/FFN kernel family (2026-09-22)
+
+Read directly from the kernel's own gfx1100 prologue (`analysis/gfx1100-disassembly.txt`, entry 0x32200) and cross-checked
+against the AMD port host launcher (function at 0x180033660, which builds this struct at [rsp+0x310] before dispatch):
+
+* `s_load_b128 s[4:7], s[0:1], null` at kernel entry -> **+0x00 and +0x08 are two 64-bit pointers** (input, output).
+  Confirmed by the host: `movups xmm0,[ctx+0x228]` (16 raw bytes = two pointers) copied straight into this slot.
+* `s_load_b64 s[2:3], s[0:1], 0x10` -> **+0x10 is a weight pointer**, confirmed by the host calling the *same*
+  per-block weight-lookup helper (`0x180031bc0`) that `k_swin_var`'s launcher uses, indexed by the block number.
+* `s_load_b32 s2, s[0:1], 0x2c`, masked to 16 bits, then used as the denominator of a fixed-point reciprocal division
+  -> **+0x2c is a channel-count-like scalar**. Leaving it zero (an untested guess) causes the kernel to spin forever
+  on a broken division - this is why an earlier structural probe hung; setting it to a plausible value (32) fixed it.
+* Kernel signature (host launcher args): `(ctx, block_index, optional_secondary_output_ptr, mode_flag)`; a null test on
+  the third argument selects between `k_ffwd_inpview` and `k_ffwd` earlier in the same host function.
+* `kernarg_size` = 288 for `k_ffwd`/`k_ffwd_inpview`, 304 for `k_ffwd2`; grid is 1D (`workgroup_id_x` only, unlike
+  `k_swin_var`'s 2D grid) - expected for a per-token FFN with no spatial windowing.
+
+Empirically probed (`trace_ffwd.py`, host-only, with +0x2c=32): the kernel now **terminates cleanly** (it previously
+hung with +0x2c=0) and shows a coherent access pattern: input +0x00 fully read (8,192 B), output +0x08 fully written
+(8,192 B, same size), weight +0x10 read sparsely up to ~512 KB. 8,192 B matches 256 tokens x 32 channels in FP8
+(1 B/element) - consistent with a per-workgroup token tile, and with the OpenDLSS-NR reference's description of the
+dense `32 -> 128 -> 32` FFN structure for narrow blocks. This is a structural/plausibility result (synthetic weights,
+guessed channel count), not yet a GPU-verified or real-data-chained result.
+
+Still unknown: the exact row/token-count field (if separate from the channel scalar), the real host values for block
+23-30's launch (they use the "expert" grouped-FFN variant per the reference, C=512 not 32), and the launch contracts
+for `k_qkv_attn`, `k_conv_res`/`k_conv_res2`, and the projection kernels this stage also needs.
