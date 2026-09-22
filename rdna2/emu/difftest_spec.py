@@ -103,6 +103,16 @@ SPECS = {
                  0x18: ('<i', 8), 0x28: ('<i', 0), 0x38: ('<f', 1.0), 0x3c: ('<f', 1.0)},
         fill={0: 'f32', 2: 'f32'}),              # both are float-RGB buffers, not byte data
 
+    # 64 B, shaped like ConvPlParams: pointers at +0x00/+0x10/+0x18/+0x28 with a null at +0x08 and
+    # H/W at +0x30/+0x34. A sweep puts the count at +0x38 - only that field enables any write, and it
+    # saturates at 4 for H=W=8, the same min(n*16, H*W) rule as k_ffwd2's +0x28. Output lands in the
+    # +0x18 slot, matching k_conv_res_views.
+    'conv_res2': lambda: K.Spec(
+        '_Z11k_conv_res211Conv2Params',
+        pointers={0x00: 0, 0x10: 1, 0x18: 2, 0x28: 3},
+        scalars={0x08: ('<Q', 0), 0x30: ('<i', 8), 0x34: ('<i', 8), 0x38: ('<i', 4)},
+        weights={3: 'block23_layer3.bin'}),
+
     'repack': lambda: K.Spec(                    # 2 pointers then four i32 (+0x10/+0x14/+0x18/+0x1c)
         '_Z8k_repack12RepackParams',
         pointers={0x00: 0, 0x08: 1},
