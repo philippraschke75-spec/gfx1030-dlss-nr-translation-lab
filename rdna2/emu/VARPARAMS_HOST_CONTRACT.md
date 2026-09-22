@@ -406,3 +406,54 @@ from the RDNA3 ISA's own definition (`D0.i = S0.i < 0 ? -S0.i : S0.i; SCC = D0.i
 
 **Still open**: the role of the optional `+0x08` pointer, and how `k_ffwd`'s and `k_ffwd2`'s shared writes to
 `ctx+0x230` compose (accumulate? disjoint channel ranges? two halves of one expand?).
+
+## Seven more kernels resolved and GPU-verified via a shared spec harness (2026-09-22)
+
+Hand-writing a ~75-line difftest per kernel was the bottleneck, so the boilerplate moved into
+`kernelspec.py` (build kernarg, place pointers in arena slots, fill hidden-args, run the grid,
+dispatch, diff) and each kernel is now one entry in `difftest_spec.py`'s registry recording only its
+field layout. Two things the harness centralizes because both were repeatedly gotten wrong by hand:
+
+* **Hidden-args offsets are derived, not guessed** - they begin immediately after the kernel's own
+  explicit struct, whose size comes from the `.s` `.args:` metadata. Assuming a fixed offset is what
+  cost a whole session on `k_qkv_attn`'s `+0x34`.
+* **A kernel that writes nothing is a FAIL**, not a pass. `k_ffwd2` once "passed" while writing zero
+  bytes. The harness now reports that explicitly as a vacuous test.
+
+Ported first to `k_ffwd2`, `k_expand` and `k_conv_res_views`, which it reproduces (same written
+slots, same emulator step counts). Newly resolved and **GPU-verified, 0 mismatches**, all with real
+weight bytes:
+
+| kernel | struct | layout | weight |
+|---|---|---|---|
+| `k_final_head` | 24 B | 3 pointers | `block70.layer0` - block70 is the last block and the only one with a `layer0.blend_scale` |
+| `k_expand2` | 24 B | 3 pointers | `block31.layer1` |
+| `k_dec_upsample` | 40 B | 5 pointers | `block48.layer0` - blocks 48-69 are the decoder path |
+| `k_qkv` | 40 B | 5 pointers | `block31.layer2` = `1024*1024*3` + 128, exactly a ViT QKV weight |
+| `k_contract2` | 48 B | 5 pointers + i32 at `+0x28` | `block31.layer4` = `1024*1024` + 2048 |
+| `k_repack` | 32 B | 2 pointers + four i32 | none |
+| `k_mean` | 32 B | ptr, three i32, ptr at `+0x18` | none |
+
+**The 40-byte family is five pointers, not four-plus-H/W.** `s_load_b256` at `+0x00` then
+`s_load_b64` at `+0x20` is exactly `5*8 == 40`. Reading `+0x20` as an H/W scalar pair made `k_qkv`
+fault dereferencing `0x800000088` (the packed `8,8`) and made `k_attention` write into the weight
+slot; as a fifth pointer `k_qkv` passes and writes **three** separate slots, which is what a QKV
+projection should produce.
+
+**Weight-block map** (71 blocks): 0 pre-block, 1-22 encoder (C=32/64/128/256), 23-30 C=512 attention
+(4 layers each), 31-38 ViT (5 layers, C=1024), 39 transition, 40-47 decoder-side attention,
+48-69 the decoder/upsampling path (sizes shrinking as resolution grows), 70 the final head.
+
+**Emulator gap found and fixed:** `global_atomic_cmpswap_b32` was unimplemented. Added from the
+RDNA3 ISA definition (`tmp = MEM; src = DATA[31:0]; cmp = DATA[63:32]; MEM = tmp==cmp ? src : tmp`),
+serializing lanes in ascending order so two lanes contending on one address cannot both observe the
+original value.
+
+**Fixture lesson - random bytes are not valid float input.** `k_mean` is a reduction, and random
+bytes read as f32 span ~60 orders of magnitude and include NaNs, making summation order-dependent;
+the emulator and hardware then disagree for reasons that are not translation defects. With
+well-conditioned floats they agree exactly. The harness grew a `fill={slot: 'f32'|'zero'}` option
+for this. `k_mean` still needs a scalar sweep to find a non-degenerate config.
+
+**Still open**: `k_attention` (`AttnParams1d`) strides past a 6-slot arena, so it needs a larger
+working buffer than its pointer count implies; and `k_mean`'s scalars need a sweep like `k_ffwd2`'s.
