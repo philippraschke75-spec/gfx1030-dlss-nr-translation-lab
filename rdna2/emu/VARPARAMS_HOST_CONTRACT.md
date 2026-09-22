@@ -162,3 +162,23 @@ Still unknown: the real host values for block 23-30's launch (they use the "expe
 reference, C=512 not 32, and the launcher's `test byte[0x18009b208],1` branch selects between at least two structurally
 different FFN paths we have not both traced), and the launch contracts for `k_qkv_attn`, `k_conv_res`/`k_conv_res2`,
 and the projection kernels this stage also needs.
+
+## k_qkv_attn (AttnParams): partial, real evidence only (2026-09-22)
+
+Kernel descriptor enables **both** `dispatch_ptr` (s[0:1]) and `kernarg_segment_ptr` (s[2:3]) - the same convention
+as the pre-block kernel, not the single-pointer convention `k_ffwd`/`k_swin_var` use. A modeled AQL dispatch packet
+is required to test it at all (reused the construction from `difftest_pre.py`).
+
+`trace_qkv_attn_kernarg.py` (kernarg-read trace, same method as resolved `k_ffwd`): with all of +0x00/+0x08/+0x10/
++0x18/+0x20 set as valid pointers and +0x34 as a small scalar, the kernel reads exactly **+0x00 (16 B, a pointer
+pair), +0x10 (8 B, one pointer), +0x18 (16 B, another pointer pair), +0x34 (4 B, a scalar)** - i.e. 5 pointer fields
+total (0x00, 0x08, 0x10, 0x18, 0x20) plus the scalar, consistent with the OpenDLSS-NR reference's description of a
+QKV+attention block needing more buffers (input, output, qkv_weight, attn_scale, attn_bias) than the plain FFN did.
+
+**Not yet resolved**: with random-byte content in the un-typed pointer targets, the kernel does not terminate (hits
+the step limit; most lanes stall at one PC while lane 0 alone keeps advancing, a pattern consistent with a cross-lane
+or cross-workgroup synchronization wait, not a simple divide-by-zero like `k_ffwd`'s was). Random bytes reinterpreted
+as attention scale/bias values readily produce NaN, and the reference documents the network's cosine-normalization
+and softmax steps as NaN-sensitive by design (`numerics.md`: "NaN publishes as +0... load-bearing"), so plausible next
+steps are testing with well-formed (small, finite) synthetic values in the scale/bias-shaped fields rather than random
+bytes, or reading more of the kernel's own body to find what specifically that stalled PC (0x3958c) is waiting on.
