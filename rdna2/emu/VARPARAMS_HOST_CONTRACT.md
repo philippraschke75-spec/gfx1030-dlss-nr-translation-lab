@@ -345,3 +345,19 @@ types needed for one full C=512 block's forward pass are now individually resolv
 **Still open**: the roles of `+0x20`/`+0x38` (r14/r15 - possibly view/origin indices), which of `ctx+0x238`/
 `ctx+0x240` is which view's input, and the real per-block orchestration order and skip-scale combination that
 assembles a full block's output from these three kernels' results.
+
+## k_expand (`_Z8k_expand12ExpandParams`): RESOLVED (2026-09-22)
+
+Likely the ViT's FFN channel-expand step (`Cin=1024 -> 4096`, per `DLL_HOST_EVIDENCE.md`'s "Vit Cin=1024 (FFN
+contract 4096)"). `ExpandParams` is only 24 bytes per its own `.s` metadata (`.offset 0, .size 24`) - confirmed
+by its own prologue (`s_load_b128 s[4:7],s[0:1],null` for the input/output pair, `s_load_b64 s[8:9],s[0:1],0x10`
+for the weight pointer) and by `trace_expand_kernarg.py`'s exhaustive read trace, which shows **only 3 pointers**
+(no H/W, no other scalar) plus the hidden-args' `+0x24` (`hidden_group_size_x`, correctly populated - same
+divisor-use pattern as `k_conv_res`/`k_qkv_attn2`).
+
+Weight: `block31.layer0.layer` is 4,194,320 bytes, within 16 bytes of an exact `1024*4096` e4m3 match - the
+strongest available candidate for this role (not yet confirmed via host-launcher tracing, only by size).
+
+**GPU hardware-verified** (`difftest_expand.py`): **PASS, 0 mismatches**, 65,284 bytes written to the output
+slot, 4.2 ms GPU dispatch, guards intact. The weight spans about 4 arena slots (1 MiB each), so this test uses
+a wider 8-slot arena to keep it clear of the input/output slots.
