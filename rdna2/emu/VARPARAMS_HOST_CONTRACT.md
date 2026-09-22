@@ -763,3 +763,36 @@ allocation ever matters, but it does not for replaying the schedule.
 **This removes the buffer-layout unknown.** What is left before an offline frame is the
 `k_flag_set`/`k_flag_wait` sync protocol (and `k_flag_set` needs `s_sendmsg(MSG_RTN_GET_REALTIME)`
 in the emulator), plus writing the runner itself.
+
+## The flag sync protocol is not in the inference path (2026-09-22)
+
+`k_flag_set` (handle `0x180066440`) and `k_flag_wait` (`0x180066430`) have been carried as an open
+item since this file was started ("flag_wait/flag_set protocol" under Still unread). They are **not
+needed for a forward pass.**
+
+Their handles are referenced in exactly three places - `0x180005038`, `0x180019f1f`, `0x18001fec2`
+(plus the registration sites) - and **none** is inside the network driver
+(`0x18002ea60`-`0x180031465`), launcher A (`0x180032df0`) or launcher B (`0x180033600`), nor inside
+any function the driver calls. Those addresses sit in unrelated early subsystems, so the flags
+belong to some other path (interop/frame-pacing) rather than to block-to-block ordering.
+
+Consequence for a runner: **dispatch the 71 blocks sequentially with ordinary host-side
+synchronisation and ignore the flag kernels entirely.** This also retires the need for
+`s_sendmsg(MSG_RTN_GET_REALTIME)` in the emulator, which was only wanted in order to run
+`k_flag_set`.
+
+### Status: the structural reverse-engineering is done
+
+Every structural unknown this file has tracked is now closed:
+
+* the 71-block schedule - **done** (encoder 4/4/6/8, C=512 attention, ViT 31-38, decoder 8/6/4/4)
+* per-block kernel composition - **done** (launcher A and launcher B recipes)
+* the stage tuple table - **done** (`ctx+0x190`, indexed forward by the encoder, reversed by the decoder)
+* U-net skip wiring - **done** (`ctx+0x2a8`, opposite indexing on each side)
+* buffer sizes - **done** (`C * ceil(H/4) * ceil(W/4) * 16` from the stage tuple)
+* flag sync - **done** (not in the inference path)
+
+What remains for an offline frame is **engineering, not reverse-engineering**: a runner that
+replays the schedule on the GPU using the verified kernels, fed by the captured Cyberpunk frame.
+The honest caveats still stand - `k_attention`/`k_attention2` mismatch and sit in the ViT path, so a
+first frame would be expected to be wrong in that region until that is resolved.
