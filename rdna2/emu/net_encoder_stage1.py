@@ -25,7 +25,10 @@ SYM, _lds = D.SYMS['32_0']
 LDS = _lds or D.group_size(SYM)
 H = W = 16
 MODES = [(0, 0), (-4, -4), (-4, 0), (0, -4)]          # table 0x180066410
-BLOCKS = [1, 2, 3, 4]
+# Any same-width run of blocks dispatched through launcher A. The decoder uses the identical
+# launcher and the identical k_swin_var kernels as the encoder - only the weights and the stage
+# tuple differ - so a decoder stage chains exactly the same way.
+BLOCKS = [int(x) for x in sys.argv[1].split(',')] if len(sys.argv) > 1 else [1, 2, 3, 4]
 NSLOT = len(V.PTR_FIELDS) + len(BLOCKS)               # default fields, then one slot per block weight
 WSLOT0 = len(V.PTR_FIELDS)
 RUN = D.ROOT / 'build' / 'net_run.exe'
@@ -92,7 +95,7 @@ def net_run(seed):
     return r.returncode, msg, out
 
 
-print('encoder stage 1: blocks %s, C=32, H=W=%d, %d dispatches' % (BLOCKS, H, len(BLOCKS)))
+print('stage chain: blocks %s, C=32, H=W=%d, %d dispatches' % (BLOCKS, H, len(BLOCKS)))
 for i, (ka, grid) in enumerate(plan()):
     ox, oy = MODES[i % 4]
     print('  block%-2d mode=%d origin=(%d,%d) flags=%d grid=%s in=slot%d out=slot%d'
