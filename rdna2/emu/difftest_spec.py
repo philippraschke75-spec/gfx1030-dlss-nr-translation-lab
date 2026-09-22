@@ -59,11 +59,14 @@ SPECS = {
         # so it needs a larger working buffer than the pointer count alone implies.
         nslot=24,
         weights={4: 'block31_layer2.bin'}),
+    # The 48-byte ConvParams1d pair is NOT five pointers: it is four pointers, an H/W pair at +0x20
+    # and a count at +0x28. k_contract2 passes in this form and faults when +0x20 is made a pointer,
+    # which is the opposite of the 40-byte family above - so the shapes are per-struct, not uniform.
     'contract2': lambda: K.Spec(                 # ViT FFN contract; block31.layer4 is 1024*1024 + 2048
         '_Z11k_contract212ConvParams1d',
-        pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3, 0x20: 4},
-        scalars={0x28: ('<i', 4)},
-        weights={4: 'block31_layer4.bin'}),
+        pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3},
+        scalars={0x20: ('<i', 8), 0x24: ('<i', 8), 0x28: ('<i', 4)},
+        weights={3: 'block31_layer4.bin'}),
 
     'qkv2': lambda: K.Spec(                      # same 5-pointer shape as k_qkv
         '_Z6k_qkv29QkvParams',
@@ -74,12 +77,11 @@ SPECS = {
         pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3, 0x20: 4},
         nslot=24,
         weights={4: 'block31_layer2.bin'}),
-    'conv_splitk': lambda: K.Spec(               # same 48-byte shape as k_contract2
+    'conv_splitk': lambda: K.Spec(               # same 48-byte ConvParams1d shape as k_contract2
         '_Z13k_conv_splitk12ConvParams1d',
-        pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3, 0x20: 4},
-        scalars={0x28: ('<i', 4)},
-        nslot=24,                                # strides past a 6-slot arena, like k_attention
-        weights={4: 'block31_layer4.bin'}),
+        pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3},
+        scalars={0x20: ('<i', 8), 0x24: ('<i', 8), 0x28: ('<i', 4)},
+        weights={3: 'block31_layer4.bin'}),
     'ffwd_inpview': lambda: K.Spec(              # 32 B: s_load_b256 at +0x00, hidden_group_size_x at +0x2c
         '_Z14k_ffwd_inpview12FfwdPlParams',
         pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3},

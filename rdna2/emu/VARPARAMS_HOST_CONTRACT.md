@@ -430,15 +430,24 @@ weight bytes:
 | `k_expand2` | 24 B | 3 pointers | `block31.layer1` |
 | `k_dec_upsample` | 40 B | 5 pointers | `block48.layer0` - blocks 48-69 are the decoder path |
 | `k_qkv` | 40 B | 5 pointers | `block31.layer2` = `1024*1024*3` + 128, exactly a ViT QKV weight |
-| `k_contract2` | 48 B | 5 pointers + i32 at `+0x28` | `block31.layer4` = `1024*1024` + 2048 |
+| `k_contract2` | 48 B | 4 pointers + H/W + count | `block31.layer4` = `1024*1024` + 2048 |
+| `k_conv_splitk` | 48 B | 4 pointers + H/W + count | `block31.layer4` |
 | `k_repack` | 32 B | 2 pointers + four i32 | none |
 | `k_mean` | 32 B | ptr, three i32, ptr at `+0x18` | none |
 
-**The 40-byte family is five pointers, not four-plus-H/W.** `s_load_b256` at `+0x00` then
+**The 40-byte structs are five pointers - but this does not generalize by load pattern.** For the
+40-byte ones (`QkvParams`, `AttnParams1d`, `DecUpParams`), `s_load_b256` at `+0x00` then
 `s_load_b64` at `+0x20` is exactly `5*8 == 40`. Reading `+0x20` as an H/W scalar pair made `k_qkv`
 fault dereferencing `0x800000088` (the packed `8,8`) and made `k_attention` write into the weight
 slot; as a fifth pointer `k_qkv` passes and writes **three** separate slots, which is what a QKV
 projection should produce.
+
+The 48-byte `ConvParams1d` pair (`k_contract2`, `k_conv_splitk`) has the *same* load pattern plus an
+i32, but is **four** pointers with an H/W pair at `+0x20` and a count at `+0x28`. `k_contract2`
+passes in that form and faults when `+0x20` is promoted to a pointer - the exact opposite of
+`k_qkv`. I briefly "generalized" the five-pointer reading across both and turned a passing
+`k_contract2` into a faulting one; the sweep caught it. **Field shapes are per-struct and have to be
+confirmed against hardware individually, not inferred from a matching `s_load` sequence.**
 
 **Weight-block map** (71 blocks): 0 pre-block, 1-22 encoder (C=32/64/128/256), 23-30 C=512 attention
 (4 layers each), 31-38 ViT (5 layers, C=1024), 39 transition, 40-47 decoder-side attention,
