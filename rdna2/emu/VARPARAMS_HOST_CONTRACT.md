@@ -301,3 +301,27 @@ logic, not a bug; retried with `H=W=8`, a known-non-degenerate size, for this st
 ViT's real input would need the C=512-to-1024 pooling/channel-doubling transition after block30 decoded first,
 analogous to the encoder's fused-pool mechanism); the real spatial size the ViT actually operates at; and
 confirming the `layer2` blob's internal sub-offset ordering for both kernels.
+
+## k_conv_res (`_Z10k_conv_res10ConvParams`): structurally verified, pointer roles not yet confirmed (2026-09-22)
+
+The projection kernel needed to complete a C=512 block's forward pass - the reference's documented
+`Proj(WindowAttention(...))` step, the last piece needed alongside the already-resolved `k_ffwd` and
+`k_qkv_attn` before a full block's output can be computed. Single kernarg-pointer convention (confirmed from
+its own prologue, `s_load_b256 s[0:7], s[0:1], null` reads 4 pointers straight off `s[0:1]`). `ConvParams` is
+40 bytes like the other kernels (`.s` metadata: `.offset 0, .size 40`); the exhaustive read trace
+(`trace_conv_res_kernarg.py`) shows it reads **only `+0x00` (32 B = 4 pointers) and `+0x34`
+(hidden_group_size_x, correctly populated this time, used as a genuine per-thread indexing divisor - not a
+mistake to fix, just a hidden arg this kernel legitimately consumes)** - no H/W scalars, no other fields at all.
+
+Weight: `block23.layer3.layer` is 263,168 bytes = exactly `512*512` (projection_weight, e4m3) + `512*2`
+(attn_cos_skip, f16 per-channel) for C=512 - an exact size match, per `DLL_HOST_EVIDENCE.md`'s
+`layer3.projection_weight+attn_cos_skip` naming.
+
+`difftest_conv_res.py`: real block23 `layer3.layer` weight bytes, GPU dispatch on the real RX 6900 XT -
+**PASS, 0 mismatches**, 8,192 bytes written, guards intact. This proves the kernel *translation* is correct
+(gfx1100 emulator and real gfx1030 hardware agree bit-for-bit), but **the guessed pointer order
+(input/output/weight/?) is wrong**: the real output landed in the slot this test assigned to "weight"
+(`written_slots: [2]`), not the slot assigned to "output". The kernel's actual pointer semantics - which of
+the 4 slots is really input, output, weight, and what the 4th pointer is (possibly a skip/residual buffer for
+the additive `y*attnScale` term) - are still unconfirmed and need host-launcher tracing (the same method that
+resolved `k_qkv_attn`'s contract), not further guessing.
