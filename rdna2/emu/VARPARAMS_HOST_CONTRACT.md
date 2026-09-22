@@ -361,3 +361,48 @@ strongest available candidate for this role (not yet confirmed via host-launcher
 **GPU hardware-verified** (`difftest_expand.py`): **PASS, 0 mismatches**, 65,284 bytes written to the output
 slot, 4.2 ms GPU dispatch, guards intact. The weight spans about 4 arena slots (1 MiB each), so this test uses
 a wider 8-slot arena to keep it clear of the input/output slots.
+
+## k_ffwd2 (`_Z7k_ffwd211Ffwd2Params`): RESOLVED (2026-09-22)
+
+The second FFN dispatch in a C=512 block - the last unresolved kernel in that block's forward path.
+`Ffwd2Params` is 48 bytes per its own `.s` metadata (`.offset 0, .size 48`), so the hidden-args block starts
+at `+0x30` and `hidden_group_size_x` lands at `+0x3c`. Three independent sources agree field-for-field:
+
+| off | value | evidence |
+|---|---|---|
+| +0x00 | pointer = `ctx+0x228` (the same buffer `k_ffwd` reads as its input) | `0x18003399c..a3` |
+| +0x08 | pointer = `r14`; the host null-checks it (`test r14,r14`), so it is optional | `0x1800339ab` |
+| +0x10 | pointer = `ctx+0x230` - **the output**, confirmed by the GPU test below | `0x1800339b3..ba` |
+| +0x18 | weight ptr = `0x180031bc0(ctx, block, layer=0)` - this block's **layer0** | `0x1800339c2..cf` |
+| +0x20 | H (i32) from `ctx_sub1+4`, `ctx_sub1=[rdi+0x10]` | `0x1800339d7..de` |
+| +0x24 | W (i32) from `ctx_sub1+8` | `0x1800339e5..ec` |
+| +0x28 | i32 from `[[rdi]]` - a **count of 16-token groups** (see below) | `0x1800339ef..f4` |
+| +0x2c | padding (loaded as part of the 128-bit load, never used) | - |
+
+The kernel's own prologue reads exactly this and nothing else - `s_load_b256 s[16:23], s[0:1], null` (the four
+pointers), `s_load_b128 s[8:11], s[0:1], 0x20` (the four scalars), `s_load_b32 s2, s[0:1], 0x3c`
+(`hidden_group_size_x`) - and `trace_ffwd2_kernarg.py`'s exhaustive read trace confirms it at runtime
+(`+0x00`/32 B, `+0x20`/16 B, `+0x3c`/4 B, nothing else; terminated cleanly in 2.1 s).
+
+**`+0x28` is a live count, not padding, and `0` is a silent no-op.** The kernel computes
+`s29 = (field_0x28 << 4) - (workgroup_id_x << 6)` as its remaining-work counter, so the field counts
+**16-token groups**. An emulator sweep at H=W=8 makes this exact: `n=1` writes 1,024 B, `n=2` writes 2,048 B,
+`n=4` writes 4,096 B, and `n>4` writes the same 4,096 B - i.e. the effective count is `min(n*16, H*W)`, and
+`4*16 == 8*8` is the saturation point. A first run with `n=0` dispatched happily on both the emulator and the
+real GPU, agreed bit-for-bit, and wrote **nothing** - a vacuous pass. Any future fixture for this kernel must
+set `+0x28` to at least `ceil(H*W/16)`, or it silently tests nothing.
+
+Weight: `block23.layer0.layer` is 524,288 bytes = exactly `512*1024`, a clean C=512 -> 1024 FFN expand weight,
+consistent with the host passing `layer=0` here.
+
+**GPU hardware-verified** (`difftest_ffwd2.py`, real `block23.layer0.layer` weight bytes): **PASS, 0
+mismatches**, 4,096 bytes written (4,084 differing from the random fill, the rest coinciding), guards intact.
+The output landed in the `+0x10` slot, confirming `ctx+0x230` as the output - the same buffer `k_ffwd` writes,
+so the two FFN dispatches share one destination.
+
+**Emulator gap found and fixed on the way:** `s_abs_i32` was unimplemented and faulted the trace. Implemented
+from the RDNA3 ISA's own definition (`D0.i = S0.i < 0 ? -S0.i : S0.i; SCC = D0.i != 0`), including the
+`S_ABS_I32(0x80000000) => 0x80000000` wrap case, and checked against all six worked examples the ISA prints.
+
+**Still open**: the role of the optional `+0x08` pointer, and how `k_ffwd`'s and `k_ffwd2`'s shared writes to
+`ctx+0x230` compose (accumulate? disjoint channel ranges? two halves of one expand?).

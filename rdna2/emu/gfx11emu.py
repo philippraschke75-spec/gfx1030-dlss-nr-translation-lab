@@ -551,6 +551,13 @@ class Exec:
                 v = w.rs(P[1]) & ((1 << bitsz) - 1)
                 w.ws(P[0], (v - (1 << bitsz) if v >> (bitsz - 1) else v) & M32)
             return sext
+        if base == 's_abs_i32':
+            def sabs(w):
+                v = _sh(w.rs(P[1]))
+                r = (-v if v < 0 else v) & M32   # 0x80000000 negates to itself, per the ISA's own example
+                w.ws(P[0], r)
+                w.scc = int(r != 0)
+            return sabs
         if base in ('s_bitcmp1_b32', 's_bitcmp0_b32'):
             one = base.endswith('1_b32')
 
