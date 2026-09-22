@@ -302,26 +302,46 @@ ViT's real input would need the C=512-to-1024 pooling/channel-doubling transitio
 analogous to the encoder's fused-pool mechanism); the real spatial size the ViT actually operates at; and
 confirming the `layer2` blob's internal sub-offset ordering for both kernels.
 
-## k_conv_res (`_Z10k_conv_res10ConvParams`): structurally verified, pointer roles not yet confirmed (2026-09-22)
+## k_conv_res is dead code; the real projection kernel is k_conv_res_views (RESOLVED, 2026-09-22)
 
-The projection kernel needed to complete a C=512 block's forward pass - the reference's documented
-`Proj(WindowAttention(...))` step, the last piece needed alongside the already-resolved `k_ffwd` and
-`k_qkv_attn` before a full block's output can be computed. Single kernarg-pointer convention (confirmed from
-its own prologue, `s_load_b256 s[0:7], s[0:1], null` reads 4 pointers straight off `s[0:1]`). `ConvParams` is
-40 bytes like the other kernels (`.s` metadata: `.offset 0, .size 40`); the exhaustive read trace
-(`trace_conv_res_kernarg.py`) shows it reads **only `+0x00` (32 B = 4 pointers) and `+0x34`
-(hidden_group_size_x, correctly populated this time, used as a genuine per-thread indexing divisor - not a
-mistake to fix, just a hidden arg this kernel legitimately consumes)** - no H/W scalars, no other fields at all.
+The earlier structural pass on `k_conv_res` (handle `0x180066360`) PASSED (0 mismatches) but with an unresolved
+pointer-order guess (`written_slots: [2]` contradicted the assumed input/output/weight ordering). Searching the
+**entire host `.text` section** for that handle found only two references: the `.rdata` name-string
+registration pair, and a single generic init-time "warmup" trampoline near the very start of `.text`
+(`0x180001180`-`0x1800011dc` - a trivial, argument-free dispatch pattern shared by every registered kernel,
+almost certainly a JIT/cache-priming pass at startup, not a real per-block call site). **`k_conv_res` is never
+dispatched with real per-block arguments anywhere in this binary** - the earlier PASS was real (proves the
+*translation* works) but tested a kernel this host build doesn't actually use for rendering.
 
-Weight: `block23.layer3.layer` is 263,168 bytes = exactly `512*512` (projection_weight, e4m3) + `512*2`
-(attn_cos_skip, f16 per-channel) for C=512 - an exact size match, per `DLL_HOST_EVIDENCE.md`'s
-`layer3.projection_weight+attn_cos_skip` naming.
+The real per-block dispatch for a C=512 block's projection step, found continuing in the same orchestration
+function that builds `k_ffwd`'s and `k_qkv_attn`'s kernargs (`0x180033f76`-`0x1800340e9`), uses handle
+**`0x1800663d0`** = `_Z16k_conv_res_views12ConvPlParams` (`k_conv_res_views` - the `_views` partial-input-view
+variant, consistent with the naming pattern `k_ffwd_inpview`/`k_conv_res_views` already known from
+`DLL_HOST_EVIDENCE.md`). Full kernarg decoded directly from this launcher:
 
-`difftest_conv_res.py`: real block23 `layer3.layer` weight bytes, GPU dispatch on the real RX 6900 XT -
-**PASS, 0 mismatches**, 8,192 bytes written, guards intact. This proves the kernel *translation* is correct
-(gfx1100 emulator and real gfx1030 hardware agree bit-for-bit), but **the guessed pointer order
-(input/output/weight/?) is wrong**: the real output landed in the slot this test assigned to "weight"
-(`written_slots: [2]`), not the slot assigned to "output". The kernel's actual pointer semantics - which of
-the 4 slots is really input, output, weight, and what the 4th pointer is (possibly a skip/residual buffer for
-the additive `y*attnScale` term) - are still unconfirmed and need host-launcher tracing (the same method that
-resolved `k_qkv_attn`'s contract), not further guessing.
+| off | value | evidence |
+|---|---|---|
+| +0x00 | pointer = `ctx+0x240` | `0x180034018..1f` |
+| +0x08 | always 0 (null) | `0x180034027` |
+| +0x10 | pointer = `ctx+0x238` | `0x180034033..3a` |
+| +0x18 | pointer = `ctx+0x228` - **the real output**, per the GPU test below | `0x180034042..49` |
+| +0x20 | `r14` (role not yet identified) | `0x180034051` |
+| +0x28 | weight ptr = `0x180031bc0(ctx, block, layer=3)` - this block's **layer3** (`projection_weight+attn_cos_skip`) | `0x180034059..69` |
+| +0x30 / +0x34 | H, W (i32) from `ctx_sub1+4/+8`, `ctx_sub1=[rdi+0x10]` | `0x180034071..82` |
+| +0x38 | `r15` (role not yet identified) | `0x180034089` |
+| +0x40 / +0x44 | a second H/W pair from `ctx_sub2+4/+8`, `ctx_sub2=[rdi+0x18]` - plausibly the *other* view's dimensions, matching the "views" name | `0x180034091..a2` |
+
+`ConvPlParams` is exactly 72 bytes per its own `.s` metadata (`.offset 0, .size 72`) - an exact match to this
+field count. `trace_conv_res_views_kernarg.py`'s exhaustive read trace confirms it: reads exactly `+0x00`
+(32 B), `+0x20` (16 B), `+0x30` (16 B), `+0x40` (8 B), and `+0x54` (4 B = `hidden_group_size_x`, correctly
+populated this time) - nothing else. Terminated cleanly in 1.9 s with random data.
+
+**GPU hardware-verified** (`difftest_conv_res_views.py`, real `block23.layer3.layer` weight bytes at `+0x28`):
+**PASS, 0 mismatches**, 8,163 bytes written, guards intact. Output confirmed landing at the `+0x18` pointer
+(`ctx+0x228`), resolving the ordering ambiguity the earlier `k_conv_res` test left open. **All three kernel
+types needed for one full C=512 block's forward pass are now individually resolved and GPU-verified**:
+`k_ffwd`, `k_qkv_attn`, `k_conv_res_views`.
+
+**Still open**: the roles of `+0x20`/`+0x38` (r14/r15 - possibly view/origin indices), which of `ctx+0x238`/
+`ctx+0x240` is which view's input, and the real per-block orchestration order and skip-scale combination that
+assembles a full block's output from these three kernels' results.
