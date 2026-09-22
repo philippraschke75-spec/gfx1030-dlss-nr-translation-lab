@@ -74,3 +74,36 @@ Two harness bugs found and fixed while building this (documented so they are not
 Only format=0 (RGBA16F) real colour data has been chained this way; depth and motion vectors still need their
 `k_import` format codes identified (not yet done - see INPUT_CONTRACT_CYBERPUNK_FSR3.md). The rest of the network
 (remaining encoder stages, middle blocks, decoder, post block, export) has not been chained onto real pixel data yet.
+
+## Full stage-1 encoder chained on real pixels: import -> pre-block -> blocks 1-4 (2026-09-22)
+
+`chain_encoder_stage1_real.py` extends the import+pre-block chain above through all four width-32 stage-1 blocks,
+using each block's real weight record and the real flags/origin-mode schedule from VARPARAMS_HOST_CONTRACT.md. Between
+blocks the verified output slot is copied forward byte-for-byte without reinterpretation (the exact inter-block tensor
+encoding is still only partly understood; copying the raw bytes matches what the real host does - it re-targets a
+pointer, it does not reshape/copy-convert).
+
+Real 64x64 tile at (500,300) in the captured frame, seed 1: **all 6 stages PASS, 0 mismatches, guards intact throughout**:
+
+| stage | kernel | bytes written | mismatches | status |
+|---|---|---|---|---|
+| import | k_import (format=0) | 48,928 | 0 | PASS |
+| preblock | k_swin_var<32,true>, block0 weights, flags 0x14 | 685,636 | 0 | PASS |
+| block1 | k_swin_var<32,false>, block1 weights, flags 1, origin (0,0) | 392,729 | 0 | PASS |
+| block2 | k_swin_var<32,false>, block2 weights, flags 0, origin (-4,-4) | 377,231 | 0 | PASS |
+| block3 | k_swin_var<32,false>, block3 weights, flags 0, origin (-4,0) | 384,292 | 0 | PASS |
+| block4 | k_swin_var<32,false>, block4 weights, flags 4, origin (0,-4) | 445,786 | 0 | PASS |
+
+Full log: `rdna2/emu/logs/stage1_full_chain_result.log`. Only one tile position has been run through this
+full 6-stage chain so far (the individual stages were separately confirmed on 3-5 tile positions each - see above).
+
+One harness bug found while writing this (documented so it is not repeated): a symbol-table lookup (`D.SYMS['32_0']`)
+returns `lds=None` for every k_swin_var variant except `<32,true>`, which the caller must resolve via `group_size()`
+before use; passing `None` straight to `run_workgroup` fails inside the emulator's LDS bounds check with a confusing
+`TypeError` rather than a clear error.
+
+**What this does and does not show:** the whole width-32 stage of the encoder now runs, on real captured game pixels,
+end to end, matching my independent emulator at every step, on the physical GPU. It does not show the network's output
+is correct (no gfx1100 or NVIDIA reference exists), and it stops at the end of stage 1: the stage-1-to-stage-2 transition
+needs a downsample step (channel count 32->64, spatial size halved) that has not been identified or tested yet - this is
+the next concrete blocker toward continuing the real-pixel chain.
