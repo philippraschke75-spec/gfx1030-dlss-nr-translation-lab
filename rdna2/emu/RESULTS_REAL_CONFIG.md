@@ -247,3 +247,25 @@ incrementally (unlike Bash's direct redirection) and appeared to hang for ~35 mi
 correctly in the background; killing it lost no data (checkpoints had already saved blocks 15-21) but wasted the
 GPU verification of block22, which was then quickly redone. Prefer Bash background execution with direct output
 redirection for these long-running sandboxed scripts; it streams progress live and its timeouts fire reliably.
+
+## k_qkv_attn GPU-verified (block23, the first block of the post-encoder C=512 window-attention stage)
+
+Full kernarg contract recovered by reading the real host launcher (embedded PE inside
+`G:\dlss\dlssnr_on_amd_setup.exe`, file offset 0x47c00 - see `VARPARAMS_HOST_CONTRACT.md`'s `k_qkv_attn`
+section for the complete field table and how two real bugs in the earlier guessed layout were found and fixed).
+
+`difftest_qkv_attn.py`: real `block23.layer2.layer` weight bytes (917,568 B, extracted from `nvngx_dlssnr.dll`),
+H=W=4 (matching block22's already-verified pooled output size), origin (0,0) (phase 0, first-in-stage), `+0x34=512`.
+Random (not yet chained) input/output activations - this verifies the kernarg contract and kernel correctness
+against real weight data, not yet the full real-pixel chain continuation.
+
+Result: GPU dispatch OK, 5.923 ms, 3 pointers rebased, **0 mismatches**, 8,169 bytes written to the output slot,
+arena guards intact. `var_gpu_test.exe` was recompiled from `rdna2/var_gpu_test.cpp` for this run (the sandbox's
+prior copy, along with its cached kernel modules and checkpoints, was inadvertently wiped by an unguarded
+`sandbox.py make` call on the shared persistent sandbox - recovered by recompiling the harness and re-copying
+the one needed kernel module (`_Z10k_qkv_attn10AttnParams.co`) and weight file rather than re-running the whole
+encoder chain, since all of that chain's results were already committed).
+
+Still open: chaining real input activations (continuing from the encoder chain instead of random bytes), the
+real `+0x34` value (currently a plausible placeholder), and decoding the internal qkv_weight/attn_scale/attn_bias
+sub-offsets within the combined `layer2` blob.

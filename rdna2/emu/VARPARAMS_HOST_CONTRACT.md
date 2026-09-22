@@ -211,9 +211,27 @@ formula as `k_swin_var`, confirming the reference's "window is 8x8 tokens."
    increment-by-zero infinite loop, the same failure class as `k_ffwd`'s original zero-divisor bug.
 
 **Verified**: `trace_qkv_attn_fixed.py` with `+0x18=8, +0x1c=8` (one 8x8 window), `+0x20=+0x24=0` (phase-0 origin),
-`+0x34=32` (an arbitrary plausible nonzero value, not yet confirmed as the *real* per-block number) terminates
-cleanly in ~14,000,000 steps (330 s), all 8 waves finishing normally, zeroed weight/bias data. **Still open**: the
-exact real value of `+0x34` for a given block (likely `C`-derived, same role as `k_ffwd`'s `+0x2c`), and GPU
-hardware verification with real captured weight bytes for whichever block actually dispatches this kernel (not
-yet identified among blocks 23+; `block31`/`block32` have a `layer2` tensor of a plausible size but this wasn't
-cross-checked against the real block graph).
+`+0x34=32` (an arbitrary plausible nonzero value) terminates cleanly in ~14,000,000 steps (330 s), all 8 waves
+finishing normally, zeroed weight/bias data.
+
+**Which real block dispatches this kernel, identified from weight sizes**: scanning `weights_ht_index.json` for
+every `blockN.layer2.layer` size shows two distinct families - blocks 23-30 and 40-47 at 917,568 B
+(`3*512*512 + 16 heads * 64*64*2` bytes = the C=512 QKV weight *plus* the reference's documented 64x64-per-head
+`prior` bias term), and blocks 31-38 at 3,145,856 B (`3*1024*1024` bytes almost exactly, *no* extra prior-bias
+bytes). This matches the reference's own stated distinction ("prior: learned 64x64 per head [window blocks] /
+none [ViT blocks]") exactly: blocks 23-30/40-47 are `k_qkv_attn` (window attention, handle `0x180066368`,
+resolved here), blocks 31-38 are the separate `k_qkv_attn2`/ViT variant (`_Z11k_qkv_attn210AttnParams`, handle
+`0x180066380`, not yet investigated). Block23 is the first block of the C=512 stage and continues directly from
+the already-GPU-verified encoder chain (block22's pooled output was C=512, H=W=4 - `RESULTS_REAL_CONFIG.md`).
+
+**GPU hardware-verified** (`difftest_qkv_attn.py`, real block23 `layer2.layer` weight bytes extracted from
+`nvngx_dlssnr.dll`, H=W=4 matching block22's output, origin (0,0), `+0x34=512`): dispatched on the real RX 6900 XT
+via the rebuilt `_Z10k_qkv_attn10AttnParams.co` module - **PASS, 0 mismatches**, 8,169 bytes written to the
+output slot, 5.923 ms GPU time, arena guards intact. This is the same emulator-vs-hardware differential method
+used for every other kernel in this file.
+
+**Still open**: the exact real value of `+0x34` (currently a plausible guess, not read from the host launcher's
+own construction of that field - its source instruction wasn't traced); chaining real (not random/zeroed)
+input activations and weight-derived attn_scale/attn_bias sub-regions of the layer2 blob (currently the whole
+917,568-byte blob is copied to the weight pointer undifferentiated - the kernel's own internal offsets into it
+for qkv_weight vs attn_scale vs attn_bias were not decoded); and the separate `k_qkv_attn2`/ViT contract.
