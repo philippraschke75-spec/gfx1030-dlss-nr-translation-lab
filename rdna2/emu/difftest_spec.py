@@ -88,6 +88,16 @@ SPECS = {
         '_Z13k_align_probePh',
         pointers={0x00: 0}),
 
+    # 64 B. The static host reading in VARPARAMS_HOST_CONTRACT.md and this kernel's own load pattern
+    # agree field-for-field: ptr at +0x00, i32 at +0x08, four i32 from the b128 at +0x0c, ptr at
+    # +0x20, i32 at +0x28, ptr at +0x30, and two f32 job strengths at +0x38/+0x3c.
+    'export': lambda: K.Spec(
+        '_Z8k_export12ExportParams',
+        pointers={0x00: 0, 0x20: 1, 0x30: 2},    # network result, destination surface, blend source
+        scalars={0x08: ('<i', 8), 0x0c: ('<i', 8), 0x10: ('<i', 8), 0x14: ('<i', 8),
+                 0x18: ('<i', 8), 0x28: ('<i', 0), 0x38: ('<f', 1.0), 0x3c: ('<f', 1.0)},
+        fill={0: 'f32', 2: 'f32'}),              # both are float-RGB buffers, not byte data
+
     'repack': lambda: K.Spec(                    # 2 pointers then four i32 (+0x10/+0x14/+0x18/+0x1c)
         '_Z8k_repack12RepackParams',
         pointers={0x00: 0, 0x08: 1},

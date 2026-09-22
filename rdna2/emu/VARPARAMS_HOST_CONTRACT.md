@@ -501,3 +501,34 @@ saved hardware state) is the right next tool; it was built for exactly this and 
 serializing lanes in ascending order so two lanes contending on one address cannot both observe the
 original value, and copying both source registers up front because the destination commonly aliases
 the data pair (`global_atomic_cmpswap_b32 v0, v2, v[0:1]`).
+
+## k_export: GPU-verified, completing the output path (2026-09-22)
+
+`ExportParams` (64 B) needed no new decoding - the static host reading recorded earlier in this file
+and the kernel's own load pattern agree field-for-field: pointer at `+0x00` (network result), i32 at
+`+0x08`, four i32 from the `b128` at `+0x0c` (two of them the image dimensions), pointer at `+0x20`
+(destination surface), i32 at `+0x28` (format/mode), pointer at `+0x30` (the original float-RGB copy
+from `k_import`, i.e. the blend source), and two f32 job strengths at `+0x38`/`+0x3c`.
+`hidden_group_size_x` lands at `+0x4c`, consistent with the 64-byte explicit size.
+
+Both the network result and the blend source are float-RGB buffers, so they get well-conditioned
+f32 fills rather than random bytes.
+
+**GPU hardware-verified**: **PASS, 0 mismatches**, 128 bytes written into the destination-surface
+slot, guards intact. This also exercises the restored `v_pack_b32_f16` fix on hardware - `k_export`
+is one of the four kernels that contains a `v_pack_b32_f16` with a floating inline constant, the
+case the old lowering got wrong.
+
+With `k_final_head` and `k_export` both verified, the output path now has hardware coverage at both
+ends, where it previously had none.
+
+**Probed but not yet resolved:**
+* `k_conv_res2` (`Conv2Params`, 64 B = eight 8-byte fields). Treating all eight as pointers faults,
+  so some are scalars; a `k_conv_res_views`-shaped layout runs cleanly for 154k steps but writes
+  nothing, so it needs a count sweep like `k_ffwd2`'s `+0x28`.
+* `k_flag_set` needs `s_sendmsg(MSG_RTN_GET_REALTIME)` in the emulator - the realtime clock a
+  spin-wait uses for backoff. `k_flag_set`/`k_flag_wait` are the inter-block sync primitives.
+* `k_attention`, `k_attention2` and `k_conv_splitk` scan to the very end of whatever arena they are
+  given (they faulted at exactly 6 MiB with a 6-slot arena and exactly 24 MiB with a 24-slot one),
+  which looks like a scan for a sentinel that neither random nor zeroed data ever produces. They
+  need a structured fixture rather than a larger buffer.
