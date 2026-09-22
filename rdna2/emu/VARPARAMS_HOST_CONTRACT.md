@@ -723,3 +723,43 @@ in reverse order is strong. This is a U-net, and the decoder mirrors the encoder
 pointer arrays at `ctx+0x2a8` / `ctx+0x2c8` / `ctx+0x2e8`, indexed by stage - likely skip input,
 working buffer and output), and the `k_flag_set`/`k_flag_wait` sync protocol. The schedule itself is
 no longer the blocker.
+
+## U-net skip connections: the wiring is determined (2026-09-22)
+
+`ctx+0x2a8` is a 4-entry array of per-stage activation buffers, and the encoder and decoder index it
+with *deliberately opposite* formulas, which is what makes the skip connections line up.
+
+**Encoder** (loop head `0x18002f630`, stage counter `ecx` = 0..3):
+* stage tuple indexed **forward**: `lea rcx,[rdx+2*rdx]` then `lea rbx,[rdx+4*rcx]` = `table + 12*stage`
+  (`0x18002f678`-`0x18002f683`)
+* buffer array indexed **reversed**: `mov eax,0x3` / `sub eax,ecx` / `mov rax,[r13+8*rax+0x2a8]`
+  (`0x18002f630`-`0x18002f637`) = `ctx+0x2a8[3-stage]`
+
+**Decoder** (loop head `0x180030870`, counter `r9d` = 0..3) - the mirror image:
+* stage tuple indexed **reversed**: `mov eax,0x3` / `sub eax,r9d` / `lea rdx,[rax+2*rax]` = `tuple[3-r9d]`
+* buffer array indexed **forward**: `mov edx,r9d` / `mov r15,[rcx+8*rdx+0x2a8]` (`0x1800308ac`-`0x1800308af`)
+  = `ctx+0x2a8[r9d]`
+
+Those two cross exactly, so each decoder stage reads the encoder buffer of **matching channel width**:
+
+| C | encoder | buffer | decoder |
+|---|---|---|---|
+| 32 | stage 0 (blocks 1-4) | `ctx+0x2a8[3]` | iter 3 (blocks 66-69) |
+| 64 | stage 1 (blocks 5-8) | `ctx+0x2a8[2]` | iter 2 (blocks 62-65) |
+| 128 | stage 2 (blocks 9-14) | `ctx+0x2a8[1]` | iter 1 (blocks 56-61) |
+| 256 | stage 3 (blocks 15-22) | `ctx+0x2a8[0]` | iter 0 (blocks 48-55) |
+
+The decoder pulls two further per-stage pointers alongside it - `ctx+0x2c8[r9d]` and `ctx+0x2e8[r9d]`
+(`0x1800308b7`, `0x1800308bf`) - and `ctx+0x2a8[r9d]` is passed to launcher A as its `in_ptr`
+argument (`mov r9, r15` at `0x180030a56`), which is what confirms these are activation buffers
+rather than queues or events.
+
+Buffer **sizes** follow the already-documented activation formula `C * ceil(H/4) * ceil(W/4) * 16`,
+with `(C,H,W)` coming from the `ctx+0x190` stage tuple, so a runner can allocate these itself without
+reproducing the host's allocator. No store to `ctx+0x2a8` with a literal offset exists anywhere in
+the image, so the array is filled through a pointer by a helper - worth knowing if the exact
+allocation ever matters, but it does not for replaying the schedule.
+
+**This removes the buffer-layout unknown.** What is left before an offline frame is the
+`k_flag_set`/`k_flag_wait` sync protocol (and `k_flag_set` needs `s_sendmsg(MSG_RTN_GET_REALTIME)`
+in the emulator), plus writing the runner itself.
