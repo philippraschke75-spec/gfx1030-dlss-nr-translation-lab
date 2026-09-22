@@ -107,3 +107,18 @@ end to end, matching my independent emulator at every step, on the physical GPU.
 is correct (no gfx1100 or NVIDIA reference exists), and it stops at the end of stage 1: the stage-1-to-stage-2 transition
 needs a downsample step (channel count 32->64, spatial size halved) that has not been identified or tested yet - this is
 the next concrete blocker toward continuing the real-pixel chain.
+
+## Harness note: manual `nohup ... &` backgrounding hung twice on a second full-chain run (2026-09-22)
+
+A second confirmation run of the full stage-1 chain (tile (900,500), same script/weights/module as above) appeared to
+hang for ~20 minutes with near-zero CPU usage (0.02-3 s of CPU time accumulated) and no `var_gpu_test.exe` subprocess
+running, reproducing on a clean retry. Before assuming a real kernel/GPU hang, it was investigated directly (host-only,
+bounded `max_steps`, no GPU): `k_import`'s output for this tile is fully finite (no NaN/Inf, range 0.0007..1.64), and
+the pre-block emulator terminates cleanly for all 64 workgroups (~140,700 steps each, ~71 s total, no step-limit hit).
+A GPU health check (`graphics_hook_test.exe`) run immediately after killing the stuck process passed all three checks,
+confirming no device reset occurred. The hang was reproduced only when the sandboxed multi-stage script was launched via
+a manual `nohup <cmd> &` redirect; it did not reproduce when launched through the harness's own background-tracking
+mechanism. Conclusion: this was a host/tooling pipe- or handle-coordination issue in how stdout was inherited across the
+nested subprocess chain (sandbox.py -> chain script -> var_gpu_test.exe) under manual backgrounding, not a translation,
+emulator, or hardware fault. Recorded here because "the emulator/GPU hung" would otherwise be a plausible but wrong
+conclusion to draw from the symptoms; always use the harness's tracked background execution for long sandboxed runs.
