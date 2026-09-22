@@ -145,3 +145,18 @@ translation bug from host/OS scheduling noise, and was used successfully here.
 Net effect: the stage-1 chain (import -> pre-block) is now independently confirmed correct (though not through a
 completed GPU dispatch) on a 4th real tile position (900,500), in addition to the 3 GPU-dispatch-verified positions
 above. No evidence of any real correctness problem was found at any tested position.
+
+## Stage transition, GPU-confirmed: block4's fused pooled output correctly feeds block5 (2026-09-22)
+
+`gpu_verify_block5_real.py`: real captured pixels through import -> pre-block -> blocks 1-4 (emulator only - these
+kernels were already independently GPU-verified earlier in this document, so re-dispatching them again would be
+redundant), extracting block4's real fused pooled output (kernarg +0x38, written only for flags=4 - see
+VARPARAMS_HOST_CONTRACT.md), then ONE bounded GPU dispatch of block5 (`k_swin_var<64,false>`, real block5 weights,
+fresh module ca6f810e19694682) consuming that real pooled data as its input.
+
+**PASS: 0 mismatches, 196,484 bytes written, guards intact** (`arena_dev=0x404010000`, 0.438 ms dispatch). This closes
+the gap the earlier host-only-only chain test left open: the newly-identified stage-transition mechanism is now
+GPU-verified end to end on real captured game data, not just plausible in the emulator.
+
+Still open: block5's own real flags/origin/mode for a launch that also needs a *second* pooled output at its own
+`+0x38` (it is not last-in-stage here, so this run did not exercise that), and blocks 6-8 to complete stage 2.
