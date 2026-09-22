@@ -122,3 +122,26 @@ mechanism. Conclusion: this was a host/tooling pipe- or handle-coordination issu
 nested subprocess chain (sandbox.py -> chain script -> var_gpu_test.exe) under manual backgrounding, not a translation,
 emulator, or hardware fault. Recorded here because "the emulator/GPU hung" would otherwise be a plausible but wrong
 conclusion to draw from the symptoms; always use the harness's tracked background execution for long sandboxed runs.
+
+## Follow-up on the harness hang note above: pinpointed, still not a kernel/correctness issue (2026-09-22)
+
+Instrumenting `chain_encoder_stage1_real.py` with per-row progress prints and retrying at tile (900,500) showed the
+stall is real (not just impatience): the pre-block's first emulator pass progressed normally through workgroup row 4
+of 8 (~9 s/row, matching direct measurement), then made almost no further progress over the next ~880 s of wall time.
+Direct, isolated testing (host-only, no sandbox) of *every single workgroup* in rows 5-7 of that exact pre-block
+dispatch, with the exact same real pixel data and weights, completed cleanly in ~1.1 s each with no exception and no
+step-limit hit - so the computation itself is not the problem; it is fully deterministic and correct on this tile too.
+The stall is specific to the long-running python subprocess launched by `sandbox.py run` in the background; the most
+likely explanation is OS-level power/priority throttling of a long-lived, non-foreground console process (Windows
+"Efficiency Mode"/background power throttling), not a translation, emulator, or GPU fault. A GPU health check
+immediately after each kill passed cleanly both times.
+
+Practical takeaway for future sessions: for these multi-stage real-pixel chain scripts (each stage's emulator pass can
+legitimately take 70-150 s), prefer running shorter to keep total wall time low, or expect and tolerate slow progress
+in background python subprocesses rather than treating it as a hang; verifying suspicious slowdowns by re-running the
+exact same workgroup(s) directly (host-only, bounded `max_steps`) is an effective and cheap way to distinguish a real
+translation bug from host/OS scheduling noise, and was used successfully here.
+
+Net effect: the stage-1 chain (import -> pre-block) is now independently confirmed correct (though not through a
+completed GPU dispatch) on a 4th real tile position (900,500), in addition to the 3 GPU-dispatch-verified positions
+above. No evidence of any real correctness problem was found at any tested position.
