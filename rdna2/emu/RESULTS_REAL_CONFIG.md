@@ -305,3 +305,15 @@ hidden-args fields (`hidden_block_count_x/y/z`, `hidden_group_size_x/y/z`, `hidd
 `hidden_global_offset_x/y/z`, `hidden_grid_dims`) at their real compiler-declared offsets instead of guessing.
 Rerun with real chained encoder input and real block23 weight data: **PASS, 0 mismatches**, 8,192 bytes written,
 guards intact - `k_qkv_attn`'s contract is now closed end-to-end with real data on real hardware.
+
+## k_qkv_attn2 (ViT attention variant) GPU-verified, hidden-args lesson applied from the start (2026-09-22)
+
+Same investigation as `k_qkv_attn` but for the separate ViT variant (`_Z11k_qkv_attn210AttnParams`, blocks
+31-38, no `attn_bias`/prior term). Applying the lesson learned above (AttnParams is 40 bytes; everything past
+that is compiler-managed HSA hidden-args, not kernel-defined fields) from the first test avoided repeating the
+same bug. Confirmed via an exhaustive kernarg-read trace that this variant needs only 3 real pointers
+(input, output, weight - no attn_bias buffer), matching the reference's documented ViT-vs-window distinction.
+
+`difftest_qkv_attn2.py`: real `block31.layer2.layer` weight bytes (3,145,856 B, C=1024, spans past one 1 MiB
+arena slot into the next two). Result: **PASS, 0 mismatches**, 2,037 bytes written, 0.468 ms GPU dispatch,
+guards intact. Both attention-family kernels are now GPU-verified on real weight data.

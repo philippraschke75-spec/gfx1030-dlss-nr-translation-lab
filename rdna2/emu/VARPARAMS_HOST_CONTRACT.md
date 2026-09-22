@@ -270,5 +270,34 @@ render - only that it computes *something* deterministic and matches the emulato
 **`k_qkv_attn`'s full contract is now closed**: 40-byte `AttnParams` + correct HSA hidden-args, real chained
 input from the encoder, real block23 weight data, GPU hardware-verified bit-exact against the emulator (see
 `RESULTS_REAL_CONFIG.md`). **Still open**: confirming the `layer2` sub-offset order (qkv_weight/attn_bias/
-attn_scale - sizes are confirmed, ordering is not); and the separate `k_qkv_attn2`/ViT contract (handle
-`0x180066380`, blocks 31-38, no `attn_bias` term, likely the same hidden-args lesson applies).
+attn_scale - sizes are confirmed, ordering is not).
+
+## k_qkv_attn2 (the ViT variant, `_Z11k_qkv_attn210AttnParams`, handle `0x180066380`): RESOLVED (2026-09-22)
+
+Blocks 31-38 per the weight-size analysis above (no `attn_bias`/prior term, matching the reference's documented
+ViT-vs-window-block distinction). Applied every lesson from `k_qkv_attn` up front rather than re-discovering
+them:
+
+- **Single kernarg-pointer convention**, not the dual dispatch_ptr/kernarg_ptr one - confirmed directly from its
+  own prologue (`s_load_b128 s[4:7], s[0:1], 0x18`, `s_load_b32 s30, s[0:1], 0x34`: both read straight off `s[0:1]`,
+  no `s[2:3]` involved, unlike `k_qkv_attn`).
+- **AttnParams is 40 bytes here too** (`_Z11k_qkv_attn210AttnParams.s`'s own `.args` metadata: `.offset 0, .size 40`),
+  with the identical HSA hidden-args block after it - populated correctly from the very first test this time,
+  not guessed.
+- **Exhaustive kernarg-read trace** (`trace_qkv_attn2_kernarg.py`): reads exactly `+0x00` (16 B, input+output
+  pointer pair), `+0x10` (8 B, weight pointer), `+0x18` (16 B, H/W/originX/originY) - **only 3 real pointers**,
+  confirming no `attn_bias` buffer is needed, exactly matching the reference's documented ViT/window-block
+  difference. Terminated cleanly in 1.5 s with random data - no infinite-loop issue at all, since the hidden-args
+  mistake that caused `k_qkv_attn`'s bugs was avoided from the start.
+
+**GPU hardware-verified** (`difftest_qkv_attn2.py`, real `block31.layer2.layer` weight bytes extracted from
+`nvngx_dlssnr.dll` - 3,145,856 B, large enough to span past one 1 MiB arena slot into the next two, which is
+fine since nothing else uses those slots for this kernel): **PASS, 0 mismatches**, 2,037 bytes written, GPU
+dispatch in 0.468 ms, guards intact. (First attempt used `H=W=2`, a guess at the post-block30 pooled spatial
+size, and produced 0 bytes written - almost certainly a fully-masked/degenerate case from the token-padding
+logic, not a bug; retried with `H=W=8`, a known-non-degenerate size, for this structural pass.)
+
+**Still open for both attention kernels**: chaining real (not random) input activations past block22/30 (the
+ViT's real input would need the C=512-to-1024 pooling/channel-doubling transition after block30 decoded first,
+analogous to the encoder's fused-pool mechanism); the real spatial size the ViT actually operates at; and
+confirming the `layer2` blob's internal sub-offset ordering for both kernels.
