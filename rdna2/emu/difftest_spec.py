@@ -134,11 +134,12 @@ SPECS = {
         fill={0: 'f32', 1: 'zero'}),
 }
 
-if len(sys.argv) > 1 and sys.argv[1] == '--list':
-    print('\n'.join(sorted(SPECS)))
-    raise SystemExit(0)
-name = sys.argv[1]
-seed = int(sys.argv[2]) if len(sys.argv) > 2 else 1
-row = K.run_difftest(SPECS[name](), seed, tag='%s_s%d' % (name, seed))
-print(json.dumps(row), flush=True)
-raise SystemExit(0 if row['status'] == 'PASS' else 1)
+if __name__ == '__main__':           # importable as a registry, e.g. by net_smoke.py
+    if len(sys.argv) > 1 and sys.argv[1] == '--list':
+        print('\n'.join(sorted(SPECS)))
+        raise SystemExit(0)
+    name = sys.argv[1]
+    seed = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+    row = K.run_difftest(SPECS[name](), seed, tag='%s_s%d' % (name, seed))
+    print(json.dumps(row), flush=True)
+    raise SystemExit(0 if row['status'] == 'PASS' else 1)
