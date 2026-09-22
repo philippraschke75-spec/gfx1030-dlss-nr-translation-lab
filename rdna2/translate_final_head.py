@@ -34,6 +34,24 @@ ALIASES = {
     'ds_store_b32':'ds_write_b32', 'ds_load_b128':'ds_read_b128',
 }
 
+def lower_pack_f16(args, scratch):
+    """Pack raw halfwords, expanding floating inline constants as FP16 bits.
+
+    Integer ALU instructions otherwise interpret `1.0` as FP32 0x3f800000,
+    whose low halfword is zero. Capture both sources before writing the
+    destination so destination/source aliases retain parallel-read semantics.
+    """
+    d, a, b = [x.strip() for x in args.split(',')]
+    def bits(src):
+        if re.fullmatch(r'-?\d+\.\d+', src):
+            return hex(struct.unpack('<H', struct.pack('<e', float(src)))[0])
+        return src
+    return [f'v_mov_b32_e32 v{scratch}, {bits(a)}',
+            f'v_mov_b32_e32 v{scratch+1}, {bits(b)}',
+            f'v_and_b32_e32 v{scratch}, 0xffff, v{scratch}',
+            f'v_lshl_or_b32 {d}, v{scratch+1}, 16, v{scratch}']
+
+
 def reg_range(s):
     m = re.fullmatch(r'v\[(\d+):(\d+)\]',s.strip())
     if not m or int(m[2])-int(m[1]) != 7:
@@ -166,8 +184,7 @@ def main():
                 results.append(instruction.replace('v_dual_','v_')+f' v{94+j},'+sources)
             result=results+[f'v_mov_b32_e32 {d}, v{94+j}' for j,d in enumerate(destinations)]
         elif op=='v_pack_b32_f16':
-            d,a,b=[x.strip() for x in args.split(',')]
-            result=[f'v_and_b32_e32 v94, 0xffff, {a}',f'v_lshl_or_b32 {d}, {b}, 16, v94']
+            result=lower_pack_f16(args, 94)
         elif op in ALIASES:
             if op.startswith('s_load_'): args=args.replace(', null',', 0')
             result=[ALIASES[op]+' '+args]

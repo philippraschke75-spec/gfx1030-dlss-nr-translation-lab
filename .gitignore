@@ -12,3 +12,16 @@ research/
 *.co
 *.o
 *.exe
+# local capture scratch files
+/bridge-capture-*.json
+/mock-only.json.exceptions.log
+/mock_hip6.log
+/phase10_hip_bridge.log
+# supplied research archive: publish reviewed source and notes only
+/gfx1032-dlss-nr-research-main/**
+!/gfx1032-dlss-nr-research-main/**/
+!/gfx1032-dlss-nr-research-main/**/*.md
+!/gfx1032-dlss-nr-research-main/**/*.cpp
+!/gfx1032-dlss-nr-research-main/**/*.c
+!/gfx1032-dlss-nr-research-main/**/*.ps1
+/gfx1032-dlss-nr-research-main/**/CMakeFiles/

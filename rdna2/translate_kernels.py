@@ -243,8 +243,7 @@ def translate(name,lines,policy,md,ro,rofile,out,binpath,private_lds=False,helpe
                 replacement.append(f'{normal} v{scratch+10+j},'+src)
             replacement += [f'v_mov_b32_e32 {d}, v{scratch+10+j}' for j,d in enumerate(dests)]
         elif op=='v_pack_b32_f16':
-            d,a,b=[x.strip() for x in args.split(',')]
-            replacement=[f'v_and_b32_e32 v{scratch+10}, 0xffff, {a}',f'v_lshl_or_b32 {d}, {b}, 16, v{scratch+10}']
+            replacement=base.lower_pack_f16(args, scratch+10)
         elif op=='v_minmax_i32':
             # LLVM IntMinMaxPat: max(min(src0, src1), src2).
             d,x,y,z=[x.strip() for x in args.split(',')]
