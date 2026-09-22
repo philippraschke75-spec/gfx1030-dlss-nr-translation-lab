@@ -931,3 +931,61 @@ a full-network render is enumerable:
 
 None of these is an unknown unknown; each is bounded reverse-engineering or integration against
 kernels that are already verified.
+
+## The C=512 block recipe, with weight layers and buffers (2026-09-22)
+
+Decoding inside `0x180033660` gives the full per-block sequence, and it maps exactly onto the four
+weight layers each of blocks 23-30 and 40-47 carries:
+
+| step | kernel | weight layer | role |
+|---|---|---|---|
+| 1 | `k_ffwd_inpview` (first block of the stage) **or** `k_ffwd` | 0 | FFN expand |
+| 2 | `k_ffwd2` | 0 | FFN expand, second half |
+| 3 | `k_conv_res_views` (`0x180033b4a`) | **1** | FFN contract + `ffn_cos_skip` |
+| 4 | `k_qkv_attn` **or** `k_qkv_attn2` | 2 | QKV / attention |
+| 5 | `k_conv_res_views` (`0x1800340e9`) / `k_conv_res2` | **3** | projection + `attn_cos_skip` |
+
+This is why the launcher contains `k_conv_res_views` **twice**: once after the FFN with layer 1 and
+once after attention with layer 3. The earlier entry in this file documented only the layer-3 site
+and therefore read as if there were a single projection step.
+
+The layer numbering now lines up with `DLL_HOST_EVIDENCE.md`'s tensor naming end to end:
+layer0 = FFN expand, layer1 = contract + `ffn_cos_skip`, layer2 = `qkv_weight+attn_scale+attn_bias`,
+layer3 = `projection_weight+attn_cos_skip`.
+
+### Variant selection
+
+* **`k_ffwd_inpview` vs `k_ffwd`**: `test r14, r14 / je` at `0x180033741`-`0x180033744`. `r14` is the
+  launcher's 3rd argument, which the caller sets with `cmove` only when `block == first_of_stage`.
+  So the input-view variant runs exactly once per stage, consuming the stage's incoming buffer;
+  every other block uses plain `k_ffwd`.
+* A further branch on `dword [rsi+0x98]` against 3 (`0x180033a6c`, `0x180033a92`) selects between
+  the remaining paths.
+
+### `k_ffwd_inpview` kernarg, built at `0x180033794`-`0x1800337d1`
+
+| off | value |
+|---|---|
+| +0x00 | `r14` - the stage's incoming activation buffer |
+| +0x08 | `ctx+0x230` |
+| +0x10 | weight ptr, `0x180031bc0(ctx, block, layer=0)` |
+| +0x18 / +0x1c | H / W from `[rdi+0x10]+4` / `+8` |
+
+**This independently confirms today's empirical decode of `FfwdPlParams`**, which was found by
+probing (three pointers plus H/W, because treating it as four pointers faulted). The host builds
+precisely that layout - a static confirmation of a result that had only been established by
+experiment.
+
+### First `k_conv_res_views` kernarg, built at `0x180033aa4`-`0x180033b02`
+
+| off | value |
+|---|---|
+| +0x10 | `ctx+0x228` |
+| +0x18 | `ctx+0x238` |
+| +0x20 | 0 |
+| +0x28 | weight ptr, layer **1** |
+| +0x30 / +0x34 | H / W |
+| +0x38..+0x47 | zeroed (`xorps`/`movups`) |
+
+Note the zeroed tail: the count field at `+0x38` that `k_conv_res2` needs is **0** here, consistent
+with this dispatch not using the token-count path.
