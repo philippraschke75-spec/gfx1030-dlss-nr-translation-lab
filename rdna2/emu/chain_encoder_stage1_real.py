@@ -27,19 +27,26 @@ results = []
 def run_and_verify(sym, lds, kernarg_fn, patch_arena, grid, tag):
     """kernarg_fn() -> kernarg bytes (using current V.ARENA); patch_arena(a) writes real inputs into the fresh arena."""
     def emulate():
+        import time as _t; _t0 = _t.time()
         ka = kernarg_fn()
+        print('  [%s] load_program...' % tag, flush=True)
         prog = E.load_program(R.DIS, {sym}); g, KA = V.build(1, ka, len(V.PTR_FIELDS))
+        print('  [%s] load_program done %.1fs' % (tag, _t.time() - _t0), flush=True)
         a = g.regions[1].arr
         patch_arena(a)
         init = a.copy(); steps = 0
         for wy in range(grid[1]):
             for wx in range(grid[0]):
                 steps += E.run_workgroup(prog, g, lds, 256, {0: KA & 0xffffffff, 1: KA >> 32, 14: wx, 15: wy}, max_steps=8_000_000)['steps']
+            print('  [%s] row wy=%d/%d done, %.1fs elapsed' % (tag, wy, grid[1], _t.time() - _t0), flush=True)
+        print('  [%s] emulate() total %.1fs' % (tag, _t.time() - _t0), flush=True)
         return bytes(ka), init, a.copy(), steps
 
     kab, init, ref, steps = emulate()
     module = D.ROOT / 'build' / 'kernels-hw-scratch' / (sym + '.co')
+    print('  [%s] calling GPU dispatch...' % tag, flush=True)
     rc, msg, out = D.gpu(module, sym, tag, kab, init, grid)
+    print('  [%s] GPU dispatch returned rc=%s' % (tag, rc), flush=True)
     if out is not None:
         V.ARENA = int(re.search(r'arena_dev=0x([0-9a-fA-F]+)', msg)[1], 16)
         kab, init, ref, steps = emulate()
