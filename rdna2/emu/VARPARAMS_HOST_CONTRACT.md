@@ -832,3 +832,61 @@ So `k_export` cannot be validated semantically until the network actually produc
 **translation** is already verified independently - it passes the registry difftest with 0
 mismatches - which is the part that was ever in question for the gfx1030 port. What remains is
 supplying it real input, which means finishing the middle of the network, not further probing here.
+
+## Correction + decode: the real attention/FFN block launcher is 0x180033660 (2026-09-22)
+
+**Correction to the entry above.** `0x180033600` is *not* the block launcher. It is a five-line
+wrapper ending at `0x18003365e` that just calls a formatter (`0x18003f194`) with a printf-style tag.
+The driver's "launcher B" call sites are really label formatting; the tags recovered from them are a
+useful structural map in their own right:
+
+| tag | where |
+|---|---|
+| `enc%d`, `ds%d`, `swin%d_C%d` | encoder + downsample |
+| `dec%d`, `swinup%d_C%d`, `swin%d_C%d` | decoder + upsample |
+| `b%d`, `b%dh`, `b%dq`, `b%do`, `b%dx1` | the C=512 attention blocks and their variants |
+
+The **real** attention/FFN block launcher is **`0x180033660`** (0x348-byte frame, and the function
+that actually contains the `k_ffwd` / `k_ffwd2` / `k_qkv_attn` / `k_qkv_attn2` / `k_conv_res_views` /
+`k_conv_res2` / `k_ffwd_inpview` handles). It has exactly **two** call sites, and they are the two
+C=512 attention stages:
+
+### Blocks 23-30 (`0x18002f9c0`-`0x18002fa15`), fully decoded
+
+```
+mov  eax, 0
+cmp  edi, 0x1e            ; block == 30 (the last one)?
+jne  +7
+mov  rax, [r13 + 0x248]   ;   then pass ctx+0x248 as the 6th argument
+lea  ecx, [rdi - 0x17]    ; ecx = block - 23
+mov  edx, ecx
+sar  dl, 7 / shr dl, 6 / add dl, cl / and dl, -4 / sub cl, dl
+movsx r9d, cl             ; r9d = (block - 23) % 4   <- signed-modulo idiom
+cmp  edi, 0x17            ; block == 23 (the first one)?
+mov  r8d, 0
+cmove r8, [rbp + 0x630]   ;   then pass that buffer as the 3rd argument
+mov  [rsp+0x28], rax      ; 6th arg: ctx+0x248 on the last block, else 0
+mov  [rsp+0x20], 0        ; 5th arg: always 0 here
+mov  rcx, rbx             ; 1st arg: ctx
+mov  edx, edi             ; 2nd arg: block index
+call 0x180033660
+inc  edi
+cmp  edi, 0x1f            ; loop while block < 31
+jb   ...
+```
+
+So the signature is
+`launcher(ctx, block_index, first_block_input_or_null, mode, 0, last_block_extra_or_null)` and
+**`mode = (block - 23) % 4`** - the same four-mode shifted-window cycle the encoder uses, confirming
+these blocks are windowed attention rather than a flat sequence.
+
+### Blocks 40-47 (`0x180030640`)
+
+Structurally identical, with `lea ecx, [rdi - 0x28]` - i.e. `mode = (block - 40) % 4`. Same
+launcher, same argument shape. One decode covers both stages.
+
+**What this gives a runner:** the per-block index, window mode, and the first/last-block special
+buffers for both C=512 stages. Combined with the per-block kernel recipe and the already-documented
+kernarg field-to-ctx-buffer mappings for each of those kernels, the remaining gap is narrow - the
+per-block H/W and the count fields (the `+0x28`/`+0x38`-style token counts that `k_ffwd2` and
+`k_conv_res2` need, whose semantics are already known: `min(n*16, H*W)`).
