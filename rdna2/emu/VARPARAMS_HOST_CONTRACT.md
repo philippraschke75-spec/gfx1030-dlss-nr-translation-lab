@@ -796,3 +796,39 @@ What remains for an offline frame is **engineering, not reverse-engineering**: a
 replays the schedule on the GPU using the verified kernels, fed by the captured Cyberpunk frame.
 The honest caveats still stand - `k_attention`/`k_attention2` mismatch and sit in the ViT path, so a
 first frame would be expected to be wrong in that region until that is resolved.
+
+## k_export: contract corrected from the launcher, and why it cannot be tested standalone (2026-09-22)
+
+The earlier `ExportParams` entry was a partial static reading, explicitly flagged unverified. Tracing
+the launcher tail properly (`0x18002d7b4`-`0x18002d888`, dispatch of handle `0x180066400` at
+`0x18002d876`) confirms the layout and **corrects the two dimension fields, which were the wrong way
+round**:
+
+| off | value | evidence |
+|---|---|---|
+| +0x00 | ptr = `ctx+0x100` - the **network result** buffer | `0x18002d7ca`-`0x18002d7d1` |
+| +0x08 | i32 `edi`, materialised from a SIMD register (`movd edi, xmm10`, `0x18002d514`) | `0x18002d7d9` |
+| +0x0c | i32 = `[rsp+0x2f0]` - **height** (this is grid.y verbatim) | `0x18002d7e0`-`0x18002d7e8` |
+| +0x10 | i32 = `r15d` = `[rsp+0x2f8]` - **width** (this is the value chunked by 256 for grid.x) | `0x18002d6fa`, `0x18002d7f0` |
+| +0x14 / +0x18 | i32 from `[rsp+0x308]` / `[rsp+0x310]` | `0x18002d7f8`, `0x18002d7ff` |
+| +0x20 | ptr = `[rsp+0x300]` - destination surface | `0x18002d806` |
+| +0x28 | i32 `ebp` = `[rsp+0x318]` - format/mode | `0x18002d80e`, `0x18002d533` |
+| +0x30 | ptr = `ctx+0xf8` - the float-RGB copy from `k_import`, i.e. the blend source | `0x18002d815`-`0x18002d81c` |
+| +0x38 / +0x3c | f32 `xmm6` / `xmm7` - job strengths | `0x18002d824`, `0x18002d82d` |
+
+The grid is built at `0x18002d761`-`0x18002d789` as `(ceil(r15d/256), [rsp+0x2f0], 1)`, and those two
+values are exactly the fields at `+0x10` and `+0x0c`. That is what fixes the ordering: **`+0x0c` is
+the height and `+0x10` the width**, the reverse of the earlier note.
+
+**Why a passthrough test is not possible.** Feeding the imported float-RGB image into `+0x00` and
+running `k_export` on its own was tried across both resolutions, several modes and several `+0x08`
+values: coverage never exceeded ~10% and the surface was always non-finite. That is not a parameter
+problem. `+0x00` is the *network's* output, which arrives in the network's own tiled/quantised
+format from `k_final_head` - float RGB there is simply the wrong data, so the kernel reads nonsense
+and writes inf/NaN (and because "coverage" counts non-zero bytes, a surface full of f16 NaN patterns
+reads as low coverage even though it was fully written).
+
+So `k_export` cannot be validated semantically until the network actually produces output. Its
+**translation** is already verified independently - it passes the registry difftest with 0
+mismatches - which is the part that was ever in question for the gfx1030 port. What remains is
+supplying it real input, which means finishing the middle of the network, not further probing here.
