@@ -1354,3 +1354,40 @@ All are now corrected, and none of them account for the mismatch:
 The authoritative layout is `chain_import_preblock_real.py`, which feeds real `k_import` output into
 the pre-block. Anything that dispatches the pre-block should copy it rather than build a kernarg from
 the encoder pattern.
+
+## Activation buffers at real resolution: two corrections
+
+Running the frame path at 1707x960 (`net_frame_full.py`) pinned down two things the contract stated
+ambiguously. Both were found by the arena guards, not by reasoning.
+
+**The formula counts elements, and the element is f16.** `C * ceil(H/4) * ceil(W/4) * 16` is written
+here without a unit. Taken as bytes, the pre-block writes past the end of its output and `net_run`
+reports `guards CORRUPT`. The buffer is that count times **2 bytes**:
+
+```
+C=32 at 1707x960  ->  32 * 240 * 427 * 16 * 2  =  104,939,520 B  (104.9 MB)
+```
+
+The element width is confirmed by reading the result back, not by the allocation succeeding. As f32
+the buffer holds values up to 1.7e38 and 9% of it exceeds 1e4; as f16 it is 100% finite and entirely
+within +/-1e4. An over-allocation at 4 B/element also makes the guards pass, so allocation alone
+proves nothing - check the values.
+
+**`+0x48` is not optional.** It is described above as "ptr (optional 3rd buffer)". Nulling it while
+giving every other pointer a real buffer trips the guards at the correct f16 size. It needs a buffer
+the same size as the output. `difftest_preblock.py` never noticed because it leaves `make_kernarg`'s
+default pointer there rather than nulling it.
+
+### What this does and does not show about block 0
+
+The full-resolution path now runs clean: `k_import` + pre-block, 2 dispatches, ~23 ms, guards intact,
+558.9 MB arena. `k_import` output is correct (finite, 0.0005..65.12, 71.7% nonzero - it is the frame).
+
+The pre-block output is **not**. It saturates f16 (+/-65504, `finite=False`), and a channel view of it
+is structureless noise from an input that demonstrably contains the image. That is the same verdict
+its standalone difftest gives, reached independently: **block 0 does not work**, and it is the
+network's entry point.
+
+Sizing and wiring are therefore no longer suspects for block 0. The remaining question is the one
+`statebisect.py` answers: the first instruction where the translated kernel and the emulator diverge,
+and hence whether the defect is in `k_swin_var<32,true>` or in the reference model.
