@@ -62,8 +62,11 @@ steps.append((IMPORT_SYM, bytes(ka), g_imp, 256))
 ka = bytearray(280)
 struct.pack_into('<Q', ka, 0x00, BASE + off_rgb)          # network result (passthrough: the imported image)
 struct.pack_into('<i', ka, 0x08, 0)
-struct.pack_into('<ii', ka, 0x0c, SRC_W, SRC_H)           # the two image dimensions
-struct.pack_into('<ii', ka, 0x14, SRC_W, SRC_H)
+# +0x0c is HEIGHT and +0x10 is WIDTH, not the other way round: the launcher builds the grid
+# as (ceil(width/256), height) from exactly these two fields. Swapping them makes the
+# kernel address the surface with the wrong stride.
+struct.pack_into('<ii', ka, 0x0c, SRC_H, SRC_W)           # the two image dimensions
+struct.pack_into('<ii', ka, 0x14, SRC_H, SRC_W)
 struct.pack_into('<Q', ka, 0x20, BASE + off_dst)          # destination surface
 struct.pack_into('<i', ka, 0x28, 0)                       # format/mode
 struct.pack_into('<Q', ka, 0x30, BASE + off_rgb)          # blend source (original float RGB)
