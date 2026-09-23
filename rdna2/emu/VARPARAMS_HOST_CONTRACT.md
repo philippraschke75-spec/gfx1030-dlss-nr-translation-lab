@@ -1391,3 +1391,44 @@ network's entry point.
 Sizing and wiring are therefore no longer suspects for block 0. The remaining question is the one
 `statebisect.py` answers: the first instruction where the translated kernel and the emulator diverge,
 and hence whether the defect is in `k_swin_var<32,true>` or in the reference model.
+
+## `v_lshlrev_b16` / `v_ashrrev_i16` destroyed `D[31:16]` (emulator defect, fixed)
+
+Bisecting the pre-block (`statebisect.py 32_1 0x14 1`) localised the first divergence exactly:
+
+```
+LAST MATCH        trace[6812] = b9ca4
+FIRST DIVERGENCE  trace[6813] = b9cac
+last executed, result differs:  0xb9ca4  v_lshlrev_b16  v5, 8, v5
+    emu = 0x00008f00      gpu = 0xffff8f00
+```
+
+The low half agrees; the emulator zeroed the upper half. A 16-bit VALU op writes `D[15:0]` and
+**preserves** `D[31:16]`. `gfx11emu.py` masked the result to `0xffff` and stored the whole dword, so
+every `BIN16` op and `v_ashrrev_i16` wiped the high half. This is the third instance of this exact
+defect, after `v_cvt_f16_f32` and `v_pack_b32_f16`.
+
+Fixed, and the fix is confirmed by the bisection moving to trace[6872] with `v_lshlrev_b16` gone.
+Regression-checked: `mean`, `contract2`, `expand`, `qkv`, `conv_res_views`, `ffwd2` all still PASS at
+0 mismatches.
+
+**It does not fix block 0.** `difftest_preblock` still reports 28,825, byte-identical to before, with
+a cleared bytecode cache. So the pre-block has at least one further defect.
+
+### What the bisection can and cannot say here
+
+* With strict comparison it now stops at `s_getpc_b64 s[18:19]` (`emu=0x000bbd24 gpu=0x00032c4c`).
+  That is **benign**: `s_getpc` returns the current PC and the two binaries are laid out differently.
+  The tool's pointer heuristic covers VGPRs but not SGPR pairs.
+* With `BISECT_HEURISTIC_FILTERS=1` it reports *no divergence* at the last traced instruction while
+  memory still differs by 28,825 bytes. **Do not read that as "the registers agree."** Filter line
+  176 ignores differences where `((e ^ g) & 0xffff) == 0` - high-half-only differences, precisely the
+  class of bug just fixed. The filters can hide the next one.
+* The bisection only inspects the **first visit** to each PC. `k_swin_var` loops, and later
+  iterations are never compared, so a defect that only manifests after iteration 1 is invisible.
+
+Localising the rest of block 0 needs a method that follows memory writes, or a bisection extended to
+repeat visits. Two further latent bugs in `statebisect.py` were fixed to get this far: `source_vgprs`
+read from `coverage.json`, which only ever holds the last-built kernel (ported from
+`statebisect_attn.py`), and SCC compared without honouring its poison sentinel of 2, which made every
+run abort at entry as a "harness problem".

@@ -867,9 +867,14 @@ class Exec:
                  'v_lshrrev_b16': lambda x, y: y >> (x & np.uint16(15))}
         if b in BIN16:
             f = BIN16[b]
-            return lambda w: w.wv(P[0], u32(f(h(w.r32(P[1])), h(w.r32(P[2])))) & np.uint32(0xffff))
+            # A 16-bit VALU op writes D[15:0] and PRESERVES D[31:16]. Masking to 0xffff and storing
+            # the whole dword zeroes the high half, which is the same defect v_cvt_f16_f32 had.
+            return lambda w: w.wv(P[0], (w.r32(P[0]) & np.uint32(0xffff0000))
+                                  | (u32(f(h(w.r32(P[1])), h(w.r32(P[2])))) & np.uint32(0xffff)))
         if b == 'v_ashrrev_i16':
-            return lambda w: w.wv(P[0], u32((sh16(w.r32(P[2])) >> (h(w.r32(P[1])) & np.uint16(15)).astype(np.int16)).view(np.uint16)))
+            return lambda w: w.wv(P[0], (w.r32(P[0]) & np.uint32(0xffff0000))
+                                  | (u32((sh16(w.r32(P[2])) >> (h(w.r32(P[1])) & np.uint16(15)).astype(np.int16)).view(np.uint16))
+                                     & np.uint32(0xffff)))
         F = {'v_add_f32': lambda x, y: x + y, 'v_sub_f32': lambda x, y: x - y, 'v_mul_f32': lambda x, y: x * y,
              'v_max_f32': np.fmax, 'v_min_f32': np.fmin}
         if b in F:

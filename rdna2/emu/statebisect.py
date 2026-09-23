@@ -58,13 +58,32 @@ def variant_source(src_text, nreg, addr, name, wg=(0, 0), wgsgpr=4):
     return txt
 
 
+def source_vgprs(sym):
+    """Highest VGPR the kernel actually uses, read from the disassembly.
+
+    coverage.json only ever holds the LAST kernel that was built, so looking the symbol up there
+    raises StopIteration for anything else - which is every kernel but one. statebisect_attn.py
+    carries this same fix; it belongs in the shared module.
+    """
+    dis = (ROOT.parent / 'analysis' / 'gfx1100-disassembly.txt').read_text(errors='replace').splitlines()
+    b = next(i for i, l in enumerate(dis) if l.startswith('0') and '<%s>:' % sym in l)
+    e = next((i for i in range(b + 1, len(dis)) if re.match(r'^[0-9a-f]{16} <', dis[i])), len(dis))
+    mx = -1
+    for l in dis[b + 1:e]:
+        t = l.split('//')[0]
+        for m in re.finditer(r'v(\d+)', t):
+            mx = max(mx, int(m[1]))
+        for m in re.finditer(r'v\[(\d+):(\d+)\]', t):
+            mx = max(mx, int(m[2]))
+    return mx + 1
+
+
 class Ctx:
     def __init__(self, key, flags, seed, wg=(0, 0)):
         self.wg = wg; grid = (wg[0] + 1, wg[1] + 1)
         self.key, self.flags, self.seed, self.grid = key, flags, seed, grid
         self.sym, lds = D.SYMS[key]; self.lds = lds or D.group_size(self.sym)
-        cov = json.load(open(ROOT / 'build' / 'kernels-hw-scratch' / 'coverage.json'))
-        self.nreg = next(k['source_vgprs'] for k in cov['kernels'] if k['symbol'] == self.sym)
+        self.nreg = source_vgprs(self.sym)
         self.src = (ROOT / 'build' / 'kernels-hw-scratch' / (self.sym + '.s')).read_text()
         self.prog = E.load_program(R.DIS, {self.sym})
         self.soft = 0
@@ -161,8 +180,13 @@ class Ctx:
                 bad.append('wave%d v%d lane%d emu=%08x gpu=%08x' % (w, r, l, e[r, l], g[r, l]))
             if len(idx): bad.append('wave%d: %d hard-differing vector cells' % (w, len(idx)))
             gs = dict(zip(SG_LIST, sca[w]))
-            for name, ev, gv in (('exec', S_[E.EXEC], gs[100]), ('scc', scc, gs[101]), ('vcc', S_[E.VCC], gs[102])):
-                if ev != POISON and ev != gv:
+            # SCC carries its own poison sentinel: run_workgroup sets scc = 2 for "unwritten", since
+            # 0 and 1 are both real values. Comparing that against the GPU's real 0 reports every
+            # wave as differing at entry and aborts as a harness fault, which is what it did.
+            for name, ev, gv, poison in (('exec', S_[E.EXEC], gs[100], POISON),
+                                         ('scc', scc, gs[101], 2),
+                                         ('vcc', S_[E.VCC], gs[102], POISON)):
+                if ev != poison and ev != gv:
                     bad.append('wave%d %s emu=%x gpu=%x' % (w, name, ev, gv))
             skip = set()
             for i in range(2, 64):
