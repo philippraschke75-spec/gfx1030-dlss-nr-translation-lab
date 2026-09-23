@@ -2005,3 +2005,42 @@ else in the pipeline is verified.
 
 Refuted here: feeding the head from the last decoder block's own output rather than the stage pool
 buffer (identical result - the pool wiring was not the problem).
+
+## The frame runner's schedule is wrong at both ends - `k_final_head` is not the tail
+
+The driver's own phase table, recovered from the handle->name mappings and recorded in this file
+long before the frame runner was written, says:
+
+```
+prologue      0x18002ea60               k_pre_block_1h_32_fp8, k_swin_var<32,true>
+encoder loop  0x18002f630-0x18002f929   launcher A, 4 stages / 22 blocks
+enc -> mid    0x18002f929-0x18002fd80   k_repack, k_final_head
+ViT loop      0x18002fd80-0x1800302d2   k_expand2, k_contract2 x2, k_qkv2, k_attention2
+mid -> dec    0x1800302d2-0x180030870   k_repack, k_dec_upsample, launcher B x4
+decoder loop  0x180030870-0x180030b18   launcher A x2, launcher B x3
+epilogue      0x180030b18-0x180031465   k_post_block_1h_32_fp8, k_swin_var<32,true>
+```
+
+`net_frame_full.py` gets four things wrong against it:
+
+1. **`k_final_head` is in the enc -> mid transition, not the tail.** The runner dispatches it as
+   "block 70" at the very end. Its name invited that; the schedule does not support it. Chasing why
+   it writes a constant at frame scale was chasing the wrong kernel in the wrong place.
+2. **The epilogue is `k_post_block_1h_32_fp8` followed by `k_swin_var<32,true>`** - the same kernel
+   as the pre-block. Neither is dispatched at all.
+3. **`k_repack` is missing from both transitions.** `RepackParams` is 32 B, two pointers plus four
+   i32, and this file already describes it as pure index arithmetic with no arithmetic reduction -
+   i.e. a layout change. That is exactly the e4m3-tiled to something-else conversion the tail needs.
+4. **The prologue dispatches `k_pre_block_1h_32_fp8` before `k_swin_var<32,true>`.** The runner only
+   does the latter.
+
+Both missing kernels are built and present:
+`_Z22k_post_block_1h_32_fp810PostParams.co`, `_Z8k_repack12RepackParams.co`.
+
+This also resolves the apparent contradiction between `k_final_head` writing single e4m3 bytes
+(`global_store_b8`, offsets 0/4/128/132/256/260/384/388) and `k_export` reading 16 B per pixel with
+`global_load_b96`: nothing converts between them because the two kernels that do the conversion are
+not in the chain.
+
+**Read the schedule table before wiring a runner.** All four errors were avoidable from a table that
+had been in this file for a day.
