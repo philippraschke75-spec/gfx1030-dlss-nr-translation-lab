@@ -93,7 +93,12 @@ w0 = np.frombuffer((WEIGHTS_DIR / 'block0.bin').read_bytes(), np.uint8)
 def kernarg_pb():
     ka = V.make_kernarg(H=N, W=N, offy=0, offx=0, flags=0x14, grid=grid_pb)
     struct.pack_into('<Q', ka, 0x00, 0)
-    for off in (0x50, 0x54, 0x58, 0x5c, 0x60, 0x64, 0x68): struct.pack_into('<I', ka, off, 0)
+    # +0x68 is the pre-block's RNG seed, not a pointer. PTR_FIELDS lists it, so make_kernarg wrote a
+    # whole pointer; zeroing only its low dword left arena bits in +0x6c, the GPU runner rebased the
+    # qword, and the kernel ran seeded with the device arena address while the emulator used 0. That
+    # one field made the pre-block differ by 67%% of its output. Same for the other scalars here.
+    for off in (0x50, 0x58, 0x60, 0x68): struct.pack_into('<Q', ka, off, 0)
+    for off in (0x54, 0x5c, 0x64): struct.pack_into('<I', ka, off, 0)
     struct.pack_into('<f', ka, 0x50, 1.0)
     for off in range(0x70, 0xa0, 8): struct.pack_into('<Q', ka, off, 0)
     return ka

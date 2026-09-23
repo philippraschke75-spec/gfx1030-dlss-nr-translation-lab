@@ -1721,3 +1721,57 @@ The emulator side of the shortlist is clean, which shifts weight toward the tran
 something that is not a single opcode - an operand modifier, a literal, or a control-flow difference.
 The dynamic approach (`preblock_firststore.py`, tracing back from the first wrong store at
 `pc=0xb1598`) does not depend on guessing which opcode matters and is the better remaining lead.
+
+## SOLVED: block 0 was never broken. `+0x68` is the RNG seed, and the fixture corrupted it.
+
+`difftest_preblock.py 1 8 8` now reports **PASS, 0 mismatches**, with no environment override. So do
+16x16 and 64x64. The pre-block's translation is correct and always was.
+
+**The mechanism.** `+0x68` is the pre-block's i32 seed (`ctx+0x38`). The kernel loads it
+(`0xb04c8 s_load_b256 s[16:23], s[0:1], 0x50`, so s22 = `+0x68`) and immediately mixes it
+(`0xb0550 s_mul_i32 s17, s22, 0x9e3779b9` - the golden-ratio constant) into a PCG-style hash feeding
+Box-Muller noise.
+
+`run_var.PTR_FIELDS` lists `0x68`, so `make_kernarg` wrote an **8-byte arena pointer** there. Every
+fixture then cleared only the **low dword**, leaving arena bits in `+0x6c`. The GPU runner rebases
+any in-arena qword, so the kernel ran seeded with the low dword of the device arena address
+(`0x04010000`) while the emulator reference used `0`. Different seed, different noise, ~67% of e4m3
+bytes differing with sign and exponent flips.
+
+The tell was in the GPU line all along: **"7 pointers rebased"** where only 6 are real. With the
+field fully zeroed it reports 6 and the test passes.
+
+**Positive control**: seeding both sides with the value the GPU accidentally used
+(`PRE_FIELDS=0x68=i67174400`) reproduces the failing GPU output **bit for bit**. Seeding both with
+`12345` also passes, so a nonzero seed is fine - only agreement matters.
+
+Fixed in all 14 fixtures that cleared the low dword only. `for off in (0x50, 0x58, 0x60, 0x68):
+struct.pack_into('<Q', ka, off, 0)` then the `<I` scalars.
+
+### What this retires
+
+* **Block 0 is not a defect.** Six hypotheses were raised against it - transcendentals,
+  `MIX_F16_INPUT_FLUSH`, VOP3P `op_sel_hi`, an emulator ALU bug, a cross-workgroup race, a
+  translation defect - and **all six were wrong**. The cause was a corrupted launch parameter.
+* **The "non-determinism above 4 workgroups" retracted earlier is now explained**, not merely
+  withdrawn: the seed *was* the device arena address, which changes between allocations.
+* **The 32-opcode shortlist and the ISA audit are moot.** Both were sound work aimed at a defect
+  that did not exist.
+
+### The lesson worth keeping
+
+Two independent signals pointed at this field hours before it was understood. `statebisect` aborted
+with `differing fields (offset, mine, gpu): 0x68: 0x400000000 vs 0x404010000`, and this file already
+recorded that low-dword-only zeroing "leaves stale high bits that the GPU-side rebaser then shifts".
+Both were filed as harness quirks and neither was carried across to the difftest that was failing.
+**When a harness reports a field mismatch, that is a result about the launch, not an obstacle to the
+run you wanted to do.**
+
+Also: `"7 pointers rebased"` is a fixture assertion nobody was making. Any launch should state how
+many pointers it expects to be rebased and fail when the runner disagrees.
+
+### Registry after the fix
+
+`mean`, `contract2`, `expand`, `qkv`, `conv_res_views`, `ffwd2`, `dec_upsample`, `final_head` and the
+pre-block all PASS at 0. `attention` (214) and `attention2` (156) still fail - those are the
+random-bytes-as-floats fixture defects recorded earlier, unrelated to this.
