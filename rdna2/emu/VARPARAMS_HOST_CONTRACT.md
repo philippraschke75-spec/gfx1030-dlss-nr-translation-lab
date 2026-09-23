@@ -1857,3 +1857,22 @@ Roughly 57 of 960 rows carry data. Tested and refuted here:
 `k_export` has never been validated semantically - the contract flagged that it could not be, until
 the network produced real output. It now does, so it can be. That is the next piece of work, and it
 is the last one between here and an image.
+
+### `k_export` write pattern: rows 0..69 of 960, then nothing
+
+Measured on the destination surface after a full 169-dispatch run at 1707x960:
+
+```
+rows written : 70 of 960, indices 0..69, spacing 1 (contiguous)
+cols written : 1707 of 1707 - every written row is COMPLETE
+```
+
+A hard stop after 70 rows, not a scatter and not a stride error - each row it writes, it writes
+fully. Refuted as causes: the `+0x0c`/`+0x10` dimension order, the format/mode field at `+0x28`
+(swept 0-3), the `+0x38`/`+0x48`/`+0xa0` buffer sizes (1x/2x/4x), and the kernarg being 280 B with
+`grid_dims` at `+0x80` unset - that was a real bug (the metadata says 320 B) and fixing it changed
+nothing.
+
+Still untested: `+0x14`/`+0x18` (from `[rsp+0x308]`/`[rsp+0x310]`, meaning unknown - currently
+passed as H,W), `+0x08` (i32 materialised from `xmm10`), the `+0x38`/`+0x3c` job strengths, and
+whether `off_head` is the right size and format for what `k_export` expects to read.

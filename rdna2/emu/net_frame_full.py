@@ -263,7 +263,7 @@ QKV2, ATTN2 = '_Z6k_qkv29QkvParams', '_Z12k_attention212AttnParams1d'
 DECUP, HEAD = '_Z14k_dec_upsample11DecUpParams', '_Z12k_final_head10HeadParams'
 EXPORT = '_Z8k_export12ExportParams'
 M = {k: K.kernel_meta(k) for k in (FFWD_IV, FFWD2, CONVV, QKV, EXPAND2, CONTRACT2,
-                                   QKV2, ATTN2, DECUP, HEAD)}
+                                   QKV2, ATTN2, DECUP, HEAD, EXPORT)}
 
 
 def ka_for(sym, ptrs, ints=(), grid=(1, 1)):
@@ -356,7 +356,10 @@ if stop in ('full', 'all'):
                                       (0x10, wt['block70_layer0'][0])], [], g), g, 256))
 
     # k_export, fed the network's own output at +0x00 - the first time it has had that
-    ka = bytearray(280)
+    # k_export's kernarg is 320 B (kernel metadata), not 280, and grid_dims lives at +0x80 -
+    # it was never set, so the kernel saw 0 instead of 2 and treated a 2D grid as something
+    # else. It wrote rows 0..69 of 960 and stopped.
+    ka = bytearray(M[EXPORT][1] if EXPORT in M else 320)
     struct.pack_into('<Q', ka, 0x00, BASE + off_head)
     struct.pack_into('<i', ka, 0x08, 0)
     # +0x0c is HEIGHT and +0x10 is WIDTH, not the other way round: the launcher builds the grid
@@ -374,6 +377,7 @@ if stop in ('full', 'all'):
     g_exp = ((SRC_W + 255) // 256, SRC_H)
     struct.pack_into('<III', ka, 0x40, g_exp[0], g_exp[1], 1)
     struct.pack_into('<HHH', ka, 0x4c, 256, 1, 1)
+    struct.pack_into('<H', ka, 0x80, 2)          # grid_dims
     steps.append((EXPORT, bytes(ka), g_exp, 256))
 
 # ---------------------------------------------------------------- dispatch
