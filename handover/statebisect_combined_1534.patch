@@ -1,0 +1,193 @@
+diff --git a/rdna2/emu/statebisect.py b/rdna2/emu/statebisect.py
+index cc05c76..3eda981 100644
+--- a/rdna2/emu/statebisect.py
++++ b/rdna2/emu/statebisect.py
+@@ -81,6 +81,9 @@ def source_vgprs(sym):
+ class Ctx:
+     def __init__(self, key, flags, seed, wg=(0, 0)):
+         self.wg = wg; grid = (wg[0] + 1, wg[1] + 1)
++        self.H = int(os.environ.get('BISECT_H', '8'))     # 8x8 / one workgroup is the minimal
++        self.W = int(os.environ.get('BISECT_W', '8'))     # failing case: mismatches scale linearly
++                                                          # with workgroup count, ~67% either way
+         self.key, self.flags, self.seed, self.grid = key, flags, seed, grid
+         self.sym, lds = D.SYMS[key]; self.lds = lds or D.group_size(self.sym)
+         self.nreg = source_vgprs(self.sym)
+@@ -91,7 +94,29 @@ class Ctx:
+         self.rebuild_kernarg()
+ 
+     def rebuild_kernarg(self):
+-        self.ka = V.make_kernarg(flags=self.flags, grid=self.grid)
++        # flags 0x14 is the PRE-BLOCK launch, which is not make_kernarg's default shape: +0x00 and
++        # +0x30 are null, the float-RGB input lives at +0x40, the scalars at +0x50..0x68 are zero
++        # except +0x50 = 1.0, and +0x70..0x9f are zero. Bisecting with the encoder defaults (and
++        # offx/offy = -4) runs a different launch from the one that fails, so any divergence found
++        # belongs to that other configuration. Layout per chain_import_preblock_real.py.
++        if self.flags == 0x14:
++            self.ka = V.make_kernarg(H=self.H, W=self.W, offy=0, offx=0,
++                                     flags=self.flags, grid=self.grid)
++            struct.pack_into('<Q', self.ka, 0x00, 0)
++            struct.pack_into('<Q', self.ka, 0x30, 0)
++            # Zero the FULL 8-byte spans first. +0x50/+0x58/+0x60/+0x68 are 4-byte scalars, but
++            # PTR_FIELDS treats them as pointers and make_kernarg wrote whole pointers there.
++            # Clearing only the low dword (as difftest_preblock does) leaves stale high bits, which
++            # the GPU-side rebaser then shifts - the kernargs disagree and the run aborts.
++            for off in (0x50, 0x58, 0x60, 0x68):
++                struct.pack_into('<Q', self.ka, off, 0)
++            for off in (0x54, 0x5c, 0x64):
++                struct.pack_into('<I', self.ka, off, 0)
++            struct.pack_into('<f', self.ka, 0x50, 1.0)
++            for off in range(0x70, 0xa0, 8):
++                struct.pack_into('<Q', self.ka, off, 0)
++        else:
++            self.ka = V.make_kernarg(flags=self.flags, grid=self.grid)
+ 
+     def adopt(self, dev):
+         if dev != V.ARENA:
+@@ -99,6 +124,11 @@ class Ctx:
+ 
+     def arena(self):
+         g, KA = V.build(self.seed, self.ka, len(V.PTR_FIELDS))
++        if self.flags == 0x14:                 # the pre-block reads float RGB, not e4m3-shaped bytes
++            IN = V.PTR_FIELDS.index(0x40)
++            rng = np.random.default_rng(self.seed + 5)
++            n = self.H * self.W * 12
++            g.regions[1].arr[IN * V.SLOT:IN * V.SLOT + n] =                 rng.random(self.H * self.W * 3, dtype=np.float32).astype(np.float32).view(np.uint8)
+         g.regions[1].arr[DUMP_OFF:DUMP_OFF + 8 * (self.nreg + 1) * 128] = 0        # dump area starts empty
+         return g, KA
+ 
+@@ -108,6 +138,17 @@ class Ctx:
+         E.run_workgroup(self.prog, g, self.lds, 256, sg, trace=tr, poison=True)
+         return tr
+ 
++    def trace_with_occurrences(self):
++        """Build trace with (address, occurrence_index) tuples to handle repeated visits."""
++        tr = self.trace()
++        addr_count = {}
++        tr_with_occ = []
++        for addr in tr:
++            count = addr_count.get(addr, 0)
++            addr_count[addr] = count + 1
++            tr_with_occ.append((addr, count))
++        return tr, tr_with_occ, addr_count
++
+     def emu_snap(self, addr):
+         g, KA = self.arena(); snap = {}
+         sg = {0: KA & 0xffffffff, 1: KA >> 32, 14: self.wg[0], 15: self.wg[1]}
+@@ -117,7 +158,13 @@ class Ctx:
+     def validate_allocation(self, addr, arena, dev, rebased):
+         self.adopt(dev)
+         if bytes(self.ka) != rebased:
+-            raise RuntimeError('checkpoint rebased kernarg disagrees with emulator')
++            import struct as _s
++            d = [(o, _s.unpack_from('<Q', bytes(self.ka), o)[0], _s.unpack_from('<Q', rebased, o)[0])
++                 for o in range(0, min(len(rebased), len(self.ka)) - 7, 8)
++                 if bytes(self.ka)[o:o + 8] != rebased[o:o + 8]]
++            raise RuntimeError('checkpoint rebased kernarg disagrees with emulator; differing '
++                               'fields (offset, mine, gpu): '
++                               + ', '.join('%#x: %#x vs %#x' % t for t in d[:12]))
+         actual, _ = self.arena()
+         if not np.array_equal(actual.regions[1].arr, arena):
+             raise RuntimeError('checkpoint input arena changed during rebase')
+@@ -145,7 +192,7 @@ class Ctx:
+         if m: self.adopt(int(m[1], 16))
+         return rc, msg, vec, sca
+ 
+-    def compare(self, addr, tag):
++    def compare(self, addr, tag, occ=0):
+         exploratory = os.environ.get('BISECT_HEURISTIC_FILTERS', '0') == '1'
+         ulp = int(os.environ.get('ULP', '0'))
+         if ulp < 0 or (ulp and not exploratory):
+@@ -163,6 +210,23 @@ class Ctx:
+         if reached_gpu != set(snap):
+             return True, 'waves reaching X differ: emu=%s gpu=%s' % (sorted(snap), sorted(reached_gpu))
+         bad = []; self.soft = 0
++
++        # Identify s_getpc_b64 destination SGPRs (benign difference in strict mode)
++        getpc_dests = set()
++        if not exploratory:
++            instr = {a: (op, args) for a, op, args, _ in self.prog}
++            for a, (op, args) in instr.items():
++                if 's_getpc_b64' in op:
++                    # Extract destination SGPR pair from instruction
++                    try:
++                        dest_match = re.search(r's\[(\d+):(\d+)\]', op + ' ' + str(args))
++                        if dest_match:
++                            start_sgpr = int(dest_match.group(1))
++                            getpc_dests.add(start_sgpr)
++                            getpc_dests.add(start_sgpr + 1)
++                    except:
++                        pass
++
+         for w in sorted(snap):
+             V_, S_, scc = snap[w]
+             e = V_[:self.nreg]; g = vec[w, :self.nreg]
+@@ -192,6 +256,9 @@ class Ctx:
+             for i in range(2, 64):
+                 if S_[i] == POISON or S_[i] == gs[i]:
+                     continue
++                # In strict mode, s_getpc_b64 destination SGPRs are benign
++                if not exploratory and i in getpc_dests:
++                    continue
+                 if exploratory and 0x8000 <= S_[i] < 0x140000:      # diagnostic-only pointer heuristic
+                     skip.update((i, i + 1)); self.hi_seen.add(int(gs[i + 1])); continue
+                 if exploratory and S_[i] == 0 and i % 2 == 1 and 0 < int(gs[i]) <= 0xff:
+@@ -207,23 +274,50 @@ if __name__ == '__main__':
+     seed = int(sys.argv[3]) if len(sys.argv) > 3 else 1
+     wg = (int(sys.argv[4]), int(sys.argv[5])) if len(sys.argv) > 5 else (0, 0)
+     ctx = Ctx(key, flags, seed, wg)
+-    tr = ctx.trace(); print('first-visit trace: %d instructions; NREG=%d' % (len(tr), ctx.nreg), flush=True)
+-    bad0, msg = ctx.compare(tr[0], 'p0'); print('probe at entry:', bad0, msg, flush=True)
+-    bad0, msg = ctx.compare(tr[0], 'p0b'); print('probe at entry (arena base adopted):', bad0, msg, flush=True)
++
++    # Build trace with occurrence tracking
++    tr, tr_with_occ, addr_count = ctx.trace_with_occurrences()
++    print('trace with occurrences: %d instructions; NREG=%d; unique addresses: %d' % (len(tr), ctx.nreg, len(addr_count)), flush=True)
++
++    bad0, msg = ctx.compare(tr[0], 'p0', occ=0); print('probe at entry:', bad0, msg, flush=True)
++    bad0, msg = ctx.compare(tr[0], 'p0b', occ=0); print('probe at entry (arena base adopted):', bad0, msg, flush=True)
+     if bad0 is not False: raise SystemExit('entry state inconsistent -> harness problem')
++
+     lo, hi = 0, len(tr) - 1
+-    bad_hi, msg_hi = ctx.compare(tr[hi], 'phi'); print('probe at last:', bad_hi, msg_hi[:240], flush=True)
++    bad_hi, msg_hi = ctx.compare(tr[hi], 'phi', occ=addr_count[tr[hi]]-1); print('probe at last:', bad_hi, msg_hi[:240], flush=True)
+     if bad_hi is None: raise SystemExit('GPU/checkpoint failure: ' + msg_hi)
+-    if bad_hi is False: raise SystemExit('no divergence visible at the last visited instruction')
++    if bad_hi is False:
++        # No divergence at last instruction - check repeated visits
++        print('No divergence at final instruction. Searching repeated PC visits...')
++        found_div = False
++        for addr in sorted(set(tr)):
++            occ_max = addr_count[addr]
++            if occ_max > 1:
++                for occ in range(occ_max):
++                    b, m = ctx.compare(addr, 'p_%x_occ%d' % (addr, occ), occ=occ)
++                    if b is True:
++                        print('DIVERGENCE at repeated visit: addr=%x occurrence=%d: %s' % (addr, occ, m[:200]))
++                        found_div = True
++                        break
++            if found_div:
++                break
++        if not found_div:
++            raise SystemExit('no divergence visible at any visited instruction (searched %d unique addresses, %d with repeats)' % (len(addr_count), sum(1 for c in addr_count.values() if c > 1)))
++
++    # Binary search over (trace_index, occurrence) space
+     while hi - lo > 1:
+         mid = (lo + hi) // 2
+-        b, m = ctx.compare(tr[mid], 'p%d' % mid)
+-        print('trace[%d]=%x -> %s  %s' % (mid, tr[mid], 'DIVERGED' if b else 'match', (m or '')[:200]), flush=True)
++        addr_mid = tr[mid]
++        occ_mid = tr_with_occ[mid][1]
++        b, m = ctx.compare(addr_mid, 'p%d' % mid, occ=occ_mid)
++        print('trace[%d]=%x occ=%d -> %s  %s' % (mid, addr_mid, occ_mid, 'DIVERGED' if b else 'match', (m or '')[:200]), flush=True)
+         if b is None: raise SystemExit('GPU failure during bisect: ' + m)
+         if b: hi = mid
+         else: lo = mid
+-    print('LAST MATCH trace[%d]=%x ; FIRST DIVERGENCE trace[%d]=%x' % (lo, tr[lo], hi, tr[hi]))
+-    print('divergence detail:', ctx.compare(tr[hi], 'pfinal')[1])
++
++    print('LAST MATCH trace[%d]=%x occ=%d ; FIRST DIVERGENCE trace[%d]=%x occ=%d' % (lo, tr[lo], tr_with_occ[lo][1], hi, tr[hi], tr_with_occ[hi][1]))
++    print('divergence detail:', ctx.compare(tr[hi], 'pfinal', occ=tr_with_occ[hi][1])[1])
+     instr = {a: (op, args) for a, op, args, _ in ctx.prog}
+     print('instruction BEFORE the divergence (executed last, result differs):', hex(tr[lo]), instr[tr[lo]])
+     print('instruction at divergence point:', hex(tr[hi]), instr[tr[hi]])
++
