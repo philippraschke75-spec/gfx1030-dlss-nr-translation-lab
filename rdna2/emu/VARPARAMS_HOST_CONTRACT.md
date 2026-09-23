@@ -1600,7 +1600,35 @@ and `v_cmpx_o_f32` (writes EXEC) are the least-travelled paths and the ones wort
 
 **Minimal repro**: `difftest_preblock.py 1 8 8` - 7,268 of 10,690 bytes, one workgroup.
 
-## Block 0 is non-deterministic on hardware above 4 workgroups
+## RETRACTED: "Block 0 is non-deterministic on hardware above 4 workgroups"
+
+**This section is wrong. Do not act on it.** The claim came from `preblock_response.py`, a harness
+written for the purpose, and does not reproduce in `difftest_preblock.py`, which is the verified
+path. Three consecutive runs at the same 64 workgroups:
+
+```
+run1  grid=[8,8]  mismatches=457729  sha=b35200d183dac9ede0332fa1
+run2  grid=[8,8]  mismatches=457729  sha=b35200d183dac9ede0332fa1
+run3  grid=[8,8]  mismatches=457729  sha=b35200d183dac9ede0332fa1
+```
+
+Byte-identical output. **The pre-block is deterministic on hardware**, and there is no race, no
+missing synchronisation protocol, and nothing here that blocks the full-resolution path. The
+contract had already established that `k_flag_set`/`k_flag_wait` are absent from the inference path;
+that stands, and proposing them again was a failure to read this file before theorising.
+
+Three candidate explanations for the harness defect were tested and none of them is it: all pointer
+fields sharing one scratch buffer (fixed, still non-reproducible), buffer size (raised to 4 MiB,
+unchanged), and arena contents (zeros vs e4m3-shaped random, unchanged). The remaining difference is
+the runner - `net_run.exe` against `difftest_var.gpu` - and it has not been chased down.
+
+**Rule this cost real time to relearn:** when an ad-hoc harness disagrees with the verified one,
+the harness is the suspect. Reproduce a finding in `difftest_*` before writing it down as a property
+of the hardware.
+
+The original text follows, retained only so the reasoning can be audited.
+
+## (retracted) Block 0 is non-deterministic on hardware above 4 workgroups
 
 `preblock_response.py` asks a question the emulator cannot: run the real kernel on the GPU several
 times with byte-identical input and see whether it agrees with **itself**. It does not.
@@ -1645,7 +1673,7 @@ semantics (all correct against the ISA).
 The `op_sel_hi` experiment is still worth knowing: a 3,400-mismatch swing says `v_fma_mix_f32` is on
 the critical path even though that particular default is not the bug.
 
-### The race is the pre-block's alone
+### (retracted with the above) The race is the pre-block's alone
 
 Same harness, same 64 workgroups, same arena - only the variant and flags differ:
 
