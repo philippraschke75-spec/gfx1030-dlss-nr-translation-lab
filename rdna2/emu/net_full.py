@@ -185,7 +185,10 @@ def plan_full(act_base, w_base, weight_map):
 
     # ===== BLOCK 0: Pre-block =====
     checkpoint_0_start = len(out)
-    sym, lds = D.SYMS['32_0']
+    # The pre-block is k_swin_var<32,TRUE> ('32_1'), not the <32,false> the encoder stages use.
+    # Different template instantiation, different LDS - running '32_0' here faults on a ds_load
+    # past the end. Both GPU-verified pre-block scripts use '32_1'.
+    sym, lds = D.SYMS['32_1']
     lds = lds or D.group_size(sym)
     h = w = H0
     # The pre-block is k_swin_var<32,true> run under the PRE-BLOCK convention, not the encoder one:
@@ -197,6 +200,9 @@ def plan_full(act_base, w_base, weight_map):
     weight_name = f'block0'
     w_slot = weight_slot_lookup.get(weight_name, w_base)
     struct.pack_into('<Q', ka, 0x00, 0)                     # null, not the input
+    struct.pack_into('<Q', ka, 0x30, 0)                     # null too - make_kernarg defaults it
+                                                            # to a pointer, which the pre-block is
+                                                            # not launched with
     struct.pack_into('<Q', ka, 0x08, S(enc_pp_0))           # output
     struct.pack_into('<Q', ka, 0x10, S(w_slot))             # block0 weights
     struct.pack_into('<Q', ka, 0x40, S(enc_in))             # float-RGB input, 12 B/pixel
