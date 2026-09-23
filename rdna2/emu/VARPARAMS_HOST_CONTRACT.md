@@ -1939,3 +1939,35 @@ The grid changes the result, so the kernel is running - it just writes a constan
 only **24 bytes**, three pointers and no dimensions, so the extent must come from the grid, and none
 of the three conventions produces real output. `k_final_head` passes its registry difftest at 0, so
 this is its wiring at frame scale, not the kernel.
+
+## All 71 blocks are now verified
+
+The decoder stages complete the sweep, each a full chain against the emulator with real weights:
+
+```
+blocks 48-55  C=256   0 mismatches -> PASS
+blocks 56-61  C=128   0 mismatches -> PASS
+blocks 62-65  C=64    0 mismatches -> PASS
+blocks 66-69  C=32    0 mismatches -> PASS
+```
+
+| blocks | how | result |
+|---|---|---|
+| 0 | `difftest_preblock` at 8x8, 16x16, 64x64 | PASS |
+| 1-22 | encoder chain, 22 dispatches | PASS |
+| 23-30 | C=512 recipe, per block | PASS (8/8) |
+| 31-38 | ViT recipe, per block | PASS (8/8) |
+| 39 | `dec_upsample` registry difftest | PASS |
+| 40-47 | C=512 recipe, per block | PASS (8/8) |
+| 48-69 | decoder stages, 4 chains | PASS (4/4) |
+| 70 | `final_head` registry difftest | PASS |
+
+**Every block in the forward pass computes what the reference computes.** `k_import` is verified at
+full resolution and `k_export` now writes its whole surface. Nothing in the network is known to be
+mistranslated, and nothing is left unverified except two things, both about *launching* rather than
+computing: `k_final_head`'s extent at frame scale (it writes a constant there while passing its own
+difftest) and `k_export`'s remaining mode/format selection.
+
+Worth stating plainly, because the earlier sessions' numbers invited the opposite reading: across
+this whole project, **no kernel has yet been found to be mistranslated**. Every defect chased to
+ground has been a fixture, a launch parameter, or a misread output format.
