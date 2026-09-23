@@ -2044,3 +2044,35 @@ not in the chain.
 
 **Read the schedule table before wiring a runner.** All four errors were avoidable from a table that
 had been in this file for a day.
+
+## Grid conventions are per kernel: the translation drops `workgroup_id_y` for some
+
+The translated gfx1030 kernels do **not** share a grid convention. Some disable
+`.amdhsa_system_sgpr_workgroup_id_y` and re-materialise the original's `s15` from `s2`, so the
+original's y index arrives in the hardware **X** id. Those kernels are 1-D, and a grid in Y gives
+every workgroup the same index - they all write the same place.
+
+| kernel | `workgroup_id_y` | extent |
+|---|---|---|
+| `k_final_head`, `k_ffwd_inpview`, `k_conv_res_views`, `k_dec_upsample`, `k_repack` | **0** | 1-D, in X |
+| `k_ffwd2`, `k_qkv_attn`, `k_contract2`, `k_qkv2`, `k_attention2`, `k_expand2`, `k_swin_var`, `k_import`, `k_export`, `k_pre_block`, `k_post_block` | 1 | 2-D |
+
+**Within one C=512 block the kernels differ**: `k_ffwd_inpview` and `k_conv_res_views` are 1-D while
+`k_ffwd2` and `k_qkv_attn` are 2-D. At the difftest's 8x8 everything fits in one workgroup and this
+is invisible; at frame scale it is the difference between writing the buffer and writing 1/1000th of
+it. `net_frame_full.py` now reads the flag per kernel via `wants_2d()` rather than assuming.
+
+Effect on the C=512 buffers at 1707x960: **0.13% -> 48.1% of bytes written**. `k_final_head` with a
+1-D grid of `(ceil(out_bytes/16384), 1)` = (1601, 1) goes from 0.44% to 99.999%, and on varying input
+produces 255 distinct byte values instead of 2.
+
+### Still constant, and why
+
+Coverage is fixed; content is not. Every mid-network buffer still holds **2 distinct byte values**.
+The C=512 stage reads the last encoder pool, which is healthy (+/-448, ~25% nonzero), but it reads it
+at C=256 / 120x213 while running at 60x106. Nothing converts between them, because the kernel that
+does is missing: the schedule's **enc -> mid** phase is `k_repack, k_final_head`, and the runner has
+neither. The same applies at **mid -> dec** (`k_repack, k_dec_upsample, launcher B x4`).
+
+So the grid work was necessary but not sufficient. The remaining gap is the four missing transition
+and epilogue dispatches, not the grids.
