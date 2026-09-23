@@ -21,7 +21,10 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gfx11emu as E, run_emu as R, run_var as V, difftest_var as D
 
-SYM, _lds = D.SYMS['32_0']
+# argv[2] picks the stage's channel count, so decoder stages (C=256/128/64/32) can be run
+# through the same chain harness as the encoder's.
+KEY = sys.argv[2] if len(sys.argv) > 2 else '32_0'
+SYM, _lds = D.SYMS[KEY]
 LDS = _lds or D.group_size(SYM)
 H = W = 16
 MODES = [(0, 0), (-4, -4), (-4, 0), (0, -4)]          # table 0x180066410
