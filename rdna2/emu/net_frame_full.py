@@ -317,6 +317,9 @@ def ka_for(sym, ptrs, ints=(), grid=(1, 1)):
     return bytes(ka)
 
 
+C512_PROBE = []          # (label, buffer offset) captured per dispatch when C512_TRACE=1
+
+
 def c512_stage(blocks, work, src_in):
     # One C=512 attention block is 5 dispatches; recipe per VARPARAMS_HOST_CONTRACT.md.
     g = (1, 1)
@@ -329,18 +332,30 @@ def c512_stage(blocks, work, src_in):
         gq = grid_for(QKV, N512, (H5, W5))
         steps.append((FFWD_IV, ka_for(FFWD_IV, [(0x00, a), (0x08, work[1]), (0x10, L(0))],
                                       [(0x18, '<ii', (H5, W5))], g1), g1, 256))
+        if os.environ.get('C512_TRACE') == '1' and bi == 0:
+            C512_PROBE.append(('1 ffwd_inpview -> w1', work[1], len(steps)))
         steps.append((FFWD2, ka_for(FFWD2, [(0x00, work[0]), (0x08, a), (0x10, work[1]),
                                             (0x18, L(1))],
                                     [(0x20, '<iii', (H5, W5, 4))], g2), g2, 256))
+        if os.environ.get('C512_TRACE') == '1' and bi == 0:
+            C512_PROBE.append(('2 ffwd2        -> w1', work[1], len(steps)))
         steps.append((CONVV, ka_for(CONVV, [(0x00, work[1]), (0x08, a), (0x10, work[0]),
                                             (0x18, work[2]), (0x28, L(2))],
                                     [(0x20, '<i', (0,)), (0x30, '<ii', (H5, W5))], gc), gc, 256))
+        if os.environ.get('C512_TRACE') == '1' and bi == 0:
+            C512_PROBE.append(('3 conv_res_1   -> w2', work[2], len(steps)))
         steps.append((QKV, ka_for(QKV, [(0x00, work[2]), (0x08, work[3]), (0x10, L(3))],
                                   [(0x18, '<ii', (H5, W5)), (0x20, '<ii', (0, 0))], gq), gq, 256))
+        if os.environ.get('C512_TRACE') == '1' and bi == 0:
+            C512_PROBE.append(('4 qkv_attn     -> w3', work[3], len(steps)))
         steps.append((CONVV, ka_for(CONVV, [(0x00, work[3]), (0x10, work[2]), (0x18, work[0]),
                                             (0x28, L(2))],
                                     [(0x20, '<i', (0,)), (0x30, '<ii', (H5, W5)),
                                      (0x40, '<ii', (H5, W5))], gc), gc, 256))
+        if os.environ.get('C512_TRACE') == '1' and bi == 0:
+            C512_PROBE.append(('5 conv_res_2   -> w0', work[0], len(steps)))
+        if os.environ.get('C512_TRACE') == '2':
+            C512_PROBE.append(('after block %-3d-> w0' % blk, work[0], len(steps)))
 
 
 if stop in ('full', 'all'):
@@ -375,10 +390,15 @@ if stop in ('full', 'all'):
                                                     (0x18, L(4))],
                                         [(0x20, '<ii', (H5, W5)), (0x28, '<i', (4,))], g), g, 256))
 
+        if os.environ.get('C512_TRACE') == '2':
+            C512_PROBE.append(('after ViT %-5d -> BIN' % blk, BIN_, len(steps)))
+
     # block 39: the real k_dec_upsample, not the k_ffwd_inpview stand-in net_full.py uses
     steps.append((DECUP, ka_for(DECUP, [(0x00, BIN_), (0x08, off_b39), (0x10, c512_2[0]),
                                         (0x18, wt['block39'][0]), (0x20, off_spare)], [], g), g, 256))
 
+    if os.environ.get('C512_TRACE') == '2':
+        C512_PROBE.append(('after block39 -> b39', off_b39, len(steps)))
     c512_stage(range(40, 48), c512_2, off_b39)
 
     # decoder blocks 48-69, the encoder mirrored
@@ -461,6 +481,42 @@ if stop in ('full', 'all'):
     steps.append((EXPORT, bytes(ka), g_exp, 256))
 
 # ---------------------------------------------------------------- dispatch
+def _run_prefix(nsteps):
+    """Dispatch only the first nsteps and return the resulting arena."""
+    b = b''; ln = []
+    for sym, k, grid, thr in steps[:nsteps]:
+        o = len(b); b += k
+        ln.append('%s|%s|%d|%d|%d|%d|%d' % (MOD(sym), sym, o, len(k), grid[0], grid[1], thr))
+    (OUT / 'tm.txt').write_text(chr(10).join(ln) + chr(10))
+    (OUT / 'tk.bin').write_bytes(b)
+    (OUT / 'ta.bin').write_bytes(arena.tobytes())
+    rr = subprocess.run([str(RUN), str(OUT / 'tm.txt'), str(OUT / 'tk.bin'),
+                         str(OUT / 'ta.bin'), '%x' % BASE], capture_output=True, text=True, timeout=1800)
+    if rr.returncode != 0:
+        return None
+    return np.fromfile(OUT / 'ta.bin', np.uint8)
+
+
+if os.environ.get('C512_TRACE') in ('1', '2'):
+    # Measure each of block 23's five dispatches in turn. The stage turns 253 distinct byte values
+    # into 2; this says which dispatch does it, instead of inferring from the stage's final state.
+    print()
+    print('=== C=512 block 23, per dispatch ===')
+    base_n = C512_PROBE[0][2] - 1 if C512_PROBE else 0
+    a0 = _run_prefix(base_n)
+    if a0 is not None:
+        d0 = a0[c512_1[0]:c512_1[0] + N512]
+        print('  0 before stage  -> w0  nonzero=%6.2f%%  distinct=%3d'
+              % (100 * float((d0 != 0).mean()), len(np.unique(d0))))
+    for label, buf, nst in C512_PROBE:
+        aa = _run_prefix(nst)
+        if aa is None:
+            print('  %s  GPU FAIL' % label); continue
+        dd = aa[buf:buf + N512]
+        print('  %s  nonzero=%6.2f%%  distinct=%3d'
+              % (label, 100 * float((dd != 0).mean()), len(np.unique(dd))))
+    raise SystemExit(0)
+
 blob = b''; lines = []
 for sym, k, grid, thr in steps:
     o = len(blob); blob += k

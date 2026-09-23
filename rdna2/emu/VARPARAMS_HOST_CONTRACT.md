@@ -2099,3 +2099,34 @@ mid-network is constant".
 Caveat on the dimension sweep: the first attempt measured the *downstream* buffer and reported all
 four candidates as identical. They are not - measuring `k_repack`'s own output separates them.
 Measure the output of the thing you are changing.
+
+## The collapse is at block 25, and `c512_stage` is not at fault
+
+Probing after every dispatch (`C512_TRACE=1`) and after every block (`C512_TRACE=2`) at 1707x960:
+
+```
+0 before stage       -> w0  distinct 242      (k_repack output, healthy)
+1 ffwd_inpview       -> w1  distinct 254
+2 ffwd2              -> w1  distinct 255
+3 conv_res_1         -> w2  distinct 255
+4 qkv_attn           -> w3  distinct 246
+5 conv_res_2         -> w0  distinct 246      block 23 is entirely healthy
+
+after block 23       -> w0  distinct 246
+after block 24       -> w0  distinct 246
+after block 25       -> w0  distinct   2      <- the collapse
+after blocks 26..30, the whole ViT, block 39  distinct 2, then 1
+```
+
+**Blocks 23 and 24 work; block 25 destroys the data.** All eight share the recipe and their weight
+files are byte-identical in size (L0 524288, L1 263168, L2 917568, L3 263168), so it is not a weight
+or recipe difference. Two blocks succeeding and the third failing on the same code path points at
+accumulation across blocks rather than anything block 25 does differently.
+
+`k_dec_upsample` (block 39) writes **nothing at all** (0% nonzero), which is a second, independent
+defect; the second C=512 stage then starts from an empty buffer.
+
+**Correction to the previous section:** it said the collapse happens "inside `c512_stage`". That was
+inferred from the final state of the `c512_1` buffers, which blocks 24-30 and the ViT stage reuse and
+overwrite. Measured per dispatch, `c512_stage` is clean for block 23. Do not read a shared buffer's
+end state as the output of the first thing that wrote it.
