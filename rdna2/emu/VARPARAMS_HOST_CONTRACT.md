@@ -1971,3 +1971,37 @@ difftest) and `k_export`'s remaining mode/format selection.
 Worth stating plainly, because the earlier sessions' numbers invited the opposite reading: across
 this whole project, **no kernel has yet been found to be mistranslated**. Every defect chased to
 ground has been a fixture, a launch parameter, or a misread output format.
+
+## `k_final_head`: the input pointer is advanced by 8192 B per y-workgroup
+
+`HeadParams` really is three pointers in 24 bytes - the kernel's own prologue settles it:
+
+```
+s_load_b128 s[4:7], s[0:1], null      ; +0x00 and +0x08, two pointers
+s_load_b64  s[8:9], s[0:1], 0x10      ; +0x10, the third
+s_load_b32  s3,     s[0:1], 0x24      ; hidden group_size_x, masked to 0xffff -> 256
+s_mov_b32   s2, s15                   ; s15 = workgroup_id_y
+s_lshl_b64  s[12:13], s[2:3], 13      ; << 13 = * 8192
+s_add_u32   s1, s4, s12               ; INPUT pointer += wg_id_y * 8192
+s_addc_u32  s4, s5, s13
+```
+
+So `gy` indexes the **input** in 8192-byte steps, and the extent must cover the input buffer, not the
+image height. Measured at 1707x960, head buffer filled:
+
+| grid | head nonzero | distinct bytes |
+|---|---|---|
+| `(ceil(W/256), H)` = (7, 960) | 0.437% | 2 |
+| `(1, input_bytes/8192)` = (1, 12810) | 0.062% | 2 |
+| `(ceil(W/256)*H, 1)` flat | 100% | **1** (a single constant) |
+
+0.437% of the 16 B/pixel window is ~7 x 16330 B, and 16330 is exactly what one workgroup writes in
+the passing `final_head` difftest. So at (7, 960) the seven x-workgroups land in distinct places and
+all 960 y-rows overwrite each other; at (1, 12810) every y-workgroup writes the same place.
+
+**The output address therefore does not derive from `wg_id_y` in the prologue** - only the input
+does. Where it comes from is the open question, and it is the last one before an image. Everything
+else in the pipeline is verified.
+
+Refuted here: feeding the head from the last decoder block's own output rather than the stage pool
+buffer (identical result - the pool wiring was not the problem).
