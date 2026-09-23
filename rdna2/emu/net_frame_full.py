@@ -216,6 +216,7 @@ struct.pack_into('<Q', ka, 0xa0, BASE + off_scratch)
 struct.pack_into('<III', ka, 0xA8, g_pre[0], g_pre[1], 1)
 struct.pack_into('<HHH', ka, 0xB4, 256, 1, 1)
 steps.append((PRE_SYM, bytes(ka), g_pre, 256))
+DET_PTS = [('k_import RGB', off_rgb, SRC_H * SRC_W * 12, len(steps) - 1), ('block0 out (pre-block)', off_a, S1, len(steps))]
 
 # ---------------------------------------------------------------- encoder blocks 1-22
 # Ordinary encoder convention this time: input at +0x00, flags bit0 = first-of-stage,
@@ -262,6 +263,7 @@ if stop != 'preblock':
             steps.append((sym, enc_kernarg(h, w, oy, ox, flags, grid, src, dst, wgt, pool),
                           grid, 256))
         stage_in = pool                             # the pooled output is the next stage's input
+        DET_PTS.append(('enc stage %d pool' % (si + 1), pool, stage_geom[si][3], len(steps)))
 
 # ---------------------------------------------------------------- C=512, ViT, 39, decoder, head
 FFWD_IV, FFWD2 = '_Z14k_ffwd_inpview12FfwdPlParams', '_Z7k_ffwd211Ffwd2Params'
@@ -389,6 +391,7 @@ if stop in ('full', 'all'):
     g_rp = grid_for(REPACK, N512, per_wg=int(os.environ.get('REPACK_WG', '16384')))
     steps.append((REPACK, ka_for(REPACK, [(0x00, stage_buf[3][2]), (0x08, c512_1[0])],
                                  [(0x10, '<iiii', tuple(_rp))], g_rp), g_rp, 256))
+    REPACK_END = len(steps)
     if os.environ.get('STOP_AFTER_REPACK') != '1':
         c512_stage(range(23, 31), c512_1, c512_1[0])
 
@@ -510,10 +513,20 @@ if stop in ('full', 'all'):
     steps.append((EXPORT, bytes(ka), g_exp, 256))
 
 # ---------------------------------------------------------------- dispatch
+# FIX_IN_LOAD=<file>: start at the C=512 stage from a SAVED k_repack output (steps before it are skipped), so the
+# stage can be tested with an input that is identical in every run. FIX_IN_SAVE=<file> writes that input.
+SKIP = 0
+if os.environ.get('FIX_IN_LOAD') and stop in ('full', 'all'):
+    SKIP = REPACK_END
+    _fx = np.fromfile(os.environ['FIX_IN_LOAD'], np.uint8)
+    assert _fx.size == N512, (_fx.size, N512)
+    arena[c512_1[0]:c512_1[0] + N512] = _fx
+
+
 def _run_prefix(nsteps):
     """Dispatch only the first nsteps and return the resulting arena."""
     b = b''; ln = []
-    for sym, k, grid, thr in steps[:nsteps]:
+    for sym, k, grid, thr in steps[SKIP:nsteps]:
         o = len(b); b += k
         ln.append('%s|%s|%d|%d|%d|%d|%d' % (MOD(sym), sym, o, len(k), grid[0], grid[1], thr))
     (OUT / 'tm.txt').write_text(chr(10).join(ln) + chr(10))
@@ -525,6 +538,27 @@ def _run_prefix(nsteps):
         return None
     return np.fromfile(OUT / 'ta.bin', np.uint8)
 
+
+if os.environ.get('DET_TEST'):
+    # Determinism probe: run the SAME prefix DET_TEST times and hash the buffer each dispatch produced. The first
+    # label whose hash differs between identical runs is where the non-determinism enters.
+    import hashlib
+    _n = int(os.environ['DET_TEST'])
+    _pts = (DET_PTS if os.environ.get('DET_ENC', '1') == '1' else []) + [('k_repack -> c512_1[0]', c512_1[0], N512, REPACK_END)] + [(l, b, N512, n) for l, b, n in C512_PROBE[:5]]      # block 23's five dispatches
+    print()
+    print('=== determinism: %d identical runs per point ===' % _n)
+    for label, buf, size, nst in _pts:
+        row = []
+        for _ in range(_n):
+            aa = _run_prefix(nst)
+            if aa is None:
+                row.append('FAIL'); continue
+            dd = aa[buf:buf + size]
+            if os.environ.get('FIX_IN_SAVE') and label.startswith('k_repack') and not Path(os.environ['FIX_IN_SAVE']).exists():
+                dd.tofile(os.environ['FIX_IN_SAVE'])
+            row.append('%s d=%d nan=%.2f%%' % (hashlib.sha1(dd.tobytes()).hexdigest()[:8], len(np.unique(dd)), 100.0 * float((dd == 0x7f).mean())))
+        print('  %-30s %s   %s' % (label, 'SAME' if len(set(r.split()[0] for r in row)) == 1 else 'DIFFERS', ' | '.join(row)), flush=True)
+    raise SystemExit(0)
 
 if os.environ.get('C512_TRACE') in ('1', '2'):
     # Measure each of block 23's five dispatches in turn. The stage turns 253 distinct byte values
@@ -557,7 +591,7 @@ if os.environ.get('C512_TRACE') in ('1', '2'):
     raise SystemExit(0)
 
 blob = b''; lines = []
-for sym, k, grid, thr in steps:
+for sym, k, grid, thr in steps[SKIP:]:
     o = len(blob); blob += k
     lines.append('%s|%s|%d|%d|%d|%d|%d' % (MOD(sym), sym, o, len(k), grid[0], grid[1], thr))
 (OUT / 'manifest.txt').write_text('\n'.join(lines) + '\n')
