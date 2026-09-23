@@ -366,7 +366,9 @@ def c512_stage(blocks, work, src_in):
         if os.environ.get('C512_TRACE') == '1' and bi == 0:
             C512_PROBE.append(('3 conv_res_1   -> w2', work[2], len(steps)))
         steps.append((QKV, ka_for(QKV, [(0x00, work[2]), (0x08, work[3]), (0x10, L(W5L[3]))],
-                                  [(0x18, '<ii', (H5, W5)), (0x20, '<ii', (0, 0))], gq), gq, 256))
+                                  [(0x18, '<ii', (H5, W5)),
+                                   (0x20, '<ii', ENC_MODES[bi % 4] if os.environ.get('C512_SHIFT') == '1'
+                                    else (0, 0))], gq), gq, 256))
         if os.environ.get('C512_TRACE') == '1' and bi == 0:
             C512_PROBE.append(('4 qkv_attn     -> w3', work[3], len(steps)))
         steps.append((CONVV, ka_for(CONVV, [(0x00, work[3]), (0x10, work[2]), (0x18, work[0]),

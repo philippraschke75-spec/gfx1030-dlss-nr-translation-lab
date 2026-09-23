@@ -2252,3 +2252,50 @@ its denominators zero. Candidates, none yet tested:
 * the weight at `+0x10` - `blockN_layer3` follows `net_full.py`, but that mapping has never been
   checked against the launcher for this stage.
 * the stage geometry itself, which is inferred as `SRC>>4` and not read from the `ctx+0x190` tuple.
+
+## RETRACTION: the C=512 chain is still non-deterministic, and several results above are void
+
+Four identical runs of the identical command, probing the same dispatch:
+
+```
+run1  distinct  94
+run2  distinct 245
+run3  distinct 244
+run4  distinct   2
+```
+
+The `work[0]` fix earlier in this file made three consecutive runs agree at 246 and was recorded as
+having made the chain deterministic. **It did not.** Three agreeing runs was luck. The fix itself is
+still correct - `k_ffwd2` genuinely read a buffer nothing had written - but it did not close the
+only channel.
+
+**Everything derived from comparing runs after that point is void**, and should not be relied on:
+
+* the window-tiling sweep (60x106 / 56x104 / 64x112 / 48x96)
+* the `k_repack` dimension sweep (256 / 512 / 2048)
+* the shifted-window-origin test (`C512_SHIFT`)
+* "block 25 is where it collapses", and the later "block 24", and the NaN percentages attached to
+  each
+
+All of those compared two runs and drew a conclusion from the difference. With a non-reproducible
+chain that is measuring noise. The giveaway was visible and I missed it: `ENC_MODES[0]` is exactly
+`(0, 0)`, so the `C512_SHIFT=0` and `C512_SHIFT=1` runs were bit-identical for block 23 and still
+produced 243 and 2.
+
+### What this means
+
+A GPU-only run, dispatches strictly serialised by `net_run`, identical input bytes, and the output
+still varies. That requires either a race between workgroups **within** one dispatch, or a read of
+memory that is not initialised deterministically. The earlier retraction of the non-determinism
+claim (made on the strength of `difftest_preblock` being deterministic) was about block 0 at 64
+workgroups and says nothing about these kernels at thousands.
+
+**Establish determinism before measuring anything else in this chain.** Any parameter study here is
+worthless until the same command twice gives the same bytes.
+
+### What is NOT affected
+
+These come from single measurements, code reading or emulator difftests, not from run comparisons:
+all 71 blocks verified; block 0's `+0x68` seed; `k_export`'s `+0x14` byte pitch and its 960/960 rows;
+the per-kernel grid convention from `.amdhsa_system_sgpr_workgroup_id_y`; `k_ffwd2`'s unwritten-buffer
+read; `k_qkv_attn`'s 138 IEEE divisions; the four missing schedule dispatches.
