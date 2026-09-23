@@ -2194,3 +2194,33 @@ kernel producing ~1% NaN.
 Working hypothesis, under test: the stage geometry is `1707>>4, 960>>4` = 106x60, neither a multiple
 of the 8-wide attention window. The grid `(ceil(106/8), ceil(60/8))` = (14, 8) therefore covers
 112x64, and a softmax over an empty overhanging window is 0/0.
+
+### Two hypotheses for the `k_qkv_attn` NaN, both refuted
+
+**Window tiling.** `106x60` is not a multiple of the 8-wide attention window, so the grid covers
+`112x64` and an empty overhanging window would softmax to 0/0. Tested at four geometries:
+
+```
+60x106  (does not tile)  NaN 0.99%
+56x104  (tiles exactly)  NaN 1.10%
+64x112  (tiles exactly)  NaN 0.89%
+48x96   (tiles exactly)  NaN 1.39%
+```
+
+Exact tiling does not help and the smallest geometry is worst. Not the cause.
+
+**Sparse input.** The stage input is only 3.95% non-zero, which would leave whole attention windows
+empty. Raising `k_repack`'s third parameter to widen its output makes things **worse**:
+
+```
+repack dim 256   input  3.95%  ->  qkv output 245 distinct, NaN  0.99%
+repack dim 512   input  7.90%  ->  qkv output   2 distinct, NaN 48.15%
+repack dim 2048  input 31.60%  ->  qkv output   2 distinct, NaN 48.15%
+```
+
+So sparsity is not the driver either, and `256` is the best value found rather than an obviously
+correct one.
+
+**Method note.** Both of these were parameter sweeps rather than reasoning from the kernel. The
+useful next step is to read `k_qkv_attn`'s disassembly and find the division that can produce NaN,
+then work out which input makes its denominator zero - not to sweep further.
