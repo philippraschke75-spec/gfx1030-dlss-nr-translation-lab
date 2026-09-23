@@ -1432,3 +1432,41 @@ repeat visits. Two further latent bugs in `statebisect.py` were fixed to get thi
 read from `coverage.json`, which only ever holds the last-built kernel (ported from
 `statebisect_attn.py`), and SCC compared without honouring its poison sentinel of 2, which made every
 run abort at entry as a "harness problem".
+
+## The shape of block 0's divergence: not layout, not lanes, not rounding
+
+`difftest_preblock`'s 28,825 stayed **byte-identical** across four separate emulator ALU fixes
+(`v_lshlrev_b16`, `v_ashrrev_i16`, and then `v_mul_f16`, `v_add_f16`, `v_fmac_f16`). A count that
+never moves under arithmetic changes is telling you the question is wrong, so
+`preblock_diffshape.py` asks about shape instead of magnitude. At 16x16, seed 1, output slot `+0x8`:
+
+```
+emulator wrote 8162 bytes | gpu wrote 8163 | both untouched 8194 | differing 5348
+differ but only one side wrote : 55
+byte-value histogram L1 distance : 10.3%
+best byte shift 64 -> 1.8% match     aligned -> 67.4% match
+|delta| as u16 words:  <=1 8.0%   <=2 10.9%   <=4 14.0%   <=16 16.9%   <=256 40.8%
+per-lane share of differing blocks: 25-50% across all 32 lanes, no structure
+```
+
+**Eliminated by this:**
+
+* *Layout or addressing permutation* - a shift fits far worse than alignment (1.8% vs 67.4%), and
+  both sides write the same byte count to the same region.
+* *A lane or wave subset* - every one of the 32 two-byte lanes differs in 25-50% of dirty blocks,
+  evenly. No wave is clean and no wave is wholly wrong.
+* *Rounding or 1-ULP noise* - only 8% of differing words are within 1 ULP and 59% are further apart
+  than 256. This is not the `k_attention` story.
+
+**Trap worth recording**: the per-block view first appeared to show "128 blocks fully equal, 128
+partly differing", which reads like an alternating pattern with half the work correct. It is not.
+The clean half is the second half of the slot, which **neither side wrote**. It is equal because it
+is untouched. Any "share of blocks equal" metric must be taken together with the untouched count, or
+it flatters the result exactly where the result is emptiest.
+
+**Where that leaves it.** Differences start at the very first written byte, yet `statebisect` in
+strict mode finds matching registers all the way through the first-visit trace (10,449 instructions)
+before stopping on a benign `s_getpc_b64`. Both can only be true if the divergence happens on
+**repeat visits** - later iterations of `k_swin_var`'s loops, which the bisection never inspects.
+That is the one hypothesis still standing, and extending the bisection to an (address, occurrence)
+pair is what would confirm it.

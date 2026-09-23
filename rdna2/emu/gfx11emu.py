@@ -881,7 +881,9 @@ class Exec:
             f = F[b]
             return lambda w: w.wv(P[0], finish_f32(f(w.rf(P[1]), w.rf(P[2]))))
         if b == 'v_mul_f16':
-            return lambda w: w.wv(P[0], hbits(w.rh(P[1]) * w.rh(P[2])))
+            # 16-bit result: D[15:0] written, D[31:16] preserved
+            return lambda w: w.wv(P[0], (w.r32(P[0]) & np.uint32(0xffff0000))
+                                  | (hbits(w.rh(P[1]) * w.rh(P[2])) & np.uint32(0xffff)))
         if b == 'v_fma_f32':
             return lambda w: w.wv(P[0], finish_f32(fma32(w.rf(P[1]), w.rf(P[2]), w.rf(P[3]))))
         if b == 'v_fmac_f32':
@@ -1000,8 +1002,10 @@ class Exec:
                 if b == 'v_mad_i32_i24': r = r + w.r32(P[3]).view(np.int32).astype(np.int64)
                 w.wv(P[0], (r & M32).astype(np.uint32))
             return mul24
-        if b == 'v_fmac_f16':          # D.f16 = fma(S0, S1, D); upper half written as zero (same convention as v_mul_f16 here)
-            return lambda w: w.wv(P[0], hbits((w.rh(P[1]).astype(np.float64) * w.rh(P[2]).astype(np.float64) + w.V[P[0]['i']].astype(np.uint16).view(np.float16).astype(np.float64)).astype(np.float16)))
+        if b == 'v_fmac_f16':          # D.f16 = fma(S0, S1, D); D[31:16] preserved, not zeroed -
+            #                          the old comment called zeroing a convention; it is a defect
+            return lambda w: w.wv(P[0], (w.r32(P[0]) & np.uint32(0xffff0000))
+                                  | (hbits((w.rh(P[1]).astype(np.float64) * w.rh(P[2]).astype(np.float64) + w.V[P[0]['i']].astype(np.uint16).view(np.float16).astype(np.float64)).astype(np.float16)) & np.uint32(0xffff)))
         if b == 'v_max3_f32':
             return lambda w: w.wv(P[0], fbits(np.maximum(np.maximum(w.rf(P[1]), w.rf(P[2])), w.rf(P[3]))))
         if b == 'v_med3_i32':
@@ -1140,7 +1144,9 @@ class Exec:
         if b == 'v_pk_mul_f16':
             return pk(lambda a, c: a * c, 2)
         if b == 'v_add_f16':
-            return lambda w: w.wv(P[0], hbits(w.rh(P[1]) + w.rh(P[2])))
+            # 16-bit result: D[15:0] written, D[31:16] preserved
+            return lambda w: w.wv(P[0], (w.r32(P[0]) & np.uint32(0xffff0000))
+                                  | (hbits(w.rh(P[1]) + w.rh(P[2])) & np.uint32(0xffff)))
         if b == 'v_pack_b32_f16':
             return lambda w: w.wv(P[0], (w.r32(P[1], True) & np.uint32(0xffff)) | ((w.r32(P[2], True) & np.uint32(0xffff)) << np.uint32(16)))
         if b == 'v_alignbit_b32':
