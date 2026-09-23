@@ -210,6 +210,11 @@ def enc_kernarg(h, w, oy, ox, flags, grid, src, dst, wgt, pool):
     ka = bytearray(424)
     for off in V.PTR_FIELDS:                       # every pointer field must be real memory
         struct.pack_into('<Q', ka, off, BASE + off_spare)
+    # +0x50/+0x58/+0x60/+0x68 are SCALARS that PTR_FIELDS wrongly lists, and +0x68 is the kernel's
+    # RNG seed. Leaving a buffer address there makes net_run rebase it, so the seed becomes the
+    # device arena address - which changes between allocations and silently randomises the output.
+    for off in (0x50, 0x58, 0x60, 0x68):
+        struct.pack_into('<Q', ka, off, 0)
     struct.pack_into('<Q', ka, 0x00, BASE + src)
     struct.pack_into('<Q', ka, 0x08, BASE + dst)
     struct.pack_into('<Q', ka, 0x10, BASE + wgt)

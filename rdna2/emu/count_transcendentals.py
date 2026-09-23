@@ -39,7 +39,14 @@ ka = V.make_kernarg(H=H, W=W, offy=0, offx=0, flags=flags, grid=grid)
 if flags == 0x14:
     struct.pack_into('<Q', ka, 0x00, 0)
     struct.pack_into('<Q', ka, 0x30, 0)
-    for off in (0x50, 0x54, 0x58, 0x5c, 0x60, 0x64, 0x68):
+    # +0x50/+0x58/+0x60/+0x68 are 4-byte scalars that PTR_FIELDS lists as pointers, so
+    # make_kernarg wrote whole pointers there. Clearing only the low dword leaves arena bits
+    # in the high dword; the GPU runner rebases the qword and the kernel is seeded with the
+    # device arena address while the emulator sees 0. +0x68 IS the RNG seed - that alone
+    # made the pre-block mismatch by 67% of its output.
+    for off in (0x50, 0x58, 0x60, 0x68):
+        struct.pack_into('<Q', ka, off, 0)
+    for off in (0x54, 0x5c, 0x64):
         struct.pack_into('<I', ka, off, 0)
     struct.pack_into('<f', ka, 0x50, 1.0)
     for off in range(0x70, 0xa0, 8):
