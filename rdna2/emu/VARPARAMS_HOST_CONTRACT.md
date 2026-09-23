@@ -1503,3 +1503,42 @@ configuration.
 dword - as `difftest_preblock.py` does - leaves stale high bits that the GPU-side rebaser then
 shifts, and the checkpoint aborts with "rebased kernarg disagrees with emulator" on `+0x68` alone.
 Zero the full 8-byte span, then write the scalar.
+
+## The whole network, end to end, on the captured frame
+
+`net_frame_full.py` runs `k_import` + all 71 blocks + `k_export` at 1707x960, GPU only:
+
+```
+net_run OK: 169 dispatches, 807.476 ms GPU, 24.32 s wall, arena 2,259,681,280 B, guards intact
+k_export surface : finite=False  nonzero=11.0%  min=-3.755e-06  max=1.875
+```
+
+**Every kernel is the real one.** `net_full.py` dispatches `k_ffwd_inpview` in place of block 39 and
+block 70 - its own comments call them placeholders "requires DecUpParams kernelspec" / "requires
+HeadParams kernelspec". Both real kernels exist and are used here: `_Z14k_dec_upsample11DecUpParams`
+and `_Z12k_final_head10HeadParams`. A dispatch count alone does not tell you the right kernels ran.
+
+**The image is garbage** - about 11% of the surface written, confined to the top ~120 rows (1/8 of
+960), in RGB stripes. Expected: block 0 is broken and feeds everything. Two things are still worth
+noting from it:
+
+* `k_export`'s output range is **-3.8e-06 .. 1.875**, not the +/-65504 f16 saturation every
+  intermediate buffer shows. The head and export stages produce image-scale numbers even from
+  garbage input, which is weak evidence their format handling is roughly right.
+* Only ~1/8 of the rows are written. `k_export`'s grid is (7, 960), which should cover every row, so
+  this is an addressing or stride question in `k_export` or in the head's output layout - the first
+  thing to look at once block 0 is fixed.
+
+### `net_run.exe` could not read an arena larger than 2 GB
+
+`rd()` used `long n = std::ftell(f)`. `long` is 32-bit on Windows, so at 2.26 GB `ftell` overflowed
+and the run died with **no output at all** and a bare non-zero exit - it looked like a GPU or VRAM
+failure and was neither. Now `_ftelli64` / `ftello` with `long long`. Any full-resolution arena is
+over 2 GB, so nothing at frame scale worked before this.
+
+### Sizing at real geometry
+
+Stage-5 geometry (`H>>4, W>>4` = 60x106) carries the C=512 and ViT stages; the decoder mirrors the
+encoder back up to full resolution. Every pointer field in `PTR_FIELDS` must reference real memory -
+`make_kernarg` fills them with 1 MiB difftest slots that do not exist in a byte arena, and a kernel
+touching one writes outside it. Unused fields share one spare buffer sized for the largest stage.
