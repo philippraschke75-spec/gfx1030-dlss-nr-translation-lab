@@ -67,12 +67,17 @@ off_rgb = place('import RGB32F', SRC_H * SRC_W * 12)
 
 # stage 1 is at render resolution; each later stage halves spatially and doubles channels
 S1 = act_bytes(32, SRC_H, SRC_W)
+# act_bytes is the ACTIVATION size. +0x38, +0x48 and +0xa0 (scratch) are not activations and there
+# is no evidence they follow that formula; the verified difftest just gives every pointer field a
+# 1 MiB slot, which is ample at 64 workgroups and says nothing about 25,680. AUX_MULT scales them
+# so the question can be answered by measurement instead of assumption.
+AUX = S1 * int(os.environ.get('AUX_MULT', '1'))
 off_a = place('act A (C=32)', S1)
 off_b = place('act B (C=32)', S1)
-off_scratch = place('pre-block scratch', S1)
-off_p38 = place('pre-block +0x38', S1)
+off_scratch = place('pre-block scratch', AUX)
+off_p38 = place('pre-block +0x38', AUX)
 
-off_p48 = place('pre-block +0x48', S1)          # the "optional 3rd buffer"; difftest_preblock
+off_p48 = place('pre-block +0x48', AUX)          # the "optional 3rd buffer"; difftest_preblock
                                                 # leaves make_kernarg's pointer here rather than
                                                 # nulling it, so it is not optional in practice
 # Encoder: 4 stages, C doubling as the spatial size halves. Each stage needs a ping-pong pair; the
@@ -360,7 +365,10 @@ if stop in ('full', 'all'):
     struct.pack_into('<ii', ka, 0x0c, SRC_H, SRC_W)
     struct.pack_into('<ii', ka, 0x14, SRC_H, SRC_W)
     struct.pack_into('<Q', ka, 0x20, BASE + off_dst)
-    struct.pack_into('<i', ka, 0x28, 0)
+    # +0x28 is the export format/mode (ebp in the launcher) and +0x08 an i32 from xmm10; both
+    # were guessed as 0. Now that the network feeds real data in, coverage is a usable signal.
+    struct.pack_into('<i', ka, 0x28, int(os.environ.get('EXPORT_MODE', '0')))
+    struct.pack_into('<i', ka, 0x08, int(os.environ.get('EXPORT_F08', '0')))
     struct.pack_into('<Q', ka, 0x30, BASE + off_rgb)
     struct.pack_into('<ff', ka, 0x38, 1.0, 1.0)
     g_exp = ((SRC_W + 255) // 256, SRC_H)
@@ -392,19 +400,30 @@ if r.returncode != 0:
 res = np.fromfile(OUT / 'arena.bin', np.uint8)
 
 
+def e4m3(b):
+    """Decode the network's activation format. Reading these bytes as f16 reports NaN and +/-65504
+    saturation for data that is entirely finite - that misreading was taken as evidence of a broken
+    kernel for hours. One byte per value: sign, 4-bit exponent (bias 7), 3-bit mantissa."""
+    s_ = np.where(b & 128, -1.0, 1.0).astype(np.float32)
+    e = ((b >> 3) & 15).astype(np.float32)
+    m = (b & 7).astype(np.float32)
+    v = np.where(e == 0, m / 8 * 2.0 ** -6, (1 + m / 8) * np.power(2.0, e - 7))
+    return np.where((e == 15) & (m == 7), np.nan, s_ * v)
+
+
 def report(name, buf):
-    f = buf.view(np.float16).astype(np.float64)      # activations are f16, not f32
-    finite = bool(np.isfinite(f).all())
+    f = e4m3(buf).astype(np.float64)
     nz = 100.0 * float((buf != 0).mean())
-    print('  %-18s finite=%-5s min=%-12.4g max=%-12.4g mean=%-12.4g nonzero=%.1f%%'
-          % (name, finite, float(np.nanmin(f)), float(np.nanmax(f)), float(np.nanmean(f)), nz))
-    return finite, nz
+    print('  %-18s nan=%-6.2f%% min=%-10.4g max=%-10.4g absmean=%-10.4g nonzero=%.1f%%'
+          % (name, 100.0 * float(np.isnan(f).mean()), float(np.nanmin(f)), float(np.nanmax(f)),
+             float(np.nanmean(np.abs(f))), nz))
+    return float(np.isnan(f).mean()), nz
 
 
 print('\n=== buffers after the run ===')
 rgb = res[off_rgb:off_rgb + SRC_H * SRC_W * 12].view(np.float32).reshape(SRC_H, SRC_W, 3)
 report('k_import RGB', res[off_rgb:off_rgb + SRC_H * SRC_W * 12])
-a_fin, a_nz = report('block0 out', res[off_a:off_a + S1])
+a_nan, a_nz = report('block0 out', res[off_a:off_a + S1])
 report('block0 +0x38', res[off_p38:off_p38 + S1])
 if stop != 'preblock':
     for si, (key, blocks, C) in enumerate(ENC_STAGES):

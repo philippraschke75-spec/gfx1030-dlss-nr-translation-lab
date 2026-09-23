@@ -1815,3 +1815,45 @@ geometry assumption `h = H >> i`.
 The pattern of this project holds: every defect chased to ground so far has been a fixture or launch
 parameter, never a mistranslated kernel. Four kernels were accused and exonerated (`k_attention`,
 `k_mean`, `attention2`, and now the pre-block).
+
+## CORRECTION: the network's activations were never garbage - they were read as the wrong format
+
+`net_frame_full.py` reported every intermediate buffer as `finite=False`, saturating f16 at
++/-65504, and that was taken as evidence the chain was producing garbage. **It was a decoding
+mistake in the reporting.** Activations are **e4m3**, one byte per value. Decoded correctly, the
+same run at 1707x960 reads:
+
+```
+block0 out        nan=0.00%  min=-448  max=448  absmean=3.264   nonzero=49.9%
+enc s1 pool C=32  nan=0.00%  min=-448  max=448  absmean=26.51   nonzero=25.0%
+enc s2 pool C=64  nan=0.00%  min=-448  max=448  absmean=26.63   nonzero=24.9%
+enc s3 pool C=128 nan=0.00%  min=-448  max=448  absmean=42.96   nonzero=24.9%
+enc s4 pool C=256 nan=0.00%  min=-448  max=448  absmean=30.1    nonzero=24.5%
+```
+
+**Zero NaN at every stage**, values inside the e4m3 range (448 is its maximum), plausible means. The
+encoder is producing valid activations from the real frame all the way through.
+
+Read the format before concluding from statistics. `finite=False` and "+/-65504 saturation" is what
+e4m3 always looks like through an f16 view, and f16 is what `report()` used.
+
+### What is actually still wrong: `k_export`
+
+Everything up to and including the decoder and `k_final_head` now produces finite, in-range data.
+The output stage does not:
+
+```
+k_export surface : nonzero=6.0%  min=-512 max=512  (read as f16, which IS correct for RGBA16F)
+```
+
+Roughly 57 of 960 rows carry data. Tested and refuted here:
+
+* **Dimension order.** `+0x0c`=height / `+0x10`=width per the launcher is now used. Coverage went
+  11.1% -> 6.0%, but coverage was not a valid signal while the input was believed to be garbage; it
+  is now, and neither order fills the surface.
+* **Format/mode at `+0x28`.** Swept 0-3, identical output every time.
+* **Aux buffer sizes.** `+0x38`/`+0x48`/`+0xa0` scaled 1x/2x/4x, identical output.
+
+`k_export` has never been validated semantically - the contract flagged that it could not be, until
+the network produced real output. It now does, so it can be. That is the next piece of work, and it
+is the last one between here and an image.
