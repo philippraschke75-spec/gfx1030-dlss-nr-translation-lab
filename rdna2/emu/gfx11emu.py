@@ -930,7 +930,13 @@ class Exec:
                 w.wv(P[0], (w.r32(P[0]) & np.uint32(0xffff0000)) | lo)
             return cvt_f16_f32
         if b in ('v_fma_mix_f32', 'v_fma_mixlo_f16'):
-            osel, ohi = mods.get('op_sel', [0, 0, 0]), mods.get('op_sel_hi', [0, 0, 0])
+            # VOP3P's op_sel_hi is documented as defaulting to all-ones, which would make an
+            # omitted op_sel_hi mean [1,1,1]. TESTED on the pre-block and it is WORSE: 7268 -> 10695
+            # mismatches. LLVM evidently prints op_sel_hi for the MIX forms whenever it matters, so
+            # [0,0,0] stays. Kept switchable because the 3400-mismatch swing shows these
+            # instructions are on the critical path, whatever the right default turns out to be.
+            _d = [1, 1, 1] if _os.environ.get('MIX_OHI_DEFAULT', '0') == '1' else [0, 0, 0]
+            osel, ohi = mods.get('op_sel', [0, 0, 0]), mods.get('op_sel_hi', _d)
 
             def mix(w):
                 vals = []

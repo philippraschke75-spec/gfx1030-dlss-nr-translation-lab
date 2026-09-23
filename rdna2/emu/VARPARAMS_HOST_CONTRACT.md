@@ -1599,3 +1599,48 @@ which is exactly the observed pattern. Audit them against the ISA; `v_dual_*` (V
 and `v_cmpx_o_f32` (writes EXEC) are the least-travelled paths and the ones worth reading first.
 
 **Minimal repro**: `difftest_preblock.py 1 8 8` - 7,268 of 10,690 bytes, one workgroup.
+
+## Block 0 is non-deterministic on hardware above 4 workgroups
+
+`preblock_response.py` asks a question the emulator cannot: run the real kernel on the GPU several
+times with byte-identical input and see whether it agrees with **itself**. It does not.
+
+```
+TILE=8   grid 1x1  =  1 workgroup    deterministic (4/4 repeat runs identical)
+TILE=16  grid 2x2  =  4 workgroups   deterministic (4/4 repeat runs identical)
+TILE=64  grid 8x8  = 64 workgroups   NON-DETERMINISTIC
+                                     differing bytes vs run 0: 587, 467, 15406, 233 (of 262144)
+```
+
+Same harness, same arena, same kernarg in all three - only the workgroup count changes. So there is
+a **cross-workgroup race**, and it is invisible below about 4 workgroups.
+
+**This matters more than any difftest number.** A kernel that does not reproduce itself cannot match
+a sequential emulator, and no amount of ALU auditing would ever have fixed it. It also means the
+full-resolution frame path cannot work as currently launched: at 1707x960 the pre-block runs
+214 x 120 = **25,680 workgroups**, far into the racing regime, so its output there is not a
+deterministic function of the input at all.
+
+This is very likely the `k_flag_set` / `k_flag_wait` synchronisation protocol that this file has
+listed as outstanding since the schedule was decoded. The pre-block both writes and reads back
+through `+0x38` and `+0x48`; without the host-side flag handshake the workgroups have no ordering.
+
+### Two separate problems, not one
+
+Do not conflate them:
+
+1. **The race, above.** Affects every launch at real resolution. Needs the sync protocol.
+2. **A deterministic 67% mismatch at ONE workgroup.** `difftest_preblock 1 8 8` is in the
+   deterministic regime and still reports 7,268 of 10,690 bytes. Fixing the race will not touch this,
+   and it remains unexplained.
+
+### Hypotheses tested and refuted, for the record
+
+Transcendental precision (the passing `<32,false>` executes 1,664 approximate ops to the failing
+variant's 1,830 and mismatches nothing); `MIX_F16_INPUT_FLUSH` (zero change); VOP3P `op_sel_hi`
+defaulting to `[1,1,1]` (documented default, but **worse**: 7,268 -> 10,695, so `[0,0,0]` stays);
+`v_perm_b32`, `s_bfe_i32/u32`, `s_bitcmp0_b32`, the float compare predicates and VOPD parallel-read
+semantics (all correct against the ISA).
+
+The `op_sel_hi` experiment is still worth knowing: a 3,400-mismatch swing says `v_fma_mix_f32` is on
+the critical path even though that particular default is not the bug.
