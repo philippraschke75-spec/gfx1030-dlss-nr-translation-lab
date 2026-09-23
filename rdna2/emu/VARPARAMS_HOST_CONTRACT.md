@@ -2224,3 +2224,31 @@ correct one.
 **Method note.** Both of these were parameter sweeps rather than reasoning from the kernel. The
 useful next step is to read `k_qkv_attn`'s disassembly and find the division that can produce NaN,
 then work out which input makes its denominator zero - not to sweep further.
+
+### `k_qkv_attn` contains 138 real divisions - the NaN is probably honest
+
+The kernel is 16,089 instructions and carries a full IEEE division sequence:
+
+```
+v_div_scale_f32  276      (two per division)
+v_rcp_f32        138
+v_div_fmas_f32   138
+v_div_fixup_f32  138      <- the instruction that turns 0/0 into NaN
+v_log_f32        137
+v_rsq_f32          2
+```
+
+138 divisions, and roughly 1% of the output is NaN. `v_div_fixup_f32` producing NaN from 0/0 is
+**correct IEEE behaviour**, and this is a GPU-only run with no emulator involved - so the hardware is
+doing the right thing with the numbers it was given. The kernel is most likely reporting honestly
+that something upstream hands it a zero denominator.
+
+That reframes the search: do not look for a defect inside `k_qkv_attn`. Look for what makes ~1% of
+its denominators zero. Candidates, none yet tested:
+
+* the window origin at `+0x20`, passed as `(0,0)` for every C=512 block. The encoder cycles its
+  shifted-window origins `(0,0), (-4,-4), (-4,0), (0,-4)` per block; if the C=512 stage does too,
+  every block here is running the same window and some are degenerate.
+* the weight at `+0x10` - `blockN_layer3` follows `net_full.py`, but that mapping has never been
+  checked against the launcher for this stage.
+* the stage geometry itself, which is inferred as `SRC>>4` and not read from the `ctx+0x190` tuple.
