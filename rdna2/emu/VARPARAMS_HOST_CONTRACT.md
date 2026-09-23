@@ -2076,3 +2076,26 @@ neither. The same applies at **mid -> dec** (`k_repack, k_dec_upsample, launcher
 
 So the grid work was necessary but not sufficient. The remaining gap is the four missing transition
 and epilogue dispatches, not the grids.
+
+## `k_repack` wired into enc -> mid: it works, the collapse is downstream of it
+
+`k_repack` is now dispatched between the last encoder stage and the C=512 stage, per the driver's
+phase table. Measured in isolation (`STOP_AFTER_REPACK=1`), reading its input and output buffers:
+
+```
+input   enc s4 pool  nonzero 24.54%  distinct 254     (healthy encoder output)
+output  c512_1 w0    nonzero  3.86%  distinct 253     (real, varying data)
+```
+
+**`k_repack` produces valid varying output.** Its extent comes from the four i32 at
+`+0x10..+0x1c`, not from the grid - sweeping the grid's per-workgroup span over 256/1024/4096/16384
+changes nothing, while the third i32 scales coverage linearly (256 -> 512 doubles 3.86% to 7.81%),
+so it is a channel count.
+
+The collapse to 2 distinct byte values therefore happens **inside `c512_stage`**, which turns 253
+distinct bytes into 2. That is now the first bad stage, and it is a much smaller target than "the
+mid-network is constant".
+
+Caveat on the dimension sweep: the first attempt measured the *downstream* buffer and reported all
+four candidates as identical. They are not - measuring `k_repack`'s own output separates them.
+Measure the output of the thing you are changing.
