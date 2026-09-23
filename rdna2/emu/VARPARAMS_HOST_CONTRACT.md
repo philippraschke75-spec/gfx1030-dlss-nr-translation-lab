@@ -2160,3 +2160,37 @@ aliasing in `c512_stage` - for `bi > 0` it passes `work[0]` as **both** `+0x00` 
 
 NaN from a buffer that is zero-filled at the start needs a 0/0 or inf-inf somewhere; it cannot come
 from merely reading uninitialised memory here.
+
+## The C=512 non-determinism was an unwritten buffer; the NaN is `k_qkv_attn`
+
+**Two separate defects, and the first is fixed.**
+
+`k_ffwd2` takes `work[0]` at `+0x00`, but `work[0]` is written only by the block's **last** dispatch.
+On the first block of a stage nothing has written it. `net_block512.py` never notices because
+`V.build` fills its arena with e4m3-shaped random bytes, while the frame runner zero-fills - and a
+normalisation over an all-zero buffer gives 0/0. Passing the stage input there for `bi == 0` makes
+the chain **deterministic**: three identical runs now give 246 distinct byte values every time,
+where before the same command produced 246, 254, 2, 1 in successive runs.
+
+That also settles the earlier confusion over "which block collapses": it moved between runs (23, 24,
+25) because the run was not reproducible, not because any block was special. Both the "block 25 is
+the culprit" note and its retraction can now be read as symptoms of this.
+
+**The remaining NaN is localised to one dispatch.** Per-dispatch probe of block 23:
+
+```
+0 before stage    distinct 241
+1 ffwd_inpview    distinct 254   no 0x7f
+2 ffwd2           distinct 255   no 0x7f
+3 conv_res_1      distinct 255   no 0x7f
+4 qkv_attn        distinct 245   0x7f = 0.99%     <- NaN appears here
+5 conv_res_2      distinct 246   0x7f = 0.99%
+```
+
+0.99% of block 23's output is NaN, and block 24 spreads it to 48.15% - i.e. every non-zero byte.
+NaN is contagious through a convolution, so the entire mid-network collapse traces back to this one
+kernel producing ~1% NaN.
+
+Working hypothesis, under test: the stage geometry is `1707>>4, 960>>4` = 106x60, neither a multiple
+of the 8-wide attention window. The grid `(ceil(106/8), ceil(60/8))` = (14, 8) therefore covers
+112x64, and a softmax over an empty overhanging window is 0/0.
