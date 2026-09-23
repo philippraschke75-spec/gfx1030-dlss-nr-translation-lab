@@ -59,9 +59,19 @@ ARENA_SZ = (A + (1 << 20) - 1) // (1 << 20) * (1 << 20)
 BASE = V.ARENA
 grid = ((W + 7) // 8, (H + 7) // 8)
 
+# Each pointer field needs its OWN buffer. Pointing them all at one shared scratch made 64
+# workgroups collide on it and produced run-to-run differences that looked like a hardware race and
+# were entirely this harness's doing. difftest_preblock gives every field a separate 1 MiB slot and
+# is deterministic at the same workgroup count.
 ka = bytearray(424)
+# Sized like difftest_preblock's slots (1 MiB), not by act_bytes. The activation formula gives
+# 262144 B here, and at that size the run is not reproducible while difftest_preblock at the
+# same 64 workgroups is - so something writes past it. BUF is overridable to test that.
+BUF = int(os.environ.get('BUF', str(V.SLOT)))
+field_buf = {off: place(BUF) for off in V.PTR_FIELDS}
+ARENA_SZ = (A + (1 << 20) - 1) // (1 << 20) * (1 << 20)
 for off in V.PTR_FIELDS:
-    struct.pack_into('<Q', ka, off, BASE + off_scratch)
+    struct.pack_into('<Q', ka, off, BASE + field_buf[off])
 struct.pack_into('<Q', ka, 0x00, 0 if FLAGS == 0x14 else BASE + off_rgb)
 struct.pack_into('<Q', ka, 0x30, 0 if FLAGS == 0x14 else BASE + off_scratch)
 struct.pack_into('<Q', ka, 0x08, BASE + off_out)
@@ -88,7 +98,16 @@ struct.pack_into('<HHH', ka, 0xB4, 256, 1, 1)
 
 
 def run(rgb, tag):
-    arena = np.zeros(ARENA_SZ, np.uint8)
+    # V.build fills the arena with e4m3-shaped random bytes, not zeros. A zeroed arena is a
+    # different fixture, and ARENA_FILL exists to tell whether that is what differs.
+    if os.environ.get('ARENA_FILL', 'zero') == 'rand':
+        _r = np.random.default_rng(7)
+        _e = _r.integers(2, 8, ARENA_SZ, dtype=np.uint8)
+        _m = _r.integers(0, 8, ARENA_SZ, dtype=np.uint8)
+        _s = _r.integers(0, 2, ARENA_SZ, dtype=np.uint8)
+        arena = ((_s << 7) | (_e << 3) | _m).astype(np.uint8)
+    else:
+        arena = np.zeros(ARENA_SZ, np.uint8)
     arena[off_rgb:off_rgb + rgb.nbytes] = rgb.astype(np.float32).view(np.uint8).reshape(-1)
     arena[off_w0:off_w0 + len(w0)] = np.frombuffer(w0, np.uint8)
     (OUT / 'a.bin').write_bytes(arena.tobytes())
