@@ -323,6 +323,8 @@ C512_PROBE = []          # (label, buffer offset) captured per dispatch when C51
 def c512_stage(blocks, work, src_in):
     # One C=512 attention block is 5 dispatches; recipe per VARPARAMS_HOST_CONTRACT.md.
     g = (1, 1)
+    # weight layer per dispatch: contract table = ffwd_iv 0, ffwd2 0, conv_res 1, qkv_attn 2, conv_res 3
+    W5L = [int(x) for x in os.environ.get('C512_WMAP', '0,1,2,3,2').split(',')]
     for bi, blk in enumerate(blocks):
         a = src_in if bi == 0 else work[0]
         L = lambda n: wt['block%d_layer%d' % (blk, n)][0]
@@ -330,31 +332,33 @@ def c512_stage(blocks, work, src_in):
         gc = grid_for(CONVV, N512)
         g2 = grid_for(FFWD2, N512, (H5, W5))          # 2-D: sized by the stage geometry
         gq = grid_for(QKV, N512, (H5, W5))
-        steps.append((FFWD_IV, ka_for(FFWD_IV, [(0x00, a), (0x08, work[1]), (0x10, L(0))],
+        steps.append((FFWD_IV, ka_for(FFWD_IV, [(0x00, a), (0x08, work[1]), (0x10, L(W5L[0]))],
                                       [(0x18, '<ii', (H5, W5))], g1), g1, 256))
         if os.environ.get('C512_TRACE') == '1' and bi == 0:
             C512_PROBE.append(('1 ffwd_inpview -> w1', work[1], len(steps)))
         steps.append((FFWD2, ka_for(FFWD2, [(0x00, work[0]), (0x08, a), (0x10, work[1]),
-                                            (0x18, L(1))],
+                                            (0x18, L(W5L[1]))],
                                     [(0x20, '<iii', (H5, W5, 4))], g2), g2, 256))
         if os.environ.get('C512_TRACE') == '1' and bi == 0:
             C512_PROBE.append(('2 ffwd2        -> w1', work[1], len(steps)))
         steps.append((CONVV, ka_for(CONVV, [(0x00, work[1]), (0x08, a), (0x10, work[0]),
-                                            (0x18, work[2]), (0x28, L(2))],
+                                            (0x18, work[2]), (0x28, L(W5L[2]))],
                                     [(0x20, '<i', (0,)), (0x30, '<ii', (H5, W5))], gc), gc, 256))
         if os.environ.get('C512_TRACE') == '1' and bi == 0:
             C512_PROBE.append(('3 conv_res_1   -> w2', work[2], len(steps)))
-        steps.append((QKV, ka_for(QKV, [(0x00, work[2]), (0x08, work[3]), (0x10, L(3))],
+        steps.append((QKV, ka_for(QKV, [(0x00, work[2]), (0x08, work[3]), (0x10, L(W5L[3]))],
                                   [(0x18, '<ii', (H5, W5)), (0x20, '<ii', (0, 0))], gq), gq, 256))
         if os.environ.get('C512_TRACE') == '1' and bi == 0:
             C512_PROBE.append(('4 qkv_attn     -> w3', work[3], len(steps)))
         steps.append((CONVV, ka_for(CONVV, [(0x00, work[3]), (0x10, work[2]), (0x18, work[0]),
-                                            (0x28, L(2))],
+                                            (0x28, L(W5L[4]))],
                                     [(0x20, '<i', (0,)), (0x30, '<ii', (H5, W5)),
                                      (0x40, '<ii', (H5, W5))], gc), gc, 256))
         if os.environ.get('C512_TRACE') == '1' and bi == 0:
             C512_PROBE.append(('5 conv_res_2   -> w0', work[0], len(steps)))
-        if os.environ.get('C512_TRACE') == '2':
+        if os.environ.get('C512_TRACE') == '2' and                 str(blk) in os.environ.get('PROBE_BLOCKS', '23,24,25,26').split(','):
+            # Each probe re-runs a prefix and rewrites the whole 2.26 GB arena, so probing every
+            # block costs tens of GB of disk writes. Limit it to the blocks in question.
             C512_PROBE.append(('after block %-3d-> w0' % blk, work[0], len(steps)))
 
 
@@ -390,14 +394,14 @@ if stop in ('full', 'all'):
                                                     (0x18, L(4))],
                                         [(0x20, '<ii', (H5, W5)), (0x28, '<i', (4,))], g), g, 256))
 
-        if os.environ.get('C512_TRACE') == '2':
+        if os.environ.get('C512_TRACE') == '2' and os.environ.get('PROBE_VIT') == '1':
             C512_PROBE.append(('after ViT %-5d -> BIN' % blk, BIN_, len(steps)))
 
     # block 39: the real k_dec_upsample, not the k_ffwd_inpview stand-in net_full.py uses
     steps.append((DECUP, ka_for(DECUP, [(0x00, BIN_), (0x08, off_b39), (0x10, c512_2[0]),
                                         (0x18, wt['block39'][0]), (0x20, off_spare)], [], g), g, 256))
 
-    if os.environ.get('C512_TRACE') == '2':
+    if os.environ.get('C512_TRACE') == '2' and os.environ.get('PROBE_VIT') == '1':
         C512_PROBE.append(('after block39 -> b39', off_b39, len(steps)))
     c512_stage(range(40, 48), c512_2, off_b39)
 
@@ -508,13 +512,23 @@ if os.environ.get('C512_TRACE') in ('1', '2'):
         d0 = a0[c512_1[0]:c512_1[0] + N512]
         print('  0 before stage  -> w0  nonzero=%6.2f%%  distinct=%3d'
               % (100 * float((d0 != 0).mean()), len(np.unique(d0))))
-    for label, buf, nst in C512_PROBE:
+    for label, buf, nst in C512_PROBE[:int(os.environ.get('C512_PROBE_MAX', '9999'))]:
         aa = _run_prefix(nst)
         if aa is None:
             print('  %s  GPU FAIL' % label); continue
         dd = aa[buf:buf + N512]
-        print('  %s  nonzero=%6.2f%%  distinct=%3d'
-              % (label, 100 * float((dd != 0).mean()), len(np.unique(dd))))
+        _u, _c = np.unique(dd, return_counts=True); _o = np.argsort(-_c)[:3]
+        print('  %s  nonzero=%6.2f%%  distinct=%3d  top: %s'
+              % (label, 100 * float((dd != 0).mean()), len(_u),
+                 ' '.join('0x%02x=%.2f%%' % (_u[i], 100.0 * _c[i] / dd.size) for i in _o)))
+        _nan = np.nonzero(dd == 0x7f)[0]
+        if len(_nan) and os.environ.get('C512_NANPOS') == '1':
+            # assumed layout [C][ceil(H/4)][ceil(W/4)][16]: report where the NaN codes sit
+            _per = ((H5 + 3) // 4) * ((W5 + 3) // 4) * 16
+            _ch, _r = _nan // _per, (_nan % _per) // 16
+            _ty, _tx = _r // ((W5 + 3) // 4), _r % ((W5 + 3) // 4)
+            print('     NaN positions: %d bytes; first idx %s; channels %d..%d (%d distinct); tile rows %d..%d; tile cols %d..%d'
+                  % (len(_nan), _nan[:4].tolist(), _ch.min(), _ch.max(), len(np.unique(_ch)), _ty.min(), _ty.max(), _tx.min(), _tx.max()))
     raise SystemExit(0)
 
 blob = b''; lines = []
