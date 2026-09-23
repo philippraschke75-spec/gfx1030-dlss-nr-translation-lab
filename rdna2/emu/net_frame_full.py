@@ -165,8 +165,6 @@ print('  total %.1f MB\n' % (ARENA_SZ / 1e6))
 
 arena = np.zeros(ARENA_SZ, np.uint8)
 arena[off_src:off_src + src.size] = src
-if os.environ.get('EXPORT_SENTINEL') == '1':      # written-ness probe: 0xA5 is not what a clamped/zero result looks like
-    arena[off_dst:off_dst + SRC_H * SRC_W * 8] = 0xA5
 arena[off_w0:off_w0 + len(w_block0)] = np.frombuffer(w_block0, np.uint8)
 for _nm, (_o, _n) in wt.items():
     arena[_o:_o + _n] = np.frombuffer((WEIGHTS / (_nm + '.bin')).read_bytes(), np.uint8)
@@ -354,8 +352,16 @@ if stop in ('full', 'all'):
         stage_in = pool
 
     # block 70: the real k_final_head
+    # k_final_head was dispatched with grid (1,1) - one workgroup cannot cover 1707x960. Its output
+    # is what k_export reads at 16 B/pixel, so an unwritten head buffer is exactly what makes the
+    # export surface non-finite. HEAD_GRID picks the convention: 'swin' = (ceil(W/8), ceil(H/8)),
+    # 'lin' = (ceil(W/256), H) as k_import and k_export use, 'one' = the old (1,1).
+    _hg = os.environ.get('HEAD_GRID', 'lin')
+    g_head = {'swin': ((SRC_W + 7) // 8, (SRC_H + 7) // 8),
+              'lin': ((SRC_W + 255) // 256, SRC_H),
+              'one': (1, 1)}[_hg]
     steps.append((HEAD, ka_for(HEAD, [(0x00, stage_in), (0x08, off_head),
-                                      (0x10, wt['block70_layer0'][0])], [], g), g, 256))
+                                      (0x10, wt['block70_layer0'][0])], [], g_head), g_head, 256))
 
     # k_export, fed the network's own output at +0x00 - the first time it has had that
     # k_export's kernarg is 320 B (kernel metadata), not 280, and grid_dims lives at +0x80 -
@@ -369,12 +375,12 @@ if stop in ('full', 'all'):
     # address the surface with the wrong stride.
     struct.pack_into('<ii', ka, 0x0c, SRC_H, SRC_W)
     # +0x08 = input row stride in ELEMENTS, +0x14 = output row PITCH in BYTES, +0x18 = mode (see EXPORT_FINDINGS.md)
-    struct.pack_into('<ii', ka, 0x14, int(os.environ.get('EXPORT_F14', str(SRC_W * 8))), int(os.environ.get('EXPORT_F18', '0')))
+    struct.pack_into('<ii', ka, 0x14, SRC_W * 8, 0)
     struct.pack_into('<Q', ka, 0x20, BASE + off_dst)
     # +0x28 is the export format/mode (ebp in the launcher) and +0x08 an i32 from xmm10; both
     # were guessed as 0. Now that the network feeds real data in, coverage is a usable signal.
     struct.pack_into('<i', ka, 0x28, int(os.environ.get('EXPORT_MODE', '0')))
-    struct.pack_into('<i', ka, 0x08, int(os.environ.get('EXPORT_F08', str(SRC_W))))
+    struct.pack_into('<i', ka, 0x08, SRC_W)
     struct.pack_into('<Q', ka, 0x30, BASE + off_rgb)
     struct.pack_into('<ff', ka, 0x38, 1.0, 1.0)
     g_exp = ((SRC_W + 255) // 256, SRC_H)
@@ -487,12 +493,5 @@ if stop in ('full', 'all'):
     full = int(((d16 != 0).reshape(SRC_H, SRC_W, 4)[:, :, :3].any(axis=2).all(axis=1)).sum())
     print('k_export rows    : %d of %d touched (last %s), %d fully written across all %d columns'
           % (len(rows), SRC_H, int(rows[-1]) if len(rows) else None, full, SRC_W))
-    if os.environ.get('EXPORT_SENTINEL') == '1':
-        ch = res[off_dst:off_dst + SRC_H * SRC_W * 8] != 0xA5
-        idx = np.nonzero(ch)[0]
-        print('k_export sentinel: %d bytes changed, first %s last %s; row0 window[0:%d] changed=%d'
-              % (int(ch.sum()), int(idx[0]) if len(idx) else None, int(idx[-1]) if len(idx) else None, SRC_W * 8, int(ch[:SRC_W * 8].sum())))
-    nzb = np.nonzero(res[off_dst:off_dst + SRC_H * SRC_W * 8])[0]
-    print('k_export extent  : last written byte %d  (= row %.2f at the true pitch %d)' % (int(nzb[-1]), nzb[-1] / (SRC_W * 8), SRC_W * 8) if len(nzb) else 'k_export extent  : nothing nonzero')
     write_png(OUT / 'rendered.png', tonemap(rep))
     print('wrote', OUT / 'rendered.png')

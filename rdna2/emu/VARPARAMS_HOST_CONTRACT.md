@@ -1896,3 +1896,46 @@ harness rather than only the encoder's C=32.
 
 Coverage after this: blocks 0, 1-22, 23-30, 31-38, 39, 40-47 and 70 are verified, individually or as
 chains. That is the whole forward pass except the decoder blocks 48-69, which are running.
+
+## SOLVED: `k_export` writes the whole surface. `+0x14` is a byte pitch, not a dimension.
+
+`+0x14` is the **output row pitch in bytes**. The runner passed `H` (960) there, so each row started
+960 bytes after the previous one and overwrote most of it. With `W * 8 = 13656`:
+
+```
++0x14 = 960    :  69 of 960 rows touched
++0x14 = 13656  : 960 of 960 rows touched, all 1707 columns, every row complete
+```
+
+The 70 rows reconcile to the byte: the last written byte was 947951, and `947951 / 13656 = 69.42`.
+Nothing was stopping early - the writes were landing on top of each other.
+
+Corrected field meanings, read from the kernel at `0xab200..` rather than guessed:
+
+| off | meaning |
+|---|---|
+| `+0x00` | input, **16 B per pixel**, read with `global_load_b96`, index `(s8*row + x)*16` |
+| `+0x08` | input row stride in **elements** (was 0, so every row re-read row 0) |
+| `+0x0c` / `+0x10` | height / width, used as the `row < H`, `x < W` guards |
+| `+0x14` | **output row pitch in bytes** - the bug |
+| `+0x18` | **format/mode** (compared against 3,5,6,4) - the runner had passed `W` here |
+| `+0x20` | output; `+0x30` second output (RGB f32, 12 B/pixel) when `+0x38 != 0` |
+
+Bytes per pixel by mode: modes 1,2,3,4,6 write 4 B/pixel; modes 0,5,7,8 write 8 B/pixel (RGBA16F,
+which is what the destination is sized for); the stray 1707 fell through to a 16 B/pixel path.
+
+## What is left: `k_final_head` writes a near-constant
+
+The export surface is fully written but still non-finite, and that is now an input problem. The head
+buffer that feeds `k_export` at `+0x00` is nearly empty:
+
+```
+HEAD_GRID = (1,1)              head nonzero 0.06%, 2 distinct byte values
+HEAD_GRID = (ceil(W/256), H)   head nonzero 0.44%, 2 distinct byte values
+HEAD_GRID = (ceil(W/8), H/8)   head nonzero 0.00%, 1 distinct byte value
+```
+
+The grid changes the result, so the kernel is running - it just writes a constant. `HeadParams` is
+only **24 bytes**, three pointers and no dimensions, so the extent must come from the grid, and none
+of the three conventions produces real output. `k_final_head` passes its registry difftest at 0, so
+this is its wiring at frame scale, not the kernel.
