@@ -32,6 +32,11 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gfx11emu as E, run_emu as R, run_var as V, difftest_var as D, kernelspec as K
 
+# Which block's weights to run. The recipe is shared across a whole stage, so this is how
+# we check it generalises past the single block it was decoded on.
+import os as _os
+BLOCK = int(_os.environ.get('BLOCK', '31'))
+
 H = W = 8
 NGROUP = 4                      # min(n*16, H*W); 4*16 == 8*8 so the whole tile is live
 # arena slots: input, six ViT ctx buffers (each separate), output, then four weight records
@@ -39,10 +44,10 @@ BIN, B260, B268, B270, B278, B280, B288, BOUT = 0, 1, 2, 3, 4, 5, 6, 7
 # Weight files span multiple 1 MiB slots; compute starting positions
 def slots_for(size):
     return -(-size // V.SLOT)
-L0_SZ = (D.ROOT / 'build' / 'weights' / 'block31_layer0.bin').stat().st_size
-L1_SZ = (D.ROOT / 'build' / 'weights' / 'block31_layer1.bin').stat().st_size
-L2_SZ = (D.ROOT / 'build' / 'weights' / 'block31_layer2.bin').stat().st_size
-L4_SZ = (D.ROOT / 'build' / 'weights' / 'block31_layer4.bin').stat().st_size
+L0_SZ = (D.ROOT / 'build' / 'weights' / ('block%d_layer0.bin' % BLOCK)).stat().st_size
+L1_SZ = (D.ROOT / 'build' / 'weights' / ('block%d_layer1.bin' % BLOCK)).stat().st_size
+L2_SZ = (D.ROOT / 'build' / 'weights' / ('block%d_layer2.bin' % BLOCK)).stat().st_size
+L4_SZ = (D.ROOT / 'build' / 'weights' / ('block%d_layer4.bin' % BLOCK)).stat().st_size
 WL0 = 8
 WL1 = WL0 + slots_for(L0_SZ)
 WL2 = WL1 + slots_for(L1_SZ)
@@ -133,8 +138,8 @@ def steps():
 
 def arena(seed):
     a = np.random.default_rng(seed + 55).integers(0, 256, V.SLOT * NSLOT, dtype=np.uint8)
-    for slot, fn in ((WL0, 'block31_layer0.bin'), (WL1, 'block31_layer1.bin'),
-                     (WL2, 'block31_layer2.bin'), (WL4, 'block31_layer4.bin')):
+    for slot, fn in ((WL0, ('block%d_layer0.bin' % BLOCK)), (WL1, ('block%d_layer1.bin' % BLOCK)),
+                     (WL2, ('block%d_layer2.bin' % BLOCK)), (WL4, ('block%d_layer4.bin' % BLOCK))):
         w = np.frombuffer((D.ROOT / 'build' / 'weights' / fn).read_bytes(), np.uint8)
         a[slot * V.SLOT:slot * V.SLOT + len(w)] = w
     return a

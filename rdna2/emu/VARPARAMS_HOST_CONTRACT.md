@@ -1876,3 +1876,23 @@ nothing.
 Still untested: `+0x14`/`+0x18` (from `[rsp+0x308]`/`[rsp+0x310]`, meaning unknown - currently
 passed as H,W), `+0x08` (i32 materialised from `xmm10`), the `+0x38`/`+0x3c` job strengths, and
 whether `off_head` is the right size and format for what `k_export` expects to read.
+
+## The per-stage recipes generalise: 24 block instances verified, not 2
+
+The C=512 and ViT recipes were each decoded on a single block (23 and 31) and then reused for every
+block in their stage on the assumption that a stage shares its recipe. That assumption was never
+tested. `net_block512.py` and `net_vit.py` now take a `BLOCK` environment variable, so it can be.
+
+```
+C=512 recipe   blocks 23,24,25,26,27,28,29,30   all PASS, 0 mismatches
+C=512 recipe   blocks 40,41,42,43,44,45,46,47   all PASS, 0 mismatches
+ViT   recipe   blocks 31,32,33,34,35,36,37,38   all PASS, 0 mismatches
+```
+
+**24 of 24.** Each is a full 5-dispatch chain against the emulator with that block's own weights, so
+the hand-offs are covered too, not just the kernels. `net_encoder_stage1.py` now takes the stage's
+channel key as `argv[2]`, which lets the decoder stages (C=256/128/64/32) run through the same
+harness rather than only the encoder's C=32.
+
+Coverage after this: blocks 0, 1-22, 23-30, 31-38, 39, 40-47 and 70 are verified, individually or as
+chains. That is the whole forward pass except the decoder blocks 48-69, which are running.

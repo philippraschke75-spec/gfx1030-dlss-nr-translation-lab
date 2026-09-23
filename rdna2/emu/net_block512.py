@@ -22,6 +22,11 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gfx11emu as E, run_emu as R, run_var as V, difftest_var as D, kernelspec as K
 
+# Which block's weights to run. The recipe is shared across a whole stage, so this is how
+# we check it generalises past the single block it was decoded on.
+import os as _os
+BLOCK = int(_os.environ.get('BLOCK', '23'))
+
 H = W = 8
 NGROUP = 4                      # min(n*16, H*W); 4*16 == 8*8 so the whole tile is live
 # arena slots: the four ctx buffers, then the four weight records
@@ -105,8 +110,8 @@ def steps():
 
 def arena(seed):
     a = np.random.default_rng(seed + 55).integers(0, 256, V.SLOT * NSLOT, dtype=np.uint8)
-    for slot, fn in ((WL0, 'block23_layer0.bin'), (WL1, 'block23_layer1.bin'),
-                     (WL2, 'block23_layer2.bin'), (WL3, 'block23_layer3.bin')):
+    for slot, fn in ((WL0, ('block%d_layer0.bin' % BLOCK)), (WL1, ('block%d_layer1.bin' % BLOCK)),
+                     (WL2, ('block%d_layer2.bin' % BLOCK)), (WL3, ('block%d_layer3.bin' % BLOCK))):
         w = np.frombuffer((D.ROOT / 'build' / 'weights' / fn).read_bytes(), np.uint8)
         a[slot * V.SLOT:slot * V.SLOT + len(w)] = w
     return a
