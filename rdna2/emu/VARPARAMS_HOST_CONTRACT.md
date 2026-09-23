@@ -1644,3 +1644,15 @@ semantics (all correct against the ISA).
 
 The `op_sel_hi` experiment is still worth knowing: a 3,400-mismatch swing says `v_fma_mix_f32` is on
 the critical path even though that particular default is not the bug.
+
+### The race is the pre-block's alone
+
+Same harness, same 64 workgroups, same arena - only the variant and flags differ:
+
+```
+pre-block  k_swin_var<32,true>   flags 0x14 : NON-DETERMINISTIC (up to 122,880 of 262,144 bytes)
+encoder    k_swin_var<32,false>  flags 5    : deterministic, 4/4 repeat runs identical
+```
+
+So blocks 1-70 do **not** need the synchronisation protocol; exactly one block does. That is a much
+smaller problem than "the network races", and it is worth checking this way before assuming scope.

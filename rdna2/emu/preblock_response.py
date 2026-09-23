@@ -17,7 +17,10 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run_var as V, difftest_var as D
 
-PRE_SYM, PRE_LDS = D.SYMS['32_1']
+import os as _o
+VARIANT = _o.environ.get('PRE_VARIANT', '32_1')   # '32_0' = an encoder block
+FLAGS = int(_o.environ.get('PRE_FLAGS', '0x14'), 0)
+PRE_SYM, PRE_LDS = D.SYMS[VARIANT]
 PRE_LDS = PRE_LDS or D.group_size(PRE_SYM)
 RUN = D.ROOT / 'build' / 'net_run.exe'
 OUT = D.ROOT / 'build' / 'preblock_response'; OUT.mkdir(parents=True, exist_ok=True)
@@ -59,8 +62,8 @@ grid = ((W + 7) // 8, (H + 7) // 8)
 ka = bytearray(424)
 for off in V.PTR_FIELDS:
     struct.pack_into('<Q', ka, off, BASE + off_scratch)
-struct.pack_into('<Q', ka, 0x00, 0)
-struct.pack_into('<Q', ka, 0x30, 0)
+struct.pack_into('<Q', ka, 0x00, 0 if FLAGS == 0x14 else BASE + off_rgb)
+struct.pack_into('<Q', ka, 0x30, 0 if FLAGS == 0x14 else BASE + off_scratch)
 struct.pack_into('<Q', ka, 0x08, BASE + off_out)
 struct.pack_into('<Q', ka, 0x10, BASE + off_w0)
 struct.pack_into('<Q', ka, 0x38, BASE + off_p38)
@@ -68,7 +71,7 @@ struct.pack_into('<Q', ka, 0x40, BASE + off_rgb)
 struct.pack_into('<Q', ka, 0x48, BASE + off_p48)
 struct.pack_into('<Q', ka, 0xa0, BASE + off_scratch)
 struct.pack_into('<iiii', ka, 0x18, H, W, 0, 0)
-struct.pack_into('<I', ka, 0x28, 0x14)
+struct.pack_into('<I', ka, 0x28, FLAGS)
 # +0x50..+0x68 are SCALARS, not pointers: the loop above filled them with buffer addresses.
 # The verified pre-block layout zeroes the whole span and then writes 1.0 at +0x50.
 for off in (0x50, 0x58, 0x60, 0x68):
