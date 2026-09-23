@@ -23,7 +23,9 @@ import run_var as V, difftest_var as D, kernelspec as K
 
 IMPORT_SYM = '_Z8k_import12ImportParams'
 RUN = D.ROOT / 'build' / 'net_run.exe'
-OUT = D.ROOT / 'build' / 'net_frame_full'; OUT.mkdir(parents=True, exist_ok=True)
+# NET_FRAME_OUT gives a run its own scratch dir. Parallel runs sharing one dir overwrite each other's
+# tm.txt/tk.bin/ta.bin mid-flight, which produced inconsistent per-prefix results.
+OUT = D.ROOT / 'build' / os.environ.get('NET_FRAME_OUT', 'net_frame_full'); OUT.mkdir(parents=True, exist_ok=True)
 MOD = lambda s: D.ROOT / 'build' / 'kernels-hw-scratch' / (s + '.co')
 WEIGHTS = D.ROOT / 'build' / 'weights'
 
@@ -100,7 +102,13 @@ for si, (key, blocks, C) in enumerate(ENC_STAGES):
 off_spare = place('spare (unused ptr fields)', S1)
 
 # Everything past the encoder runs at stage-5 geometry: the last encoder stage pools once more.
-H5, W5 = max(SRC_H >> 4, 8), max(SRC_W >> 4, 8)
+# 1707>>4 = 106 and 960>>4 = 60, neither a multiple of the 8-wide window. The grid then covers
+# 112x64 and the overhanging windows may be empty, which a softmax turns into 0/0 = NaN.
+# C512_HW allows testing geometries that tile exactly.
+if os.environ.get('C512_HW'):
+    H5, W5 = [int(x) for x in os.environ['C512_HW'].split(',')]
+else:
+    H5, W5 = max(SRC_H >> 4, 8), max(SRC_W >> 4, 8)
 N512, N1024 = act_bytes(512, H5, W5), act_bytes(1024, H5, W5)
 
 c512_1 = [place('c512_1 w%d' % i, N512) for i in range(4)]
@@ -328,20 +336,29 @@ def c512_stage(blocks, work, src_in):
     for bi, blk in enumerate(blocks):
         a = src_in if bi == 0 else work[0]
         L = lambda n: wt['block%d_layer%d' % (blk, n)][0]
-        g1 = grid_for(FFWD_IV, N512)                  # 1-D: sized by the buffer
-        gc = grid_for(CONVV, N512)
+        # 16384 B per workgroup was measured for k_final_head and then applied to every 1-D kernel
+        # without checking. If the real span here is smaller, the extra workgroups overlap and race,
+        # which is what run-to-run variation looks like. C512_WG makes it measurable.
+        _wg = int(os.environ.get('C512_WG', '16384'))
+        g1 = grid_for(FFWD_IV, N512, per_wg=_wg)      # 1-D: sized by the buffer
+        gc = grid_for(CONVV, N512, per_wg=_wg)
         g2 = grid_for(FFWD2, N512, (H5, W5))          # 2-D: sized by the stage geometry
         gq = grid_for(QKV, N512, (H5, W5))
         steps.append((FFWD_IV, ka_for(FFWD_IV, [(0x00, a), (0x08, work[1]), (0x10, L(W5L[0]))],
                                       [(0x18, '<ii', (H5, W5))], g1), g1, 256))
         if os.environ.get('C512_TRACE') == '1' and bi == 0:
             C512_PROBE.append(('1 ffwd_inpview -> w1', work[1], len(steps)))
-        steps.append((FFWD2, ka_for(FFWD2, [(0x00, work[0]), (0x08, a), (0x10, work[1]),
+        # work[0] is written only by this block's LAST dispatch, so on the first block +0x00
+        # reads a buffer nothing has written. net_block512.py never notices: V.build fills its
+        # arena with e4m3-shaped bytes while this runner zero-fills, and a normalisation over
+        # an all-zero buffer gives 0/0 = NaN, which then spreads through every later block.
+        w0 = work[0] if bi else a
+        steps.append((FFWD2, ka_for(FFWD2, [(0x00, w0), (0x08, a), (0x10, work[1]),
                                             (0x18, L(W5L[1]))],
                                     [(0x20, '<iii', (H5, W5, 4))], g2), g2, 256))
         if os.environ.get('C512_TRACE') == '1' and bi == 0:
             C512_PROBE.append(('2 ffwd2        -> w1', work[1], len(steps)))
-        steps.append((CONVV, ka_for(CONVV, [(0x00, work[1]), (0x08, a), (0x10, work[0]),
+        steps.append((CONVV, ka_for(CONVV, [(0x00, work[1]), (0x08, a), (0x10, w0),
                                             (0x18, work[2]), (0x28, L(W5L[2]))],
                                     [(0x20, '<i', (0,)), (0x30, '<ii', (H5, W5))], gc), gc, 256))
         if os.environ.get('C512_TRACE') == '1' and bi == 0:
@@ -398,11 +415,19 @@ if stop in ('full', 'all'):
             C512_PROBE.append(('after ViT %-5d -> BIN' % blk, BIN_, len(steps)))
 
     # block 39: the real k_dec_upsample, not the k_ffwd_inpview stand-in net_full.py uses
-    steps.append((DECUP, ka_for(DECUP, [(0x00, BIN_), (0x08, off_b39), (0x10, c512_2[0]),
-                                        (0x18, wt['block39'][0]), (0x20, off_spare)], [], g), g, 256))
+    # k_dec_upsample (disassembly): +0x00 read tile-wise, +0x08 read linearly (wg*8192), +0x10 WRITTEN (wg*8192,
+    # the only global store), +0x18 weights; +0x20 is TWO i32 (s2, s3; s4 = s3/4 = tiles per row), not a pointer.
+    # 1-D (workgroup_id_y disabled), 8192 B of output per workgroup.
+    _dd = [int(x) for x in os.environ.get('DECUP_DIMS', '%d,%d' % (H5, W5)).split(',')]
+    _dout, _dskip = (off_b39, c512_2[0]) if os.environ.get('DECUP_SWAP') == '1' else (c512_2[0], off_b39)
+    g_du = (int(os.environ.get('DECUP_GRID', str(-(-N512 // 8192)))), 1)
+    steps.append((DECUP, ka_for(DECUP, [(0x00, BIN_), (0x08, _dskip), (0x10, _dout),
+                                        (0x18, wt['block39'][0])],
+                                [(0x20, '<ii', tuple(_dd))], g_du), g_du, 256))
 
     if os.environ.get('C512_TRACE') == '2' and os.environ.get('PROBE_VIT') == '1':
         C512_PROBE.append(('after block39 -> b39', off_b39, len(steps)))
+        C512_PROBE.append(('after block39 -> c512_2[0]', c512_2[0], len(steps)))
     c512_stage(range(40, 48), c512_2, off_b39)
 
     # decoder blocks 48-69, the encoder mirrored
