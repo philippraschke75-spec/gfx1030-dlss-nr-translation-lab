@@ -1470,3 +1470,36 @@ before stopping on a benign `s_getpc_b64`. Both can only be true if the divergen
 **repeat visits** - later iterations of `k_swin_var`'s loops, which the bisection never inspects.
 That is the one hypothesis still standing, and extending the bisection to an (address, occurrence)
 pair is what would confirm it.
+
+## The minimal block 0 repro, and a fixture bug that invalidated the first bisection
+
+**Minimal repro: 8x8, one workgroup.** Mismatches scale linearly with workgroup count at a constant
+share of written bytes, so nothing cross-workgroup is involved:
+
+| H x W | grid | written | mismatches | share |
+|---|---|---|---|---|
+| 8x8 | 1x1 | 10690 | 7268 | 68.0% |
+| 16x8 | 1x2 | 21381 | 14320 | 67.0% |
+| 16x16 | 2x2 | 42812 | 28825 | 67.3% |
+| 24x24 | 3x3 | 96229 | 64520 | 67.0% |
+
+Bisect at **8x8** - it is ~4x cheaper than 16x16 and fails identically.
+
+**`statebisect.py` was not bisecting the failing launch.** `rebuild_kernarg` called
+`V.make_kernarg(flags=..., grid=...)` with the **defaults**: `H=16, W=16, offy=-4, offx=-4`, no null
+`+0x00`/`+0x30`, no float-RGB input at `+0x40`, and none of the `+0x50..0x9f` scalar setup. `arena()`
+also never seeded the input, so the pre-block was reading e4m3-shaped bytes as f32.
+
+So the first bisection ran a *different launch* from the one that fails. The `v_lshlrev_b16` defect
+it found is real and is fixed, but it was found under the wrong fixture, and it does not move block
+0's 28,825 - consistent with having been an unrelated bug that happened to be in the path.
+
+**Anyone re-running the bisection must apply the pre-block kernarg** (flags 0x14, per
+`chain_import_preblock_real.py`) and seed `+0x40` with float RGB, or the result describes the wrong
+configuration.
+
+**Rebase trap found doing that**: `+0x50`, `+0x58`, `+0x60` and `+0x68` are 4-byte scalars, but
+`PTR_FIELDS` lists them, so `make_kernarg` writes full 8-byte pointers there. Clearing only the low
+dword - as `difftest_preblock.py` does - leaves stale high bits that the GPU-side rebaser then
+shifts, and the checkpoint aborts with "rebased kernarg disagrees with emulator" on `+0x68` alone.
+Zero the full 8-byte span, then write the scalar.
