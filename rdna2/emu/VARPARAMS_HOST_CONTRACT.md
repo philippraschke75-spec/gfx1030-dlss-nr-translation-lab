@@ -1775,3 +1775,43 @@ many pointers it expects to be rebased and fail when the runner disagrees.
 `mean`, `contract2`, `expand`, `qkv`, `conv_res_views`, `ffwd2`, `dec_upsample`, `final_head` and the
 pre-block all PASS at 0. `attention` (214) and `attention2` (156) still fail - those are the
 random-bytes-as-floats fixture defects recorded earlier, unrelated to this.
+
+## Frame path after the block-0 fix: the kernels are fine, the frame wiring is not
+
+With `+0x68` corrected, the pre-block passes at 8x8, 16x16 and 64x64 with 0 mismatches. In
+`net_frame_full.py` at 1707x960 it nonetheless produces `finite=False` output saturating f16 at
++/-65504. **The kernel is verified; the frame's launch of it is not.**
+
+Two hypotheses tested here and refuted:
+
+* **`k_export` dimension order.** `+0x0c` is height and `+0x10` width (launcher tracing, above). The
+  runner had them swapped and it is now corrected - but coverage went 11.1% -> 6.0%, i.e. *worse*.
+  Coverage is not a validity measure while the data feeding it is wrong, so the contract-derived
+  order stays. Do not tune these fields by coverage.
+* **HDR input range.** The difftest feeds RGB in [0,1); the capture reaches 65.12, and the ctx
+  exposure scalars are passed as zeros. Scaling `k_import` by 1/65 changes block 0's output mean
+  from -20.34 to -20.25 and nothing else - still saturating, still non-finite. Not the cause.
+
+That block 0 barely responds to a 65x input change, while passing its difftest, says the frame is
+mis-launching it rather than feeding it badly. Prime suspects, none yet tested: the sizes of the
+`+0x38` / `+0x48` / `+0xa0` buffers at 25,680 workgroups (the difftest gives each a 1 MiB slot for
+64 workgroups, and `act_bytes` may not be the right formula for any of the three), and the per-stage
+geometry assumption `h = H >> i`.
+
+### Honest status of the frame
+
+| piece | status |
+|---|---|
+| `k_import` at 1707x960 | verified, correct |
+| pre-block / block 0 | **verified, 0 mismatches at 8x8, 16x16, 64x64** |
+| 22 encoder blocks, one C=512 block, one ViT block, a decoder stage | verified as chains |
+| `k_dec_upsample`, `k_final_head` | registry PASS |
+| `k_export` translation | registry PASS |
+| blocks 24-30, 32-38, 40-47, 49-65 individually | **never tested** - same recipes, untested instances |
+| the 169-dispatch frame chain | runs, 810 ms, guards intact, **output wrong** |
+| ctx scalars `+0x50..+0x68` | unknown values, currently zero |
+| `k_export` semantics | never validated - needs correct network output first |
+
+The pattern of this project holds: every defect chased to ground so far has been a fixture or launch
+parameter, never a mistranslated kernel. Four kernels were accused and exonerated (`k_attention`,
+`k_mean`, `attention2`, and now the pre-block).

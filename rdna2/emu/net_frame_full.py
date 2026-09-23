@@ -15,7 +15,7 @@ HONEST STATUS, kept in the output so a passing run cannot imply more than it sho
 
 usage: net_frame_full.py <color.bin> <src_w> <src_h> [--stop=<stage>]   (inside sandbox.py)
 """
-import sys, struct, subprocess, zlib
+import sys, os, struct, subprocess, zlib
 from pathlib import Path
 import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -173,7 +173,10 @@ ka = bytearray(0x130)
 struct.pack_into('<Q', ka, 0x00, BASE + off_src)
 struct.pack_into('<iiiiii', ka, 0x08, SRC_W * 8, 0, SRC_H, SRC_W, SRC_H, SRC_W)
 struct.pack_into('<Q', ka, 0x20, BASE + off_rgb)
-struct.pack_into('<if', ka, 0x28, 0, 1.0)
+# k_import's scale. The difftest feeds the pre-block RGB in [0,1); the captured frame is HDR and
+# reaches 65.12, and with the ctx exposure scalars unknown (we pass zeros) that saturates f16
+# downstream. IMPORT_SCALE exists to test whether that is what wrecks the chain.
+struct.pack_into('<if', ka, 0x28, 0, float(os.environ.get('IMPORT_SCALE', '1.0')))
 g_imp = ((SRC_W + 255) // 256, SRC_H)
 struct.pack_into('<III', ka, 0x30, g_imp[0], g_imp[1], 1)
 struct.pack_into('<HHH', ka, 0x3c, 256, 1, 1)
@@ -351,8 +354,11 @@ if stop in ('full', 'all'):
     ka = bytearray(280)
     struct.pack_into('<Q', ka, 0x00, BASE + off_head)
     struct.pack_into('<i', ka, 0x08, 0)
-    struct.pack_into('<ii', ka, 0x0c, SRC_W, SRC_H)
-    struct.pack_into('<ii', ka, 0x14, SRC_W, SRC_H)
+    # +0x0c is HEIGHT and +0x10 is WIDTH, not the other way round: the launcher builds the grid
+    # as (ceil(width/256), height) from exactly these two fields, so swapping them makes the kernel
+    # address the surface with the wrong stride.
+    struct.pack_into('<ii', ka, 0x0c, SRC_H, SRC_W)
+    struct.pack_into('<ii', ka, 0x14, SRC_H, SRC_W)
     struct.pack_into('<Q', ka, 0x20, BASE + off_dst)
     struct.pack_into('<i', ka, 0x28, 0)
     struct.pack_into('<Q', ka, 0x30, BASE + off_rgb)
