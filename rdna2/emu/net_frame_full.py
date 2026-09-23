@@ -266,6 +266,39 @@ M = {k: K.kernel_meta(k) for k in (FFWD_IV, FFWD2, CONVV, QKV, EXPAND2, CONTRACT
                                    QKV2, ATTN2, DECUP, HEAD, EXPORT)}
 
 
+_WG2D = {}
+
+
+def wants_2d(sym):
+    """True if the translated kernel actually has workgroup_id_y.
+
+    The translation disables workgroup_id_y for some kernels and re-materialises the original's
+    s15 from s2, i.e. the y index arrives in the hardware X id. Those kernels are 1-D: a grid in Y
+    gives every workgroup the same index and they all write the same place. It is per-kernel, not
+    universal - k_ffwd_inpview, k_conv_res_views, k_dec_upsample, k_repack and k_final_head are 1-D
+    while k_ffwd2, k_qkv_attn, k_contract2, k_qkv2, k_attention2 and k_swin_var are genuinely 2-D.
+    """
+    if sym not in _WG2D:
+        t = (D.ROOT / 'build' / 'kernels-hw-scratch' / (sym + '.s')).read_text(errors='replace')
+        kd = t.split('.amdhsa_kernel ' + sym, 1)[1].split('.end_amdhsa_kernel', 1)[0]
+        _WG2D[sym] = '.amdhsa_system_sgpr_workgroup_id_y 1' in kd
+    return _WG2D[sym]
+
+
+def grid_for(sym, nbytes, hw=None, per_wg=16384):
+    """Extent for one kernel: 1-D kernels are sized by the buffer, 2-D ones by the geometry.
+
+    Leaving the 2-D kernels at (1,1) is the same bug in the other direction - one workgroup covers
+    one 8x8 window, not a 60x106 stage.
+    """
+    if wants_2d(sym):
+        if hw is None:
+            return (1, 1)
+        h, w = hw
+        return ((w + 7) // 8, (h + 7) // 8)
+    return (max(1, -(-nbytes // per_wg)), 1)
+
+
 def ka_for(sym, ptrs, ints=(), grid=(1, 1)):
     # Kernarg sized from the kernel metadata, with the HSA hidden args filled from it too.
     n = M[sym][1]
@@ -289,20 +322,24 @@ def c512_stage(blocks, work, src_in):
     for bi, blk in enumerate(blocks):
         a = src_in if bi == 0 else work[0]
         L = lambda n: wt['block%d_layer%d' % (blk, n)][0]
+        g1 = grid_for(FFWD_IV, N512)                  # 1-D: sized by the buffer
+        gc = grid_for(CONVV, N512)
+        g2 = grid_for(FFWD2, N512, (H5, W5))          # 2-D: sized by the stage geometry
+        gq = grid_for(QKV, N512, (H5, W5))
         steps.append((FFWD_IV, ka_for(FFWD_IV, [(0x00, a), (0x08, work[1]), (0x10, L(0))],
-                                      [(0x18, '<ii', (H5, W5))], g), g, 256))
+                                      [(0x18, '<ii', (H5, W5))], g1), g1, 256))
         steps.append((FFWD2, ka_for(FFWD2, [(0x00, work[0]), (0x08, a), (0x10, work[1]),
                                             (0x18, L(1))],
-                                    [(0x20, '<iii', (H5, W5, 4))], g), g, 256))
+                                    [(0x20, '<iii', (H5, W5, 4))], g2), g2, 256))
         steps.append((CONVV, ka_for(CONVV, [(0x00, work[1]), (0x08, a), (0x10, work[0]),
                                             (0x18, work[2]), (0x28, L(2))],
-                                    [(0x20, '<i', (0,)), (0x30, '<ii', (H5, W5))], g), g, 256))
+                                    [(0x20, '<i', (0,)), (0x30, '<ii', (H5, W5))], gc), gc, 256))
         steps.append((QKV, ka_for(QKV, [(0x00, work[2]), (0x08, work[3]), (0x10, L(3))],
-                                  [(0x18, '<ii', (H5, W5)), (0x20, '<ii', (0, 0))], g), g, 256))
+                                  [(0x18, '<ii', (H5, W5)), (0x20, '<ii', (0, 0))], gq), gq, 256))
         steps.append((CONVV, ka_for(CONVV, [(0x00, work[3]), (0x10, work[2]), (0x18, work[0]),
                                             (0x28, L(2))],
                                     [(0x20, '<i', (0,)), (0x30, '<ii', (H5, W5)),
-                                     (0x40, '<ii', (H5, W5))], g), g, 256))
+                                     (0x40, '<ii', (H5, W5))], gc), gc, 256))
 
 
 if stop in ('full', 'all'):
@@ -361,7 +398,9 @@ if stop in ('full', 'all'):
     # is what k_export reads at 16 B/pixel, so an unwritten head buffer is exactly what makes the
     # export surface non-finite. HEAD_GRID picks the convention: 'swin' = (ceil(W/8), ceil(H/8)),
     # 'lin' = (ceil(W/256), H) as k_import and k_export use, 'one' = the old (1,1).
-    _hg = os.environ.get('HEAD_GRID', 'lin')
+    if os.environ.get('HEAD_SRC') == 'enc1':          # isolation test: a buffer known to vary, same size as the head input
+        stage_in = stage_buf[0][2]
+    _hg = os.environ.get('HEAD_GRID', 'x16k')
     # The head writes ~7 x 16330 B at grid (7,960): the x workgroups land in distinct places and
     # all 960 y rows overwrite each other, so its address does not depend on workgroup_id_y.
     # HeadParams carries no dimensions, so a 1D grid that encodes the whole extent in x is the
@@ -375,7 +414,12 @@ if stop in ('full', 'all'):
               # The kernel does s_lshl_b64 s[12:13], {0, wg_id_y}, 13 and adds that to the
               # input pointer: 8192 bytes of input per y-workgroup. So gy must cover the
               # input buffer, not the image height.
-              'stride8k': (1, (act_bytes(32, SRC_H, SRC_W) + 8191) // 8192)}[_hg]
+              'stride8k': (1, (act_bytes(32, SRC_H, SRC_W) + 8191) // 8192),
+              # output pointer += wg_id_y * 16384 (0xa42a4), workgroup_id_x is never read: gx must be 1
+              'out16k': (1, (SRC_W * SRC_H * 16 + 16383) // 16384),
+              # The TRANSLATED kernel enables workgroup_id_x only (system_sgpr_workgroup_id_y 0) and its prologue does
+              # s_mov_b32 s15, s2, so the original's workgroup_id_y arrives in the hardware X id: count in X.
+              'x16k': ((SRC_W * SRC_H * 16 + 16383) // 16384, 1)}[_hg]
     steps.append((HEAD, ka_for(HEAD, [(0x00, stage_in), (0x08, off_head),
                                       (0x10, wt['block70_layer0'][0])], [], g_head), g_head, 256))
 
@@ -499,6 +543,22 @@ if a16.size >= tiles_y * tiles_x * 8:
             print('wrote', OUT / 'block0_preview.png', '(channel view, NOT the frame)')
 
 if stop in ('full', 'all'):
+    for _nm, _o, _n in ([('c512_1 w%d' % i, o, N512) for i, o in enumerate(c512_1)] + [('vit b%d' % i, o, N1024) for i, o in enumerate(vit_buf)]
+                        + [('c512_2 w%d' % i, o, N512) for i, o in enumerate(c512_2)] + [('block39 out', off_b39, N512)]):
+        _x = res[_o:_o + _n]
+        print('mid %-12s %9d B: nonzero=%6.2f%% distinct=%3d' % (_nm, _n, 100.0 * float((_x != 0).mean()), len(np.unique(_x))))
+    for _di, (_k, _b, _C) in enumerate(DEC_STAGES):
+        _h, _w, _C, _n = dec_geom[_di]
+        for _nm, _o in zip(('ping', 'pong', 'pool'), dec_buf[_di]):
+            _x = res[_o:_o + _n]
+            print('dec s%d %-4s C=%-3d %10d B: nonzero=%6.2f%% distinct=%3d' % (_di + 1, _nm, _C, _n, 100.0 * float((_x != 0).mean()), len(np.unique(_x))))
+    hb = res[off_head:off_head + SRC_W * SRC_H * 16]
+    _n8 = 1601
+    _hi = res[stage_in:stage_in + _n8 * 8192].reshape(_n8, 8192)
+    _nzc = (_hi != 0).any(axis=1)
+    print('head input       : stage_in=%#x, %d chunks of 8192 B: %d nonzero chunks (last %s), %.2f%% bytes nonzero, distinct=%d'
+          % (stage_in, _n8, int(_nzc.sum()), int(np.nonzero(_nzc)[0][-1]) if _nzc.any() else None, 100.0 * float((_hi != 0).mean()), len(np.unique(_hi))))
+    print('head buffer      : %d B, nonzero=%.3f%%, distinct bytes=%d' % (hb.size, 100.0 * float((hb != 0).mean()), len(np.unique(hb))))
     print()
     d16 = res[off_dst:off_dst + SRC_H * SRC_W * 8].view(np.float16).reshape(SRC_H, SRC_W, 4)
     rep = d16[:, :, :3].astype(np.float32)
