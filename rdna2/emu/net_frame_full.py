@@ -349,7 +349,12 @@ if stop in ('full', 'all'):
             src = stage_in if i == 0 else pp[(i + 1) % 2]
             steps.append((sym, enc_kernarg(h, w, oy, ox, flags, grid, src, pp[i % 2],
                                            wt['block%d' % blk][0], pool), grid, 256))
-        stage_in = pool
+            last_dst = pp[i % 2]
+        # The pooled output feeds the NEXT stage. After the last decoder stage there is no next
+        # stage, so the head must read the last block's own output, not a pool buffer that nothing
+        # downsampled into. HEAD_SRC=pool restores the old wiring for comparison.
+        stage_in = pool if (di + 1 < len(DEC_STAGES) or
+                            os.environ.get('HEAD_SRC', 'last') == 'pool') else last_dst
 
     # block 70: the real k_final_head
     # k_final_head was dispatched with grid (1,1) - one workgroup cannot cover 1707x960. Its output
@@ -357,9 +362,20 @@ if stop in ('full', 'all'):
     # export surface non-finite. HEAD_GRID picks the convention: 'swin' = (ceil(W/8), ceil(H/8)),
     # 'lin' = (ceil(W/256), H) as k_import and k_export use, 'one' = the old (1,1).
     _hg = os.environ.get('HEAD_GRID', 'lin')
+    # The head writes ~7 x 16330 B at grid (7,960): the x workgroups land in distinct places and
+    # all 960 y rows overwrite each other, so its address does not depend on workgroup_id_y.
+    # HeadParams carries no dimensions, so a 1D grid that encodes the whole extent in x is the
+    # obvious alternative to a 2D one.
+    _npix = SRC_W * SRC_H
     g_head = {'swin': ((SRC_W + 7) // 8, (SRC_H + 7) // 8),
               'lin': ((SRC_W + 255) // 256, SRC_H),
-              'one': (1, 1)}[_hg]
+              'one': (1, 1),
+              'flat': (((SRC_W + 255) // 256) * SRC_H, 1),
+              'pix': ((_npix + 255) // 256, 1),
+              # The kernel does s_lshl_b64 s[12:13], {0, wg_id_y}, 13 and adds that to the
+              # input pointer: 8192 bytes of input per y-workgroup. So gy must cover the
+              # input buffer, not the image height.
+              'stride8k': (1, (act_bytes(32, SRC_H, SRC_W) + 8191) // 8192)}[_hg]
     steps.append((HEAD, ka_for(HEAD, [(0x00, stage_in), (0x08, off_head),
                                       (0x10, wt['block70_layer0'][0])], [], g_head), g_head, 256))
 
