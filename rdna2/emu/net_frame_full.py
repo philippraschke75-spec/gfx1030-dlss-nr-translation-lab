@@ -261,9 +261,10 @@ CONVV, QKV = '_Z16k_conv_res_views12ConvPlParams', '_Z10k_qkv_attn10AttnParams'
 EXPAND2, CONTRACT2 = '_Z9k_expand212ExpandParams', '_Z11k_contract212ConvParams1d'
 QKV2, ATTN2 = '_Z6k_qkv29QkvParams', '_Z12k_attention212AttnParams1d'
 DECUP, HEAD = '_Z14k_dec_upsample11DecUpParams', '_Z12k_final_head10HeadParams'
+REPACK = '_Z8k_repack12RepackParams'
 EXPORT = '_Z8k_export12ExportParams'
 M = {k: K.kernel_meta(k) for k in (FFWD_IV, FFWD2, CONVV, QKV, EXPAND2, CONTRACT2,
-                                   QKV2, ATTN2, DECUP, HEAD, EXPORT)}
+                                   QKV2, ATTN2, DECUP, HEAD, EXPORT, REPACK)}
 
 
 _WG2D = {}
@@ -343,7 +344,17 @@ def c512_stage(blocks, work, src_in):
 
 
 if stop in ('full', 'all'):
-    c512_stage(range(23, 31), c512_1, stage_buf[3][2])
+    # enc -> mid is `k_repack, k_final_head` in the driver's phase table. The runner had neither, so
+    # the C=512 stage was reading the last encoder pool at C=256/120x213 while running at 60x106.
+    # k_repack is a pure relayout (2 pointers + four i32, difftest PASS), which is what bridges them.
+    _rp = [int(x) for x in os.environ.get('REPACK_DIMS', '60,106,256,512').split(',')]
+    # 16384 B/workgroup is the figure derived for k_final_head, not for k_repack. REPACK_WG
+    # lets the real per-workgroup span be found by measurement.
+    g_rp = grid_for(REPACK, N512, per_wg=int(os.environ.get('REPACK_WG', '16384')))
+    steps.append((REPACK, ka_for(REPACK, [(0x00, stage_buf[3][2]), (0x08, c512_1[0])],
+                                 [(0x10, '<iiii', tuple(_rp))], g_rp), g_rp, 256))
+    if os.environ.get('STOP_AFTER_REPACK') != '1':
+        c512_stage(range(23, 31), c512_1, c512_1[0])
 
     # ViT blocks 31-38: six contiguous buffers, 5 dispatches each (net_vit.py, verified bit-exact)
     g = (1, 1)
