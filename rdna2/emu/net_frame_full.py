@@ -19,7 +19,7 @@ import sys, struct, subprocess, zlib
 from pathlib import Path
 import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import run_var as V, difftest_var as D
+import run_var as V, difftest_var as D, kernelspec as K
 
 IMPORT_SYM = '_Z8k_import12ImportParams'
 RUN = D.ROOT / 'build' / 'net_run.exe'
@@ -75,8 +75,80 @@ off_p38 = place('pre-block +0x38', S1)
 off_p48 = place('pre-block +0x48', S1)          # the "optional 3rd buffer"; difftest_preblock
                                                 # leaves make_kernarg's pointer here rather than
                                                 # nulling it, so it is not optional in practice
+# Encoder: 4 stages, C doubling as the spatial size halves. Each stage needs a ping-pong pair; the
+# stage input is the previous stage's pooled output.
+ENC_STAGES = [('32_0', [1, 2, 3, 4], 32), ('64_0', [5, 6, 7, 8], 64),
+              ('128_0', [9, 10, 11, 12, 13, 14], 128), ('256_0', [15, 16, 17, 18, 19, 20, 21, 22], 256)]
+ENC_MODES = [(0, 0), (-4, -4), (-4, 0), (0, -4)]
+
+stage_geom, stage_buf = [], []
+for si, (key, blocks, C) in enumerate(ENC_STAGES):
+    h, w = max(SRC_H >> si, 8), max(SRC_W >> si, 8)
+    n = act_bytes(C, h, w)
+    stage_geom.append((h, w, C, n))
+    stage_buf.append((place('enc s%d ping' % (si + 1), n), place('enc s%d pong' % (si + 1), n),
+                      place('enc s%d pool' % (si + 1), n)))
+
+# Every PTR_FIELDS entry make_kernarg fills must point at real memory: the defaults are 1 MiB
+# difftest slots that do not exist here, and a kernel touching one writes outside the arena. That is
+# what tripped the guards on +0x48. Unused fields share one buffer sized for the largest stage.
+off_spare = place('spare (unused ptr fields)', S1)
+
+# Everything past the encoder runs at stage-5 geometry: the last encoder stage pools once more.
+H5, W5 = max(SRC_H >> 4, 8), max(SRC_W >> 4, 8)
+N512, N1024 = act_bytes(512, H5, W5), act_bytes(1024, H5, W5)
+
+c512_1 = [place('c512_1 w%d' % i, N512) for i in range(4)]
+vit_buf = [place('vit b%d' % i, N1024) for i in range(6)]
+c512_2 = [place('c512_2 w%d' % i, N512) for i in range(4)]
+off_b39 = place('block39 out', N512)
+
+# decoder mirrors the encoder: 4 stages, channels halving as the size doubles back up
+DEC_STAGES = [('256_0', list(range(48, 56)), 256), ('128_0', list(range(56, 62)), 128),
+              ('64_0', list(range(62, 66)), 64), ('32_0', list(range(66, 70)), 32)]
+dec_geom, dec_buf = [], []
+for di, (key, blocks, C) in enumerate(DEC_STAGES):
+    h, w = max(SRC_H >> (3 - di), 8), max(SRC_W >> (3 - di), 8)
+    n = act_bytes(C, h, w)
+    dec_geom.append((h, w, C, n))
+    dec_buf.append((place('dec s%d ping' % (di + 1), n), place('dec s%d pong' % (di + 1), n),
+                    place('dec s%d pool' % (di + 1), n)))
+
+off_head = place('head out', act_bytes(32, SRC_H, SRC_W))
+off_dst = place('export dst RGBA16F', SRC_H * SRC_W * 8)
+
+wt = {}
+
+
+def wplace(name):
+    f = WEIGHTS / (name + '.bin')
+    n = f.stat().st_size
+    wt[name] = (place('w:' + name, n), n)
+    return wt[name][0]
+
+
+for _b in range(23, 31):
+    for _l in range(4):
+        wplace('block%d_layer%d' % (_b, _l))
+for _b in range(31, 39):
+    for _l in (0, 1, 2, 4):
+        wplace('block%d_layer%d' % (_b, _l))
+wplace('block39')
+for _b in range(40, 48):
+    for _l in range(4):
+        wplace('block%d_layer%d' % (_b, _l))
+for _b in range(48, 70):
+    wplace('block%d' % _b)
+wplace('block70_layer0')
+
 w_block0 = (WEIGHTS / 'block0.bin').read_bytes()
 off_w0 = place('block0 weights', len(w_block0))
+
+enc_weight_off = {}
+for _key, _blocks, _C in ENC_STAGES:
+    for _blk in _blocks:
+        _n = (WEIGHTS / ('block%d.bin' % _blk)).stat().st_size
+        enc_weight_off[_blk] = (place('block%d w' % _blk, _n), _n)
 
 ARENA_SZ = (A + (1 << 20) - 1) // (1 << 20) * (1 << 20)
 BASE = V.ARENA
@@ -89,6 +161,10 @@ print('  total %.1f MB\n' % (ARENA_SZ / 1e6))
 arena = np.zeros(ARENA_SZ, np.uint8)
 arena[off_src:off_src + src.size] = src
 arena[off_w0:off_w0 + len(w_block0)] = np.frombuffer(w_block0, np.uint8)
+for _nm, (_o, _n) in wt.items():
+    arena[_o:_o + _n] = np.frombuffer((WEIGHTS / (_nm + '.bin')).read_bytes(), np.uint8)
+for _blk, (_o, _n) in enc_weight_off.items():
+    arena[_o:_o + _n] = np.frombuffer((WEIGHTS / ('block%d.bin' % _blk)).read_bytes(), np.uint8)
 
 steps = []
 
@@ -124,6 +200,162 @@ struct.pack_into('<Q', ka, 0xa0, BASE + off_scratch)
 struct.pack_into('<III', ka, 0xA8, g_pre[0], g_pre[1], 1)
 struct.pack_into('<HHH', ka, 0xB4, 256, 1, 1)
 steps.append((PRE_SYM, bytes(ka), g_pre, 256))
+
+# ---------------------------------------------------------------- encoder blocks 1-22
+# Ordinary encoder convention this time: input at +0x00, flags bit0 = first-of-stage,
+# bit2 = last-of-stage (which also emits the next stage's input through the pool pointer at +0x38).
+
+
+def enc_kernarg(h, w, oy, ox, flags, grid, src, dst, wgt, pool):
+    ka = bytearray(424)
+    for off in V.PTR_FIELDS:                       # every pointer field must be real memory
+        struct.pack_into('<Q', ka, off, BASE + off_spare)
+    struct.pack_into('<Q', ka, 0x00, BASE + src)
+    struct.pack_into('<Q', ka, 0x08, BASE + dst)
+    struct.pack_into('<Q', ka, 0x10, BASE + wgt)
+    struct.pack_into('<Q', ka, 0x38, BASE + pool)
+    struct.pack_into('<Q', ka, 0xa0, BASE + off_scratch)
+    struct.pack_into('<iiii', ka, 0x18, h, w, oy, ox)
+    struct.pack_into('<I', ka, 0x28, flags)
+    struct.pack_into('<III', ka, 0xA8, grid[0], grid[1], 1)
+    struct.pack_into('<HHH', ka, 0xB4, 256, 1, 1)
+    return bytes(ka)
+
+
+if stop != 'preblock':
+    stage_in = off_a                                # the pre-block's output feeds stage 1
+    for si, (key, blocks, C) in enumerate(ENC_STAGES):
+        sym, lds = D.SYMS[key]
+        lds = lds or D.group_size(sym)
+        h, w, C, _n = stage_geom[si]
+        ping, pong, pool = stage_buf[si]
+        pp = [ping, pong]
+        for i, blk in enumerate(blocks):
+            ox, oy = ENC_MODES[i % 4]
+            last = (i == len(blocks) - 1)
+            flags = (1 if i == 0 else 0) | (4 if last else 0)
+            grid = ((w - ox + 7) // 8, (h - oy + 7) // 8)
+            src = stage_in if i == 0 else pp[(i + 1) % 2]
+            dst = pp[i % 2]
+            wgt = enc_weight_off[blk][0]
+            steps.append((sym, enc_kernarg(h, w, oy, ox, flags, grid, src, dst, wgt, pool),
+                          grid, 256))
+        stage_in = pool                             # the pooled output is the next stage's input
+
+# ---------------------------------------------------------------- C=512, ViT, 39, decoder, head
+FFWD_IV, FFWD2 = '_Z14k_ffwd_inpview12FfwdPlParams', '_Z7k_ffwd211Ffwd2Params'
+CONVV, QKV = '_Z16k_conv_res_views12ConvPlParams', '_Z10k_qkv_attn10AttnParams'
+EXPAND2, CONTRACT2 = '_Z9k_expand212ExpandParams', '_Z11k_contract212ConvParams1d'
+QKV2, ATTN2 = '_Z6k_qkv29QkvParams', '_Z12k_attention212AttnParams1d'
+DECUP, HEAD = '_Z14k_dec_upsample11DecUpParams', '_Z12k_final_head10HeadParams'
+EXPORT = '_Z8k_export12ExportParams'
+M = {k: K.kernel_meta(k) for k in (FFWD_IV, FFWD2, CONVV, QKV, EXPAND2, CONTRACT2,
+                                   QKV2, ATTN2, DECUP, HEAD)}
+
+
+def ka_for(sym, ptrs, ints=(), grid=(1, 1)):
+    # Kernarg sized from the kernel metadata, with the HSA hidden args filled from it too.
+    n = M[sym][1]
+    ka = bytearray(max(n, 424))
+    for off, val in ptrs:
+        struct.pack_into('<Q', ka, off, BASE + val)
+    for off, fmt, vals in ints:
+        struct.pack_into(fmt, ka, off, *vals)
+    for name, val in (('block_count_x', grid[0]), ('block_count_y', grid[1]), ('block_count_z', 1),
+                      ('group_size_x', 256), ('group_size_y', 1), ('group_size_z', 1),
+                      ('grid_dims', 2)):
+        if name in M[sym][3]:
+            o, sz = M[sym][3][name]
+            struct.pack_into('<' + {2: 'H', 4: 'I', 8: 'Q'}[sz], ka, o, val)
+    return bytes(ka)
+
+
+def c512_stage(blocks, work, src_in):
+    # One C=512 attention block is 5 dispatches; recipe per VARPARAMS_HOST_CONTRACT.md.
+    g = (1, 1)
+    for bi, blk in enumerate(blocks):
+        a = src_in if bi == 0 else work[0]
+        L = lambda n: wt['block%d_layer%d' % (blk, n)][0]
+        steps.append((FFWD_IV, ka_for(FFWD_IV, [(0x00, a), (0x08, work[1]), (0x10, L(0))],
+                                      [(0x18, '<ii', (H5, W5))], g), g, 256))
+        steps.append((FFWD2, ka_for(FFWD2, [(0x00, work[0]), (0x08, a), (0x10, work[1]),
+                                            (0x18, L(1))],
+                                    [(0x20, '<iii', (H5, W5, 4))], g), g, 256))
+        steps.append((CONVV, ka_for(CONVV, [(0x00, work[1]), (0x08, a), (0x10, work[0]),
+                                            (0x18, work[2]), (0x28, L(2))],
+                                    [(0x20, '<i', (0,)), (0x30, '<ii', (H5, W5))], g), g, 256))
+        steps.append((QKV, ka_for(QKV, [(0x00, work[2]), (0x08, work[3]), (0x10, L(3))],
+                                  [(0x18, '<ii', (H5, W5)), (0x20, '<ii', (0, 0))], g), g, 256))
+        steps.append((CONVV, ka_for(CONVV, [(0x00, work[3]), (0x10, work[2]), (0x18, work[0]),
+                                            (0x28, L(2))],
+                                    [(0x20, '<i', (0,)), (0x30, '<ii', (H5, W5)),
+                                     (0x40, '<ii', (H5, W5))], g), g, 256))
+
+
+if stop in ('full', 'all'):
+    c512_stage(range(23, 31), c512_1, stage_buf[3][2])
+
+    # ViT blocks 31-38: six contiguous buffers, 5 dispatches each (net_vit.py, verified bit-exact)
+    g = (1, 1)
+    BIN_ = c512_1[0]
+    B260, B268, B270, B278, B280, B288 = vit_buf
+    for blk in range(31, 39):
+        L = lambda n: wt['block%d_layer%d' % (blk, n)][0]
+        steps.append((EXPAND2, ka_for(EXPAND2, [(0x00, BIN_), (0x08, B260), (0x10, L(0))],
+                                      [], g), g, 256))
+        steps.append((CONTRACT2, ka_for(CONTRACT2, [(0x00, B260), (0x08, BIN_), (0x10, B268),
+                                                    (0x18, L(1))],
+                                        [(0x20, '<ii', (H5, W5)), (0x28, '<i', (4,))], g), g, 256))
+        steps.append((QKV2, ka_for(QKV2, [(0x00, B268), (0x08, B270), (0x10, B278), (0x18, B280),
+                                          (0x20, L(2))], [], g), g, 256))
+        steps.append((ATTN2, ka_for(ATTN2, [(0x00, B270), (0x08, B278), (0x10, B280), (0x18, B288)],
+                                    [(0x20, '<ii', (W5, H5))], g), g, 256))
+        steps.append((CONTRACT2, ka_for(CONTRACT2, [(0x00, B288), (0x08, B270), (0x10, BIN_),
+                                                    (0x18, L(4))],
+                                        [(0x20, '<ii', (H5, W5)), (0x28, '<i', (4,))], g), g, 256))
+
+    # block 39: the real k_dec_upsample, not the k_ffwd_inpview stand-in net_full.py uses
+    steps.append((DECUP, ka_for(DECUP, [(0x00, BIN_), (0x08, off_b39), (0x10, c512_2[0]),
+                                        (0x18, wt['block39'][0]), (0x20, off_spare)], [], g), g, 256))
+
+    c512_stage(range(40, 48), c512_2, off_b39)
+
+    # decoder blocks 48-69, the encoder mirrored
+    stage_in = c512_2[0]
+    for di, (key, blocks, C) in enumerate(DEC_STAGES):
+        sym, lds = D.SYMS[key]
+        lds = lds or D.group_size(sym)
+        h, w, C, _n = dec_geom[di]
+        ping, pong, pool = dec_buf[di]
+        pp = [ping, pong]
+        for i, blk in enumerate(blocks):
+            ox, oy = ENC_MODES[i % 4]
+            last = (i == len(blocks) - 1)
+            flags = (1 if i == 0 else 0) | (4 if last else 0)
+            grid = ((w - ox + 7) // 8, (h - oy + 7) // 8)
+            src = stage_in if i == 0 else pp[(i + 1) % 2]
+            steps.append((sym, enc_kernarg(h, w, oy, ox, flags, grid, src, pp[i % 2],
+                                           wt['block%d' % blk][0], pool), grid, 256))
+        stage_in = pool
+
+    # block 70: the real k_final_head
+    steps.append((HEAD, ka_for(HEAD, [(0x00, stage_in), (0x08, off_head),
+                                      (0x10, wt['block70_layer0'][0])], [], g), g, 256))
+
+    # k_export, fed the network's own output at +0x00 - the first time it has had that
+    ka = bytearray(280)
+    struct.pack_into('<Q', ka, 0x00, BASE + off_head)
+    struct.pack_into('<i', ka, 0x08, 0)
+    struct.pack_into('<ii', ka, 0x0c, SRC_W, SRC_H)
+    struct.pack_into('<ii', ka, 0x14, SRC_W, SRC_H)
+    struct.pack_into('<Q', ka, 0x20, BASE + off_dst)
+    struct.pack_into('<i', ka, 0x28, 0)
+    struct.pack_into('<Q', ka, 0x30, BASE + off_rgb)
+    struct.pack_into('<ff', ka, 0x38, 1.0, 1.0)
+    g_exp = ((SRC_W + 255) // 256, SRC_H)
+    struct.pack_into('<III', ka, 0x40, g_exp[0], g_exp[1], 1)
+    struct.pack_into('<HHH', ka, 0x4c, 256, 1, 1)
+    steps.append((EXPORT, bytes(ka), g_exp, 256))
 
 # ---------------------------------------------------------------- dispatch
 blob = b''; lines = []
@@ -163,6 +395,11 @@ rgb = res[off_rgb:off_rgb + SRC_H * SRC_W * 12].view(np.float32).reshape(SRC_H, 
 report('k_import RGB', res[off_rgb:off_rgb + SRC_H * SRC_W * 12])
 a_fin, a_nz = report('block0 out', res[off_a:off_a + S1])
 report('block0 +0x38', res[off_p38:off_p38 + S1])
+if stop != 'preblock':
+    for si, (key, blocks, C) in enumerate(ENC_STAGES):
+        h, w, C, n = stage_geom[si]
+        ping, pong, pool = stage_buf[si]
+        report('enc s%d pool C=%d' % (si + 1, C), res[pool:pool + n])
 
 if a_nz < 1.0:
     print('\n  block0 wrote essentially nothing - the pre-block did not run as intended.')
@@ -201,3 +438,13 @@ if a16.size >= tiles_y * tiles_x * 8:
             write_png(OUT / 'block0_preview.png',
                       tonemap((np.nan_to_num(v) - lo) / (hi - lo)))
             print('wrote', OUT / 'block0_preview.png', '(channel view, NOT the frame)')
+
+if stop in ('full', 'all'):
+    print()
+    d16 = res[off_dst:off_dst + SRC_H * SRC_W * 8].view(np.float16).reshape(SRC_H, SRC_W, 4)
+    rep = d16[:, :, :3].astype(np.float32)
+    print('k_export surface : finite=%s  nonzero=%.1f%%  min=%.4g max=%.4g'
+          % (bool(np.isfinite(rep).all()), 100.0 * float((rep != 0).mean()),
+             float(np.nanmin(rep)), float(np.nanmax(rep))))
+    write_png(OUT / 'rendered.png', tonemap(rep))
+    print('wrote', OUT / 'rendered.png')

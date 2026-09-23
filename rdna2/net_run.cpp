@@ -30,8 +30,15 @@
 
 static std::vector<uint8_t> rd(const char* p){
   FILE*f=std::fopen(p,"rb"); if(!f){std::printf("cannot open %s\n",p);std::exit(9);}
-  std::fseek(f,0,SEEK_END); long n=std::ftell(f); std::fseek(f,0,SEEK_SET);
-  std::vector<uint8_t> v(n); if(n&&std::fread(v.data(),1,n,f)!=(size_t)n)std::exit(9);
+  // long is 32-bit on Windows: ftell overflows past 2 GB and the arena for a full-resolution
+  // frame is larger than that, which failed silently with no output at all.
+#ifdef _WIN32
+  _fseeki64(f,0,SEEK_END); long long n=_ftelli64(f); _fseeki64(f,0,SEEK_SET);
+#else
+  std::fseek(f,0,SEEK_END); long long n=ftello(f); std::fseek(f,0,SEEK_SET);
+#endif
+  if(n<0){std::printf("cannot size %s\n",p);std::exit(9);}
+  std::vector<uint8_t> v((size_t)n); if(n&&std::fread(v.data(),1,(size_t)n,f)!=(size_t)n)std::exit(9);
   std::fclose(f); return v;
 }
 struct Step { std::string mod, sym; size_t off, len; unsigned gx, gy, thr; };
