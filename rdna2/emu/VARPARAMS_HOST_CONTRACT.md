@@ -1684,3 +1684,40 @@ encoder    k_swin_var<32,false>  flags 5    : deterministic, 4/4 repeat runs ide
 
 So blocks 1-70 do **not** need the synchronisation protocol; exactly one block does. That is a much
 smaller problem than "the network races", and it is worth checking this way before assuming scope.
+
+## ISA audit of the 32-opcode shortlist: no defect found
+
+Each opcode the failing `<32,true>` executes and the passing `<32,false>` never does, checked against
+the RDNA ISA. **Result: no defect.** Recording it so nobody repeats the sweep.
+
+| opcode | checked | verdict |
+|---|---|---|
+| `s_bfe_i32` / `s_bfe_u32` | offset `S1[4:0]`, width `S1[22:16]`, width 0 -> 0, sign-extend, SCC = (D != 0) | correct |
+| `s_sext_i32_i16` / `_i8` | mask to width, subtract 2^w when the sign bit is set | correct |
+| `s_cmp_lt_u32` | generic `s_cmp` regex; unsigned, no sign-extension | correct |
+| `s_cmp_eq_u64` | `rs()` returns the full 64-bit pair when `o['n'] == 2` | correct |
+| `s_bitcmp0_b32` | `(S0 >> (S1 & 31)) & 1` against the expected bit | correct |
+| `v_cmpx_o_f32` | `bits()` applies `& s.em`, so EXEC gets the result masked by the *current* EXEC | correct |
+| all `v_cmp_*` predicates | `o`/`u`/`nlt`/`ngt`/`nge`/`nle` NaN behaviour | correct |
+| `v_xad_u32`, `v_xor3_b32` | `(S0^S1)+S2`, `S0^S1^S2` | correct |
+| `v_fmaak_f32` | `S0*S1+K` | correct |
+| `v_fmamk_f32` | `S0*K+S1` - operand order matches the assembly form | correct |
+| `v_mad_i64_i32` | `P[1]` is the carry operand; sources are `P[2..4]` | correct |
+| `v_dual_*` (VOPD) | `w.RV` snapshot before both halves, so sources are read before either writes | correct |
+| `global_store_b16`, `global_load_b96`, `ds_store_b128` | `stbytes`/`ldbytes` take `min(4, n-4j)` per dword | correct |
+| `v_perm_b32` | selector 0-3 -> `S1` bytes, 4-7 -> `S0`, 12 -> `0x00`, 13-15 -> `0xff` | correct |
+| `v_fma_mix_f32` | `{op_sel_hi[i], op_sel[i]}` = f32 / f16-lo / f16-hi | correct |
+
+The translated gfx1030 kernel passes the interesting ones through unchanged - `v_cmpx_o_f32_e32`,
+`v_cmpx_o_f16_e32`, `v_cmpx_neq_f32_e32` all appear with `// original:` comments and no rewriting.
+
+**A trap worth naming**: a grep for `\bv_cmpx_o_f32\b` reports **zero** occurrences in that file,
+because `_` is a word character and the mnemonic is `v_cmpx_o_f32_e32`. That nearly became a
+finding ("the translator dropped the instruction"). Match mnemonics with a trailing `[_ ]` or none.
+
+### What that leaves
+
+The emulator side of the shortlist is clean, which shifts weight toward the translation or toward
+something that is not a single opcode - an operand modifier, a literal, or a control-flow difference.
+The dynamic approach (`preblock_firststore.py`, tracing back from the first wrong store at
+`pc=0xb1598`) does not depend on guessing which opcode matters and is the better remaining lead.
