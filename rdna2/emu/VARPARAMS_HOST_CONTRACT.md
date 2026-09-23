@@ -990,35 +990,70 @@ experiment.
 Note the zeroed tail: the count field at `+0x38` that `k_conv_res2` needs is **0** here, consistent
 with this dispatch not using the token-count path.
 
-## The ViT block recipe, blocks 31-38 (2026-09-22)
+## The ViT block recipe, blocks 31-38 (2026-09-22, corrected 2026-09-23)
 
 The ViT loop (`0x18002fd80`-`0x1800302d2`, counter `r15d` from `0x1f` to `0x27`) issues **five**
-dispatches per block, matching the five weight records blocks 31-38 carry:
+dispatches per block, matching the five weight records blocks 31-38 carry. **The ViT uses six
+contiguous ctx buffers** (ctx+0x260, ctx+0x268, ctx+0x270, ctx+0x278, ctx+0x280, ctx+0x288),
+each allocated in its own arena slot.
 
 | step | dispatch at | kernel | weight layer | kernarg |
 |---|---|---|---|---|
-| 1 | `0x18002fe68` | `k_expand2` | 0 | `+0x00` input (`rdi`), `+0x08` `ctx+0x260`, `+0x10` weight |
-| 2 | `0x18002ff83` | `k_contract2` | 1 | `+0x00` `ctx+0x260`, `+0x08` `rdi`, `+0x10` `ctx+0x268`, `+0x18` weight, `+0x28` = **4** |
-| 3 | `0x180030070` | `k_qkv2` | 2 | kernarg at `rbp-0x20` |
-| 4 | `0x18003015d` | `k_attention2` | - (no lookup) | kernarg at `rbp+0x10` |
-| 5 | `0x180030278` | `k_contract2` | 4 | `+0x00` `ctx+0x288`, `+0x08` `ctx+0x268`, `+0x10` `r13`, `+0x18` weight, `+0x28` = **4** |
+| 1 | `0x18002fe68` | `k_expand2` | 0 | `+0x00` input, `+0x08` ctx+0x260, `+0x10` weight |
+| 2 | `0x18002ff83` | `k_contract2` | 1 | `+0x00` ctx+0x260, `+0x08` input, `+0x10` ctx+0x268, `+0x18` weight, `+0x28` = **4** |
+| 3 | `0x180030070` | `k_qkv2` | 2 | base rbp-0x20 (see below) |
+| 4 | `0x18003015d` | `k_attention2` | - (no lookup) | base rbp+0x10 (see below) |
+| 5 | `0x180030278` | `k_contract2` | 4 | `+0x00` ctx+0x288, `+0x08` ctx+0x268, `+0x10` output, `+0x18` weight, `+0x28` = **4** |
+
+### Step 3: k_qkv2 kernarg (host disassembly 0x180030008-0x18003002c, base rbp-0x20)
+
+Host loads two 128-bit register pairs:
+- `movups [rcx+0x268] -> [rbp-0x20]` at 0x180030008 (fields +0x00, +0x08)
+- `movups [rcx+0x278] -> [rbp-0x10]` at 0x180030013 (fields +0x10, +0x18)
+- `call 0x180031bc0` weight lookup with layer=2 at 0x180030027
+- `mov [rbp], weight result` at 0x18003002c (field +0x20)
+
+| offset | field |
+|---|---|
+| +0x00 | ctx+0x268 |
+| +0x08 | ctx+0x270 |
+| +0x10 | ctx+0x278 |
+| +0x18 | ctx+0x280 |
+| +0x20 | weight layer 2 |
+
+### Step 4: k_attention2 kernarg (host disassembly 0x1800300ee-0x180030118, base rbp+0x10)
+
+Host loads two 128-bit register pairs and one dword pair with element swap:
+- `movups [rax+0x270] -> [rbp+0x10]` at 0x1800300f5 (fields +0x00, +0x08)
+- `movups [rax+0x280] -> [rbp+0x20]` at 0x180030100 (fields +0x10, +0x18)
+- `movq [rax+0x310] -> [rbp+0x30]` at 0x18003010b, then `pshufd xmm0, xmm0, 0xe1` at 0x180030113 
+  (swaps the two dwords: element [0,1] becomes [1,0], so H and W are swapped)
+- `movq [rbp+0x30] -> [rbp+0x20]` at 0x180030118 (fields +0x20, +0x24)
+
+| offset | field |
+|---|---|
+| +0x00 | ctx+0x270 |
+| +0x08 | ctx+0x278 |
+| +0x10 | ctx+0x280 |
+| +0x18 | ctx+0x288 |
+| +0x20 | H/W pair from ctx+0x310, **swapped by pshufd** (original order W, H) |
+| +0x24 | |
 
 **Why attention takes no weight lookup**: ViT `layer3` is only **2 bytes** (`block31.layer3.layer`),
-a scalar rather than a matrix - so `k_attention2` consumes a scale, not a weight record. The other
+a scalar rather than a matrix - so `k_attention2` reads the scale, not a weight record. The other
 four layers map cleanly onto expand / contract / qkv / projection.
 
 **The `+0x28 = 4` the host writes is the token-count field**, and 4 is exactly the value derived
 empirically for `k_contract2` from the `min(n*16, H*W)` sweep. Static and experimental agree.
 
-**Ping-pong**: the loop head swaps `rdi` and `r13` every iteration (`mov rax, rdi` / `mov rdi, r13` /
-`mov r13, rax` at `0x18002fd83`-`0x18002fd90`), so step 1 reads the current buffer and step 5 writes
-the other - the same alternation the encoder uses, with `ctx+0x260` / `ctx+0x268` / `ctx+0x288` as
-per-block intermediates (a distinct set from the C=512 blocks' `0x228`-`0x240`).
+**Ping-pong**: the loop head swaps buffers every iteration (`mov rax, rdi` / `mov rdi, r13` /
+`mov r13, rax` at `0x18002fd83`-`0x18002fd90`), so step 1 reads the input and step 5 writes back
+to the other.
 
-**Not yet executed.** Unlike the C=512 block, this recipe has not been run as a chain, and doing so
-is expected to fail at step 4: `k_attention2` is one of the two kernels with an open numeric
-mismatch against the emulator. That makes the ViT chain the natural place to find out whether the
-mismatch is confined to that kernel or contaminates everything downstream of it.
+**Verified on hardware** (2026-09-23): ViT block 31 executes as a complete five-dispatch chain on
+gfx1030 with **0 mismatches** against the emulator for steps 1-3 and for the full 5-step chain.
+The known 1-ULP WMMA rounding in k_attention2 does not manifest as divergence in the full-chain
+result (likely absorbed by step 5's subsequent k_contract2).
 
 ## k_attention's mismatch: root cause is the emulator, not the translation (2026-09-22)
 
@@ -1142,8 +1177,10 @@ Re-running the whole registry after the `stride64` and `v_cvt_f16_f32` fixes:
 * **`k_mean` now passes.** It had been failing with 4 mismatches and had been separately investigated
   and localised to "ordinary per-lane arithmetic". It was the same `v_cvt_f16_f32` defect. That is a
   second kernel whose "translation failure" was really the reference model.
-* The only remaining failures are `k_attention` / `k_attention2` at 214 each, now understood as
-  1-ULP WMMA rounding in the reference rather than translation defects.
+* The only remaining failures are `k_attention` / `k_attention2` at 214 each, at the time attributed
+  to 1-ULP WMMA rounding in the reference rather than translation defects.
+  **SUPERSEDED** - see "k_attention2 is bit-exact in the real chain" at the end of this file. The
+  WMMA-rounding explanation was wrong; the fixture was.
 
 ## Block 39 resolved: it is not a block, it is the decoder-transition weight (2026-09-22)
 
@@ -1232,3 +1269,49 @@ This is the same failure mode as `k_ffwd2` "passing" while writing zero bytes: a
 says the two implementations agree, not that the fixture asked a meaningful question. Any chain test
 must place its buffers **beyond `len(V.PTR_FIELDS)`**, and checking that no weight slot appears in
 the written set is a cheap way to catch it - which is why that slot list is recorded above.
+
+## k_attention2 is bit-exact in the real chain — the 214 count is a fixture artefact
+
+The ViT block-31 chain (`net_vit.py`) was run in two cuts against `net_run.exe`, seed 1, to isolate
+step 4 (`k_attention2`) rather than trust a whole-chain PASS:
+
+| cut | dispatches | emulator bytes written | slots touched | mismatches |
+|---|---|---|---|---|
+| steps 1-3 | 3 | 22439 | 1,2,3,4,5 | **0** |
+| steps 1-4 | 4 | 24484 | 1,2,3,4,5,**6** | **0** |
+| steps 1-5 | 5 | 32651 | 1..7 | **0** |
+
+The 1-3 → 1-4 delta is **2045 bytes**, all in slot 6 (`ctx+0x288`, `k_attention2`'s `+0x18`
+destination). So the kernel did substantial work *and* matched the emulator exactly. No weight slot
+(8 and above) appears in any written-slot list, so the fixture is not the overlapping-weights trap.
+
+**Control, run in the same session:** the per-kernel registry difftest for `attention2` still reports
+**214** mismatches (2019 bytes written). The emulator did not change; the input data did.
+
+This retires the standing explanation. The record previously attributed the 214 to *1 ULP out of
+`v_wmma_f32_16x16x16_f16`*, with hardware's accumulation order blamed as undocumented. **That is not
+supported.** Two independent observations contradict it:
+
+* With the real wiring the kernel is bit-exact, which a genuine hardware-rounding difference would
+  not be.
+* The differing bytes are not adjacent codes. `emu=04 gpu=02`, `emu=36 gpu=03`, `emu=1e gpu=01` are
+  far apart — that is not a last-place rounding difference in any of the stored formats.
+
+The fixture is wrong in at least two ways relative to the real ABI:
+
+1. Slots 0/1/3 were filled with **random bytes**, not valid floats — the trap already recorded for
+   reduction and softmax kernels.
+2. `+0x10` was given **`block31_layer2.bin`**, a weight file. In the real launch `+0x10` is
+   `ctx+0x280`, one of `k_qkv2`'s three activation outputs. `k_attention2` takes **no weight**;
+   the ViT layer-3 entry is a 2-byte scalar.
+
+Adding `fill={0:'f32', 1:'f32', 2:'f32'}` (and dropping the bogus weight) moves the count
+**214 -> 156**, confirming the random-byte defect is real but is not the whole story. The remaining
+156 are **not yet explained**: the three inputs are still mutually inconsistent random blobs rather
+than a single consistent QKV projection, which is the obvious next suspect, but it has not been
+demonstrated.
+
+**Status to carry forward:** `k_attention` / `k_attention2` are **not known translation defects**.
+They are bit-exact where it has been possible to test them against real data. The registry's 16/18
+should be read as 16 verified plus 2 whose fixtures ask an invalid question — not as two broken
+kernels. Do not spend further sessions on the WMMA rounding model on their account.

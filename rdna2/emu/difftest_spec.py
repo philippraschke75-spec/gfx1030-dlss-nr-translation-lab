@@ -77,7 +77,7 @@ SPECS = {
         '_Z12k_attention212AttnParams1d',
         pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3},
         scalars={0x20: ('<i', 8), 0x24: ('<i', 8)},
-        weights={2: 'block31_layer2.bin'}),
+        fill={0: 'f32', 1: 'f32', 2: 'f32'}),
     'conv_splitk': lambda: K.Spec(               # same 48-byte ConvParams1d shape as k_contract2
         '_Z13k_conv_splitk12ConvParams1d',
         pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x18: 3},
