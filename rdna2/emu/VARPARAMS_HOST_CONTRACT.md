@@ -678,7 +678,7 @@ directions that agree exactly.
 
 | blocks | stage | C | dispatched by |
 |---|---|---|---|
-| 0 | pre-block | 32 | `k_swin_var<32,true>` (prologue) |
+| 0 | pre-block | 32 | `k_swin_var<32,true>` (prologue) - **FAILS difftest, 28825; see end of file** |
 | 1-4 / 5-8 / 9-14 / 15-22 | **encoder**, 4 stages (4/4/6/8) | 32 / 64 / 128 / 256 | launcher A |
 | 23-30 | C=512 attention | 512 | launcher B (`k_qkv_attn` path) |
 | 31-38 | **ViT** | 1024 | ViT loop: `k_qkv2`, `k_attention2`, `k_expand2`, `k_contract2` |
@@ -1315,3 +1315,42 @@ demonstrated.
 They are bit-exact where it has been possible to test them against real data. The registry's 16/18
 should be read as 16 verified plus 2 whose fixtures ask an invalid question — not as two broken
 kernels. Do not spend further sessions on the WMMA rounding model on their account.
+
+## Block 0 (`k_swin_var<32,true>`) is NOT verified - correcting the record
+
+Earlier handovers list block 0 as "pre-block | kernel verified". That is wrong. Run today,
+standalone, with no chain code involved:
+
+```
+_Z10k_swin_varILi32ELb1EEv9VarParams  flags=20  hw=[16,16]  grid=[2,2]
+emu_bytes_written 42812   mismatches 28825   status FAIL
+```
+
+The fixture is not at fault. `difftest_preblock.py` already fills the `+0x40` input with float RGB
+in [0,1) by default (`PRE_RAW` is opt-in), so this is not the random-bytes-as-floats trap that
+explains `attention2`. The kernel mismatches on valid input.
+
+**`<32,true>` is exercised by exactly one dispatch in the whole network.** The 22 encoder blocks use
+the `<...,false>` instantiations (`32_0`, `64_0`, `128_0`, `256_0`), which pass. So the passing
+encoder says nothing about the pre-block, and the pre-block is the network's entry point - every
+downstream block consumes its output.
+
+Whether this is a translation defect or a `gfx11emu.py` defect is **not determined**. Do not assume
+either. Three prior "translation failures" in this file turned out to be the reference model or the
+fixture; do not let that make the opposite mistake and assume this one is too.
+
+### Chain wiring fixed along the way (all real, none of them the cause)
+
+While tracking this down, `net_full.py`'s block 0 was found to be wrong in three independent ways.
+All are now corrected, and none of them account for the mismatch:
+
+* It dispatched `D.SYMS['32_0']` - `k_swin_var<32,false>`, the wrong template instantiation. The
+  contract has recorded `<32,true>` since the launcher was decoded. The wrong variant faults on a
+  `ds_load` past the end of its LDS.
+* It used the **encoder** calling convention - `flags=1|4`, input at `+0x00` - where the pre-block
+  takes `flags=0x14`, `+0x00` null, and its float-RGB input at `+0x40`.
+* `+0x30` was left holding `make_kernarg`'s default pointer; the pre-block is launched with it null.
+
+The authoritative layout is `chain_import_preblock_real.py`, which feeds real `k_import` output into
+the pre-block. Anything that dispatches the pre-block should copy it rather than build a kernarg from
+the encoder pattern.
