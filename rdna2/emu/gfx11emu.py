@@ -15,7 +15,11 @@ AR = np.arange(32, dtype=np.uint64)
 ONE = np.uint64(1)
 # Host diagnostic switch; disabled for the reference model. This is a
 # hypothesis probe, not an established gfx1100 ISA rule.
-MIX_F16_INPUT_FLUSH = False
+import os as _os
+# V_FMA_MIX f16 input denormal handling. Left False with no evidence either way; it is
+# exercised 1024 times by k_swin_var<32,true> and never by <32,false>, so it is a candidate
+# for their differing outcomes. Overridable to test that.
+MIX_F16_INPUT_FLUSH = _os.environ.get('MIX_F16_INPUT_FLUSH', '0') == '1'
 
 
 class MemFault(Exception):

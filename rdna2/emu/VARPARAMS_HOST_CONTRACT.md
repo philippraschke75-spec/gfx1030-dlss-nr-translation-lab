@@ -1542,3 +1542,60 @@ Stage-5 geometry (`H>>4, W>>4` = 60x106) carries the C=512 and ViT stages; the d
 encoder back up to full resolution. Every pointer field in `PTR_FIELDS` must reference real memory -
 `make_kernarg` fills them with 1 MiB difftest slots that do not exist in a byte arena, and a kernel
 touching one writes outside it. Unused fields share one spare buffer sized for the largest stage.
+
+## Block 0: narrowed to 32 candidate opcodes, not yet fixed
+
+`preblock_firststore.py` hooks `GMem.write` and the execute loop so every emulator store is logged
+with the PC that issued it, then diffs against the GPU arena. No GPU instrumentation, so it is
+independent of `statebisect`.
+
+**The very first store is already wrong.** At 8x8, seed 1:
+
+```
+store #0 of 352   pc=0xb1598   occurrence #1   25/32 bytes wrong   global_store_b8 v1, v2, s[40:41]
+```
+
+Not deep in a loop - the first global store the kernel makes. Divergence begins immediately.
+
+Differences measured in the right unit (e4m3 code distance, one byte per value - an earlier pass
+compared them as `uint16` words, which made the numbers meaningless):
+
+```
+|code delta| <= 1 : 31.3%      sign bit differs : 17.8%
+|code delta| <= 2 : 41.3%      exponent differs : 54.1%
+mantissa-only differences : 43.9%
+```
+
+### Three hypotheses tested and refuted
+
+* **Transcendentals.** `gfx11emu` computes `v_rcp/v_rsq/v_sqrt/v_log/v_exp` exactly; AMD hardware
+  approximates them (~1 ULP per the RDNA ISA), which looked decisive. **Refuted by control**: the
+  passing `<32,false>` executes 1,664 of them (824 rcp, 816 log, 16 rsq, 8 rcp_iflag) against the
+  failing variant's 1,830, and mismatches 0 bytes. Comparable usage, opposite outcome.
+* **`MIX_F16_INPUT_FLUSH`.** A toggle left `False` with no evidence, and `v_fma_mix_f32` runs 1024
+  times in the failing variant and never in the passing one. Setting it `True` changes the count by
+  **zero** - no f16 denormal inputs arise here.
+* **`v_perm_b32`, `s_bfe_i32/u32`, `s_bitcmp0_b32`.** All checked against the ISA; all correct.
+
+### The shortlist
+
+Static opcode sets are near-identical (only `s_bitcmp0_b32` differs), so the discriminator is what
+each variant *executes*. Opcodes executed by `<32,true>` and **never** by `<32,false>`:
+
+```
+v_fma_mix_f32 1024   s_cmp_lt_u32 1024   s_bfe_i32 512   s_bfe_u32 512
+s_sext_i32_i16 512   s_sext_i32_i8 512   global_store_b16 128   v_cmpx_o_f32 64
+v_cmp_nlt_f32_e64 64   v_mad_i64_i32 18   v_fmaak_f32 16   v_cmp_gt_f32_e64 12
+s_bitcmp0_b32 8   v_xad_u32 8   v_cmp_eq_u32_e64 6   v_dual_fmaak_f32 6
+v_dual_fmac_f32 6   v_fmamk_f32 6   ds_store_b128 4   global_load_b96 4
+v_cmp_class_f32_e64 4   v_cmp_ge_f32_e64 4   v_cmp_lg_f32_e64 4   v_cmp_lt_f32_e64 4
+v_sqrt_f32_e32 4   v_dual_sub_f32 4   s_cmp_eq_u64 2   s_or_saveexec_b32 2
+v_add_f32_e64 2   v_cmp_ngt_f32_e64 2   v_xor3_b32 2   s_or_saveexec_b32 2
+```
+
+That is the whole search space: **32 opcodes**, down from 197 executed and 14,284 instructions. Any
+emulator defect in one of these breaks the pre-block while leaving all 22 encoder blocks passing,
+which is exactly the observed pattern. Audit them against the ISA; `v_dual_*` (VOPD packed dual-issue)
+and `v_cmpx_o_f32` (writes EXEC) are the least-travelled paths and the ones worth reading first.
+
+**Minimal repro**: `difftest_preblock.py 1 8 8` - 7,268 of 10,690 bytes, one workgroup.
