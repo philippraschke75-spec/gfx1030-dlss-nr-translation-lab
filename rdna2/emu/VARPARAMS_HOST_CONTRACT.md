@@ -2130,3 +2130,33 @@ defect; the second C=512 stage then starts from an empty buffer.
 inferred from the final state of the `c512_1` buffers, which blocks 24-30 and the ViT stage reuse and
 overwrite. Measured per dispatch, `c512_stage` is clean for block 23. Do not read a shared buffer's
 end state as the output of the first thing that wrote it.
+
+## The C=512 collapse is NaN, and it is not stable run to run
+
+The collapsed byte is **`0x7f`**, not `0x7e`. In e4m3 `0x7f` is exponent 15 / mantissa 7 = **NaN**.
+So this is not saturation at 448 - it is NaN filling 48% of the buffer while the rest stays zero.
+The "accumulating overflow" reading of the earlier `distinct=2` was wrong.
+
+Worse, the block at which it happens **moves between runs** of the identical command:
+
+```
+run A   after 23 distinct 246   after 24 distinct 246   after 25 distinct 2
+run B   after 23 distinct 246   after 24 distinct   2
+run C   after 23 distinct   2
+```
+
+Three runs, three answers. So "block 25 is the culprit" - recorded in the previous section - is
+**not supported**; block 25 was simply where that particular run happened to tip over.
+
+Ruled out as the mechanism: an inter-dispatch race. `net_run.cpp` records a `hipEvent` after every
+`hipModuleLaunchKernel` and spins on `hipEventQuery` until it completes, so the 169 dispatches are
+strictly serialised.
+
+What that leaves, untested: a race *within* a dispatch across workgroups at frame scale (the earlier
+non-determinism claim was retracted on the strength of `difftest_preblock` being deterministic, but
+that is block 0 at 64 workgroups and says nothing about the C=512 kernels at thousands), and buffer
+aliasing in `c512_stage` - for `bi > 0` it passes `work[0]` as **both** `+0x00` and `+0x08` of
+`k_ffwd2`, which in the original are presumably distinct input and residual buffers.
+
+NaN from a buffer that is zero-filled at the start needs a 0/0 or inf-inf somewhere; it cannot come
+from merely reading uninitialised memory here.
