@@ -567,7 +567,15 @@ def c512_stage(blocks, work, src_in):
         # encoder uses). Grid = ((W+7-ox)>>3, (H+7-oy)>>3, 16) - the first kernel in this project
         # needing a 3-D dispatch (net_run.cpp / ka_for both support gz now).
         ox, oy = ENC_MODES[bi % 4]
-        _qgy = int(os.environ.get('QKV2_GY', str((H5 + 7 - oy) >> 3)))
+        # Update 11 cites the grid as "constant (7,7,0,0) at 0x18006d570" - a literal read from a
+        # data table, not (H5+7-oy)>>3 (which gives 4 at H5=32, not 7). At block 23's own H5,W5
+        # both my derived gx and the cited gy happen to equal 7, so this was previously masked by
+        # the +0x28 weight-pointer bug (Update 13) producing NaN regardless of gy. Empirically,
+        # gy=7 was the value that stopped the NaN in an earlier probe, before that root cause was
+        # known - consistent with this reading, not proof of it. Whether "7,7" is truly geometry-
+        # independent (unlikely for a general kernel) or happens to equal (W5+7)>>3 at every C=512
+        # stage size used in this frame is still unread from the host.
+        _qgy = int(os.environ.get('QKV2_GY', '7'))
         _qgz = int(os.environ.get('QKV2_GZ', '16'))
         gq2 = ((W5 + 7 - ox) >> 3, _qgy, _qgz)
         steps.append((ATTN2_C512, ka_for(ATTN2_C512, [(0x00, work[2]), (0x08, work[3]), (0x10, L(2))],

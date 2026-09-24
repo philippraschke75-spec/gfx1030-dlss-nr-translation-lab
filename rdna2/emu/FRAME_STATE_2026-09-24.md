@@ -510,3 +510,28 @@ C512_HOST stays default 0. What remains unverified on this path:
 * The first-block (+0x08/+0x10/+0x20 input) wiring for stage 40-47 was not read from the host.
 * Every C512_HOST=1 dispatch should be diffed against its Update 11 citation one field at a time. This update
   found one wrong field by reading; others of the same kind may remain.
+
+## Update 14: k_qkv_attn2's grid.y default was wrong too, and it barely matters
+
+Re-audited every C512_HOST=1 field against Update 11's citations by hand, since the +0x28
+weight-pointer bug (Update 13) was mine and there was no reason to assume it was the only one.
+Everything else checks out field-for-field (step 5's `+0x08 = ctx+0x238` note "pshufd 0x4e swap"
+is how the two adjacent pointers get loaded together in the disassembly, not a value transform -
+already correctly wired).
+
+One more mismatch: Update 11 cites `k_qkv_attn2`'s grid as "constant (7,7,0,0) at 0x18006d570" -
+a literal table read, not derived from geometry. The runner computed grid.y as
+`(H5+7-oy)>>3 = 4` at H5=32, not the cited 7. Defaulted to the literal 7 instead (QKV2_GY stays
+overridable).
+
+**This barely moves the score:** S_mid +0.4819 (gy=4) -> +0.4858 (gy=7), S_fine +0.5757 -> +0.5779.
+So it is a real citation-accuracy fix, worth keeping, but not what explains C512_HOST=1 scoring
+below C512_HOST=0. The open item is unchanged from Update 13: k_conv_res2 and k_qkv_attn2 have
+never been difftested against the emulator, and that is the only way left to tell whether their
+own translation is correct - reading fields one at a time has now caught two real bugs but is
+running out of new mismatches to find this way.
+
+One thing worth flagging for whoever builds that difftest: gy=7 matches gx (also 7) at this
+particular H5,W5=32,56. Whether that is because the constant genuinely does not depend on
+frame geometry, or because it happens to equal ceil(W5/8) at every C=512 stage size this project
+uses, was not read from the host and would fail silently at a different resolution.
