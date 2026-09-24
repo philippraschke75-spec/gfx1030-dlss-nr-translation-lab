@@ -2488,3 +2488,44 @@ says nothing about 56x32, which is why this was worth redoing.
 What that leaves: the input to the C=512 stage is `k_repack`'s output, which is 86% zeros. Whether
 that is correct is unknown - `RepackParams`' four i32 are still guessed, and `k_repack` is the last
 unverified thing between the healthy encoder and the verified C=512 stage.
+
+## `k_repack`: `+0x18` is a work count, and activations are ONE byte per element
+
+Read from the kernel (196 instructions) rather than swept. Its prologue:
+
+```
+s_load_b64  s[2:3], s[0:1], 0x14      ; s2 = [+0x14], s3 = [+0x18]
+s_lshl_b64  s[8:9], s[4:5], 10        ; [+0x18] << 10  = [+0x18] * 1024
+v_mad_u64_u32 v[2:3], null, s14, s15, v[0:1]   ; global_id = 256*wg + tid
+v_cmpx_gt_u64_e64 s[8:9], v[2:3]      ; active while global_id < [+0x18]*1024
+```
+
+**`+0x18` is the total work in units of 1024 elements**, i.e. `C*ceil(H/4)*ceil(W/4)*16 / 1024`.
+The other three: `+0x14` is a divisor (full reciprocal sequence) and is also taken `ceil(/4)`;
+`+0x10` multiplies it; `+0x1c` is only ever compared against zero, so it is a flag, and 0 vs 1 makes
+no difference here.
+
+Confirmed by measurement - at stage 4 the derived value is 896 where the runner had been passing 256:
+
+```
++0x18 = 256   repack output covers 13.78% of its buffer
++0x18 = 896   repack output covers 48.21%, 249 distinct byte values
+```
+
+### Activations are e4m3: one byte, not two
+
+`act_bytes` multiplies by 2, which assumes f16. The activations are **e4m3, one byte per element**,
+and with the correct work count that shows up directly:
+
+```
+ACT_ELEM=2   repack output 48.21% of the buffer   (the other half is simply unused)
+ACT_ELEM=1   repack output 96.43%, 251 distinct   (the buffer is now the right size)
+```
+
+917,504 elements in an 1,835,008-byte buffer is exactly the 50% seen at `ACT_ELEM=2`. The earlier
+conclusion that the element width is 2 was drawn with the **wrong geometry**, where over-allocation
+kept the guards quiet and the unused half was mistaken for data.
+
+**Still open:** `k_conv_res_views` produces NaN either way (1.79% at ELEM=2, 3.57% at ELEM=1), even
+though the whole C=512 stage passes its difftest at this exact geometry. So the NaN is still coming
+from something about the frame chain's data that the difftest's fixture does not reproduce.
