@@ -266,3 +266,11 @@ tiling grid.x tests.
 the explanation for the mid-section's low S_mid. The remaining candidates from
 Update 6 (block 30's pooled-write layout, whether ctx+0x228 really is
 c512_1[0] after blocks 23-30) move back up.
+
+**Update 7 confirmed at full scale.** `VIT_GX=7 VIT_GY_CAP=1` (the real frame's
+grid.x, y capped for runtime): 0 mismatches across all 5 kernels, 214,176 bytes
+checked, including k_attention2's 14,278-byte delta. The ViT block's
+translation is bit-exact at real token count and real grid.x. **The
+cross-workgroup / split-K concern is closed: it is not a translation defect.**
+The mid-section's low S_mid is somewhere else - most likely the block 30
+pooled-write layout or the ctx+0x228 identity, per Update 6's remaining list.
