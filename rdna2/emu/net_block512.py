@@ -30,8 +30,15 @@ BLOCK = int(_os.environ.get('BLOCK', '23'))
 # The C=512 stage is stage 4 of the padded table: at 1707x960 that is 56x32, i.e. 7x4
 # workgroups - small enough for the emulator. Verifying the recipe at its REAL geometry is
 # the point: passing at 8x8 says nothing about the size it actually runs at.
+#
+# That intent was never finished: block_count_x/y below were hardcoded to (1,1) for every
+# kernel regardless of H,W - both in the kernarg hidden args and in the GPU dispatch
+# manifest's own separate |1|1| - so every run at any BH/BW still only ever launched one
+# workgroup. Same blind spot as net_vit.py (FRAME_STATE Update 7), same fix: these are 2-D
+# k_swin_var-family kernels, grid = (ceil(W/8), ceil(H/8)).
 H = int(_os.environ.get('BH', '8'))
 W = int(_os.environ.get('BW', '8'))
+GX, GY = -(-W // 8), -(-H // 8)
 NGROUP = 4                      # min(n*16, H*W); 4*16 == 8*8 so the whole tile is live
 # arena slots: the four ctx buffers, then the four weight records
 B228, B230, B238, B240, BIN = 0, 1, 2, 3, 4
@@ -102,7 +109,7 @@ def steps():
 
     final = []
     for sym, ka, (explicit, ksize, lds, hid) in out:
-        for name, val in (('block_count_x', 1), ('block_count_y', 1), ('block_count_z', 1),
+        for name, val in (('block_count_x', GX), ('block_count_y', GY), ('block_count_z', 1),
                           ('group_size_x', 256), ('group_size_y', 1), ('group_size_z', 1),
                           ('grid_dims', 2)):
             if name in hid:
@@ -134,17 +141,21 @@ def emulate(seed):
         prog = E.load_program(R.DIS, {sym})
         g, KA = V.build(seed, ka, NSLOT)
         g.regions[1].arr[:] = cur
-        if wants_dispatch_ptr(sym):
-            DP = 0x7100_0000_0000
-            pkt = bytearray(64)
-            struct.pack_into('<HHHHHH', pkt, 0, 0, 3, 256, 1, 1, 0)
-            struct.pack_into('<III', pkt, 12, 256, 1, 1)
-            struct.pack_into('<II', pkt, 24, 64, lds)
-            g.add('dispatch', DP, np.frombuffer(bytes(pkt), np.uint8).copy())
-            sgpr = {0: DP & 0xffffffff, 1: DP >> 32, 2: KA & 0xffffffff, 3: KA >> 32, 14: 0, 15: 0}
-        else:
-            sgpr = {0: KA & 0xffffffff, 1: KA >> 32, 14: 0, 15: 0}
-        E.run_workgroup(prog, g, lds, 256, sgpr, max_steps=30_000_000)
+        dp = wants_dispatch_ptr(sym)
+        for wy in range(GY):
+            for wx in range(GX):
+                if dp:
+                    DP = 0x7100_0000_0000
+                    pkt = bytearray(64)
+                    struct.pack_into('<HHHHHH', pkt, 0, 0, 3, 256, 1, 1, 0)
+                    struct.pack_into('<III', pkt, 12, 256, 1, 1)
+                    struct.pack_into('<II', pkt, 24, 64, lds)
+                    g.add('dispatch', DP, np.frombuffer(bytes(pkt), np.uint8).copy())
+                    sgpr = {0: DP & 0xffffffff, 1: DP >> 32, 2: KA & 0xffffffff, 3: KA >> 32,
+                            14: wx, 15: wy}
+                else:
+                    sgpr = {0: KA & 0xffffffff, 1: KA >> 32, 14: wx, 15: wy}
+                E.run_workgroup(prog, g, lds, 256, sgpr, max_steps=30_000_000)
         cur = g.regions[1].arr.copy()
     return base, cur
 
@@ -153,7 +164,7 @@ def net_run(seed):
     blob = b''; lines = []
     for sym, ka, lds in steps():
         o = len(blob); blob += ka
-        lines.append('%s|%s|%d|%d|1|1|256' % (MOD(sym), sym, o, len(ka)))
+        lines.append('%s|%s|%d|%d|%d|%d|256' % (MOD(sym), sym, o, len(ka), GX, GY))
     (OUT / 'm.txt').write_text('\n'.join(lines) + '\n')
     (OUT / 'k.bin').write_bytes(blob)
     (OUT / 'a.bin').write_bytes(arena(seed).tobytes())
