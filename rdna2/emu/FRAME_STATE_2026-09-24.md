@@ -437,3 +437,44 @@ Host kernargs (default path):
 All three kernels have translations in `build/kernels-hw-scratch/`. Blocks 40-47 (the second C=512 stage) use the
 same launcher, but their call site and first-block input were not read here. That is an assumption to check.
 Applying this needs z-grid support: net_run.cpp:102 passes gz = 1, and `ka_for` writes block_count_z = 1.
+
+## Update 12: the real C=512 kernels are wired (C512_HOST=1); k_qkv_attn2 produces 50% NaN
+
+Wired the host's default C=512 path from Update 11's kernarg citations: `k_ffwd2` (same symbol,
+new fields/grid), `k_conv_res2` (new symbol `_Z11k_conv_res211Conv2Params`, replaces
+`k_conv_res_views` for steps 3/5 except block 30's pooled write, which is untouched), and
+`k_qkv_attn2` (new symbol `_Z11k_qkv_attn210AttnParams`, replaces `k_qkv_attn`, needs a 3-D
+grid). `ka_for` and both manifest builders now support an optional `gz` (3rd grid component);
+`net_run.cpp` was rebuilt to pass it through (commit d35cff9).
+
+**Verified against the kernel's own disassembly, not just Update 11's notes:** `_Z11k_qkv_attn210AttnParams.s`
+loads `s[4:7] <- kernarg+0x00` (128-bit: the two activation pointers) and `s[4:7] <- kernarg+0x18`
+(128-bit: H, W, ox, oy - matches the field layout exactly), and `s[0:1] <- kernarg+0x10` (the
+weight pointer, single-ABI, no dispatch_ptr). The field offsets are right.
+
+**But it produces exactly 50% `0x7f` (e4m3 NaN) at block 23, every time**, regardless of grid.y:
+
+| QKV2_GY | result |
+|---|---|
+| 4 (my `(H5+7-oy)>>3` formula) | 50.00% nonzero, distinct=2 (0x00/0x7f 50/50) |
+| 8 (matching k_ffwd2's own gy) | byte-identical: 50.00%, distinct=2, same split |
+
+Its input (`work[2]`, written by the preceding `k_conv_res2` step) is healthy at that point (254
+distinct values, sane distribution). So the input is not the problem, and grid.y is not the
+limiting dimension either - two different grid.y values gave byte-identical broken output, which
+rules out simple under-coverage in y. The grid.z=16 dimension (workgroup_id_z, the one genuinely
+new mechanism here) is the remaining candidate; I did not have the budget to trace how the kernel
+uses the z workgroup id/lane before this session's cutoff.
+
+**C512_HOST now defaults to 0** (the old, known-working - if wrong-by-default per Update 11 -
+path) so nothing renders the broken output unless explicitly requested. The scaffolding
+(CONVV2, ATTN2_C512 symbols, `_c512_stage_old` fallback, gz support end to end) is real,
+tested infrastructure and stays in the tree either way.
+
+**Next:** read `_Z11k_qkv_attn210AttnParams.s` for how it uses the z workgroup id (likely
+`s_load` of a hidden `workgroup_id_z`-related SGPR, or `v_mbcnt`/lane arithmetic combined with
+it) and compare against the ORIGINAL gfx1100 disassembly at the same point, to see whether the
+translation handles z correctly or whether the runner is supplying the wrong VALUE for something
+z-dependent (not the grid size, per the gy test above - possibly gz itself is wrong, worth
+sweeping GZ the same way GY was, or a kernarg field's semantics differ from what Update 11 assumed
+for the z-tiled case specifically).
