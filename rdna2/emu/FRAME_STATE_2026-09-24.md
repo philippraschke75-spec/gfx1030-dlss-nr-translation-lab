@@ -185,3 +185,45 @@ Two metrics were used and both had to be discarded: frame-wide R:G:B against the
 input (a denoiser need not match its input's channel balance) and "sharper by
 eye" (amplified noise also looks sharp). The surviving measure is the band-passed
 structural correlation in `smid.py`, with the column phase-variance as a guard.
+
+## Update 5: MID_HOST=1 rebuild runs clean but does not help
+
+`MID_HOST=1` implements Update 4's plan: `k_final_head` into off_pooled/off_headb,
+`k_repack` into a dedicated ViT token buffer (`off_tok`), true ping-pong across
+the 8 ViT blocks (no more in-place aliasing), and `k_dec_upsample` reading
+`off_headb`/`c512_1[0]` as its +0x00/+0x08 pair. Both paths run clean, guards
+intact, k_export finite.
+
+Scored with `smid.py` against the corrected (unsheared) input reference, same
+code, same frame, only `MID_HOST` toggled:
+
+| | S_mid | S_fine | lag8 |
+|---|---|---|---|
+| MID_HOST=0 (old, in-place ViT) | +0.5466 | +0.6475 | +0.93 |
+| MID_HOST=1 (host rebuild) | +0.5282 | +0.6288 | +0.97 |
+
+**Slightly worse on every measure, not better.** Not a regression in the sense
+of anything breaking - the chain still completes - but the rebuild did not
+close the gap Update 4 identified, and lag8 creeping toward 1.0 suggests the
+column-periodic structure is leaking back in rather than being resolved by the
+real ping-pong.
+
+**What is uncertain in the MID_HOST=1 implementation, most likely candidates for
+the miss:**
+* The two `k_repack` dispatches (into and out of the ViT token buffer) reuse
+  the FIRST repack's `_rp`/`g_rp` (dims and grid derived for the encoder->C=512
+  transition, C=512 at H5,W5). The ViT repacks almost certainly need their own
+  dims - the host reads in this file's earlier updates never nailed down the
+  exact element-count formula for the vit1d<->tokens repack, only the buffer
+  identities and that the same handle (0x1800663e0) is reused.
+* The per-kernel ViT grids still use one shared `g = grid_for(CONTRACT2, N1024,
+  (H5, W5))` for all 5 kernels x 8 blocks, not grids read individually per
+  kernel from the host loop (0x18002fd47-0x1800303a0). Only k_expand2's grid
+  was ever confirmed from the host in an earlier note.
+* `k_final_head`'s dispatch into off_pooled/off_headb and its exact +0x00/+0x08
+  wiring (ctx+0x248 pooled -> ctx+0x250 head) has not been independently
+  checked against a host read in this file.
+
+Next: read the ViT repack dims and the 5 per-kernel grids properly from the
+host disassembly (0x18002fd05-0x180030509 in the embedded PE used throughout
+this file), rather than reusing the encoder repack's numbers.
