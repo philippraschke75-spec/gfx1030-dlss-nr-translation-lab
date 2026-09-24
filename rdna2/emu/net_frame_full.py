@@ -73,10 +73,14 @@ S1 = act_bytes(32, SRC_H, SRC_W)
 # is no evidence they follow that formula; the verified difftest just gives every pointer field a
 # 1 MiB slot, which is ample at 64 workgroups and says nothing about 25,680. AUX_MULT scales them
 # so the question can be answered by measurement instead of assumption.
-AUX = S1 * int(os.environ.get('AUX_MULT', '1'))
+AUX = S1 * int(os.environ.get('AUX_MULT', '2'))
 # The pre-block is non-deterministic at 214x120 workgroups and reproducible at 8x8. If
 # act_bytes under-sizes its output, workgroups overlap and race. ACT_MULT tests that.
-S1 = S1 * int(os.environ.get('ACT_MULT', '1'))
+# act_bytes under-sizes the pre-block's buffers at frame scale: at 214x120 workgroups
+# the chain is not reproducible, and doubling every one of them makes all 170
+# dispatches reproducible over 4 runs. 2x is measured, not derived - the exact
+# requirement is unknown, and 1x demonstrably races.
+S1 = S1 * int(os.environ.get('ACT_MULT', '2'))
 off_a = place('act A (C=32)', S1)
 off_b = place('act B (C=32)', S1)
 off_scratch = place('pre-block scratch', AUX)
@@ -575,7 +579,8 @@ if os.environ.get('DET_BISECT') == '1':
         a = _run_prefix(n)
         return None if a is None else hashlib.sha256(a.tobytes()).hexdigest()[:16]
 
-    def _stable(n, tries=2):
+    # Two agreeing runs is the evidence that produced a false 'deterministic' twice already.
+    def _stable(n, tries=int(os.environ.get('DET_TRIES', '2'))):
         h0 = _hash_prefix(n)
         if h0 is None:
             return None
@@ -588,7 +593,7 @@ if os.environ.get('DET_BISECT') == '1':
     print()
     print('=== determinism bisect over %d dispatches ===' % total)
     if _stable(total):
-        print('  the FULL chain is reproducible over 2 runs - nothing to bisect')
+        print('  the FULL chain is reproducible over %d runs - nothing to bisect' % int(os.environ.get('DET_TRIES','2')))
         raise SystemExit(0)
 
     lo, hi = 0, total                      # lo known stable, hi known unstable
