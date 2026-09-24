@@ -364,7 +364,11 @@ def c512_stage(blocks, work, src_in):
     # One C=512 attention block is 5 dispatches; recipe per VARPARAMS_HOST_CONTRACT.md.
     g = (1, 1)
     # weight layer per dispatch: contract table = ffwd_iv 0, ffwd2 0, conv_res 1, qkv_attn 2, conv_res 3
-    W5L = [int(x) for x in os.environ.get('C512_WMAP', '0,1,2,3,2').split(',')]
+    # Weight-to-dispatch mapping, taken from net_block512.py, which passes its difftest at
+    # this exact geometry: ffwd_inpview and ffwd2 BOTH take layer0, then conv_res_1 takes
+    # layer1, qkv_attn layer2 and conv_res_2 layer3. The runner had 0,1,2,3,2 - shifted by
+    # one from dispatch 2 onward, so four of the five kernels ran on the wrong weights.
+    W5L = [int(x) for x in os.environ.get('C512_WMAP', '0,0,1,2,3').split(',')]
     for bi, blk in enumerate(blocks):
         a = src_in if bi == 0 else work[0]
         L = lambda n: wt['block%d_layer%d' % (blk, n)][0]
@@ -473,10 +477,31 @@ if stop in ('full', 'all'):
     if os.environ.get('C512_TRACE') == '2' and os.environ.get('PROBE_VIT') == '1':
         C512_PROBE.append(('after block39 -> b39', off_b39, len(steps)))
         C512_PROBE.append(('after block39 -> c512_2[0]', c512_2[0], len(steps)))
-    c512_stage(range(40, 48), c512_2, off_b39)
+    # k_dec_upsample writes through +0x10, not +0x08: after block 39 c512_2[0] holds 243
+    # distinct byte values while off_b39 is entirely zero. The second C=512 stage was being
+    # fed the empty buffer.
+    c512_stage(range(40, 48), c512_2, c512_2[0])
+
+    # mid -> dec is `k_repack, k_dec_upsample` in the driver's phase table, and it was missing.
+    # The C=512 stage ends at stage 4 (56x32, C=512) while the decoder starts at stage 3
+    # (112x64, C=256); without this transition block 48 reads stage-4 data as if it were stage-3
+    # and returns 100% NaN.
+    _dh, _dw = stage_hw(3)
+    _delem = 256 * (-(-_dh // 4)) * (-(-_dw // 4)) * 16
+    g_rp2 = grid_for(REPACK, dec_geom[0][3])
+    steps.append((REPACK, ka_for(REPACK, [(0x00, c512_2[0]), (0x08, dec_buf[0][0])],
+                                 [(0x10, '<iiii', (_dh, _dw, _delem // 1024, 0))], g_rp2), g_rp2, 256))
+    g_du = grid_for(DECUP, dec_geom[0][3])
+    steps.append((DECUP, ka_for(DECUP, [(0x00, dec_buf[0][0]), (0x08, off_b39),
+                                        (0x10, dec_buf[0][1]), (0x18, wt['block48'][0]),
+                                        (0x20, off_spare)], [], g_du), g_du, 256))
+
+    if os.environ.get('C512_TRACE') == '2' and os.environ.get('PROBE_DEC') == '1':
+        C512_PROBE.append(('mid->dec repack ', dec_buf[0][0], len(steps) - 1))
+        C512_PROBE.append(('mid->dec upsample', dec_buf[0][1], len(steps)))
 
     # decoder blocks 48-69, the encoder mirrored
-    stage_in = c512_2[0]
+    stage_in = dec_buf[0][1]
     for di, (key, blocks, C) in enumerate(DEC_STAGES):
         sym, lds = D.SYMS[key]
         lds = lds or D.group_size(sym)
@@ -491,6 +516,8 @@ if stop in ('full', 'all'):
             src = stage_in if i == 0 else pp[(i + 1) % 2]
             steps.append((sym, enc_kernarg(h, w, oy, ox, flags, grid, src, pp[i % 2],
                                            wt['block%d' % blk][0], pool), grid, 256))
+            if os.environ.get('C512_TRACE') == '2' and os.environ.get('PROBE_DEC') == '1':
+                C512_PROBE.append(('dec block %-3d-> dst' % blk, pp[i % 2], len(steps)))
             last_dst = pp[i % 2]
         # The pooled output feeds the NEXT stage. After the last decoder stage there is no next
         # stage, so the head must read the last block's own output, not a pool buffer that nothing
