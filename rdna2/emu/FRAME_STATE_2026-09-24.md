@@ -234,3 +234,35 @@ kernels or buffers. The remaining suspects, from cheapest to check to most expen
    ctx+0x310 = 16*28. This is the same trap as the pre-block difftests at H=W=16, and it needs no GPU.
 2. The layout of block 30's pooled write (+0x38 -> ctx+0x248) versus the layout `k_final_head` reads.
 3. Whether ctx+0x228 really is `c512_1[0]` after blocks 23-30.
+
+## Update 7: the ViT difftest's own blind spot - block_count_x was hardcoded to 1
+
+`net_vit.py` (block 31, five dispatches per ViT block) had `block_count_x=1,
+block_count_y=1` hardcoded for every kernel, in both the GPU dispatch manifest
+and the emulator's workgroup loop - identical in kind to the earlier
+`net_encoder_stage1.py` H=W=16 blind spot (FRAME_STATE, top of file), except
+here it affected every ViT difftest ever run, at any H/W, because the grid was
+never derived from H/W to begin with.
+
+At the real frame size (1707x960), the C=512->ViT stage is H6,W6=16,28 (NTOK=448,
+grid.x=7); the five kernels' grid.y is 32/8/32/32/8 per FRAME_STATE Update 6's
+host read. None of that was ever exercised - every ViT translation "PASS" to
+date covered exactly one 64-token workgroup.
+
+Fixed: `net_vit.py` now derives grid.x/grid.y for both the kernarg hidden args
+AND the GPU dispatch manifest (which had its own separate `|1|1|` hardcoded in
+the launch line - two places, not one) from `VIT_REAL`/`VIT_GX`/`VIT_GY_CAP`,
+and the emulator side loops over the real (wx, wy) grid instead of (0,0).
+
+**Result: still 0 mismatches at grid.x=2** (all 5 kernels, including
+k_attention2, the one with a plausible cross-workgroup reduction). This is the
+first time any ViT kernel has been tested at more than one workgroup, and the
+translation holds. Full grid.x=7 (real frame size) is running to confirm at
+scale; grid.y is capped low (VIT_GY_CAP) to keep emulator runtime bounded,
+since y is independent per-workgroup parallelism, not part of the token-count
+tiling grid.x tests.
+
+**Consequence:** a cross-workgroup translation bug is looking less likely as
+the explanation for the mid-section's low S_mid. The remaining candidates from
+Update 6 (block 30's pooled-write layout, whether ctx+0x228 really is
+c512_1[0] after blocks 23-30) move back up.

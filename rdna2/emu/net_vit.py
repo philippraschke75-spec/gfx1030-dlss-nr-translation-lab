@@ -37,7 +37,30 @@ import gfx11emu as E, run_emu as R, run_var as V, difftest_var as D, kernelspec 
 import os as _os
 BLOCK = int(_os.environ.get('BLOCK', '31'))
 
-H = W = 8
+# FRAME_STATE Update 6 identified this as the same blind spot as the earlier H=W=16
+# encoder/pre-block difftests: at H=W=8, NTOK=64 is exactly one 64-token workgroup, so
+# every kernel below has only ever run block_count_x=1. The real frame's C=512->ViT
+# stage is H6,W6=16,28 (stage_hw(5) of the 1707x960 padded frame), NTOK=448, gx=7 -
+# seven workgroups, never exercised before. VIT_REAL=0 restores the old single-tile
+# geometry for comparison.
+import os as _os2
+VIT_REAL = _os2.environ.get('VIT_REAL', '1') == '1'
+H, W = (16, 28) if VIT_REAL else (8, 8)
+NTOK = -(-(H * W) // 64) * 64 if VIT_REAL else H * W   # ctx+0x314: token count rounded up to 64
+# VIT_GX overrides the workgroup count directly, for a fast multi-workgroup smoke test that
+# does not need the full frame's 7 workgroups (each gy=32 kernel is 7x32=224 workgroups at
+# ~31k instr/s in the emulator - too slow for one run). GX=2 is the minimum that still
+# exercises the blind spot (block_count_x was hardcoded to 1 everywhere before this fix).
+GX = int(_os2.environ.get('VIT_GX', str(NTOK // 64))) if VIT_REAL else 1
+# Per-kernel block_count_y, read from the host (FRAME_STATE Update 6): expand2 32,
+# contract2 8, qkv2 32, attention2 32, contract2 (2nd) 8.
+# VIT_GY_CAP clamps every kernel's gy to at most this value - the y dimension is
+# independent per-workgroup work (not a token-count tiling), so capping it does not
+# skip the gx>1 blind spot this test targets, it only cuts emulator runtime.
+_GY_REAL = {'expand2': 32, 'contract2_1': 8, 'qkv2': 32, 'attn2': 32, 'contract2_2': 8}
+_gy_cap = int(_os2.environ.get('VIT_GY_CAP', '999'))
+GY = {k: min(v, _gy_cap) for k, v in _GY_REAL.items()} if VIT_REAL else \
+     {'expand2': 1, 'contract2_1': 1, 'qkv2': 1, 'attn2': 1, 'contract2_2': 1}
 NGROUP = 4                      # min(n*16, H*W); 4*16 == 8*8 so the whole tile is live
 # arena slots: input, six ViT ctx buffers (each separate), output, then four weight records
 BIN, B260, B268, B270, B278, B280, B288, BOUT = 0, 1, 2, 3, 4, 5, 6, 7
@@ -73,7 +96,7 @@ def steps():
     struct.pack_into('<Q', ka, 0x00, S(BIN))
     struct.pack_into('<Q', ka, 0x08, S(B260))
     struct.pack_into('<Q', ka, 0x10, S(WL0))
-    out.append((EXPAND2, ka, META[EXPAND2]))
+    out.append((EXPAND2, ka, META[EXPAND2], 'expand2'))
 
     # 2. k_contract2: ctx+0x260 -> ctx+0x268, weight layer 1, count=4
     n = META[CONTRACT2][1]; ka = bytearray(n)
@@ -83,7 +106,7 @@ def steps():
     struct.pack_into('<Q', ka, 0x18, S(WL1))
     struct.pack_into('<ii', ka, 0x20, H, W)
     struct.pack_into('<i', ka, 0x28, NGROUP)
-    out.append((CONTRACT2, ka, META[CONTRACT2]))
+    out.append((CONTRACT2, ka, META[CONTRACT2], 'contract2_1'))
 
     # 3. k_qkv2: 5 pointers, weight layer 2
     # Host disassembly at 0x180030008-0x18003002c, kernarg base rbp-0x20:
@@ -96,7 +119,7 @@ def steps():
     struct.pack_into('<Q', ka, 0x10, S(B278))       # ctx+0x278
     struct.pack_into('<Q', ka, 0x18, S(B280))       # ctx+0x280
     struct.pack_into('<Q', ka, 0x20, S(WL2))        # weight layer 2
-    out.append((QKV2, ka, META[QKV2]))
+    out.append((QKV2, ka, META[QKV2], 'qkv2'))
 
     # 4. k_attention2: 4 pointers (no weight), H/W at +0x20/+0x24
     # Host disassembly at 0x1800300ee-0x180030118, kernarg base rbp+0x10:
@@ -112,7 +135,7 @@ def steps():
     # Host loads ctx+0x310 (H, W dword pair) and swaps with pshufd before store
     # For H=W test this doesn't matter, but note the swap in case H != W later
     struct.pack_into('<ii', ka, 0x20, W, H)         # swapped by pshufd: originally H then W
-    out.append((ATTN2, ka, META[ATTN2]))
+    out.append((ATTN2, ka, META[ATTN2], 'attn2'))
 
     # 5. k_contract2: ctx+0x288 -> output, weight layer 4, count=4
     n = META[CONTRACT2][1]; ka = bytearray(n)
@@ -122,17 +145,17 @@ def steps():
     struct.pack_into('<Q', ka, 0x18, S(WL4))        # weight layer 4
     struct.pack_into('<ii', ka, 0x20, H, W)
     struct.pack_into('<i', ka, 0x28, NGROUP)
-    out.append((CONTRACT2, ka, META[CONTRACT2]))
+    out.append((CONTRACT2, ka, META[CONTRACT2], 'contract2_2'))
 
     final = []
-    for sym, ka, (explicit, ksize, lds, hid) in out:
-        for name, val in (('block_count_x', 1), ('block_count_y', 1), ('block_count_z', 1),
+    for sym, ka, (explicit, ksize, lds, hid), role in out:
+        for name, val in (('block_count_x', GX), ('block_count_y', GY[role]), ('block_count_z', 1),
                           ('group_size_x', 256), ('group_size_y', 1), ('group_size_z', 1),
                           ('grid_dims', 2)):
             if name in hid:
                 o, sz = hid[name]
                 struct.pack_into('<' + {2: 'H', 4: 'I', 8: 'Q'}[sz], ka, o, val)
-        final.append((sym, bytes(ka), lds))
+        final.append((sym, bytes(ka), lds, GX, GY[role]))
     return final
 
 
@@ -153,25 +176,30 @@ def wants_dispatch_ptr(sym):
 
 
 def emulate(steps_list, seed):
-    """Run emulator on the specified list of steps (indices into the full 5-step list)."""
+    """Run emulator on the specified list of steps (indices into the full 5-step list),
+    over the FULL grid each step really dispatches (gx x gy workgroups), not just (0,0)."""
     all_steps = steps()
     cur = arena(seed); base = cur.copy()
     for step_idx in steps_list:
-        sym, ka, lds = all_steps[step_idx]
+        sym, ka, lds, gx, gy = all_steps[step_idx]
         prog = E.load_program(R.DIS, {sym})
         g, KA = V.build(seed, ka, NSLOT)
         g.regions[1].arr[:] = cur
-        if wants_dispatch_ptr(sym):
-            DP = 0x7100_0000_0000
-            pkt = bytearray(64)
-            struct.pack_into('<HHHHHH', pkt, 0, 0, 3, 256, 1, 1, 0)
-            struct.pack_into('<III', pkt, 12, 256, 1, 1)
-            struct.pack_into('<II', pkt, 24, 64, lds)
-            g.add('dispatch', DP, np.frombuffer(bytes(pkt), np.uint8).copy())
-            sgpr = {0: DP & 0xffffffff, 1: DP >> 32, 2: KA & 0xffffffff, 3: KA >> 32, 14: 0, 15: 0}
-        else:
-            sgpr = {0: KA & 0xffffffff, 1: KA >> 32, 14: 0, 15: 0}
-        E.run_workgroup(prog, g, lds, 256, sgpr, max_steps=30_000_000)
+        dp = wants_dispatch_ptr(sym)
+        for wy in range(gy):
+            for wx in range(gx):
+                if dp:
+                    DP = 0x7100_0000_0000
+                    pkt = bytearray(64)
+                    struct.pack_into('<HHHHHH', pkt, 0, 0, 3, 256, 1, 1, 0)
+                    struct.pack_into('<III', pkt, 12, 256, 1, 1)
+                    struct.pack_into('<II', pkt, 24, 64, lds)
+                    g.add('dispatch', DP, np.frombuffer(bytes(pkt), np.uint8).copy())
+                    sgpr = {0: DP & 0xffffffff, 1: DP >> 32, 2: KA & 0xffffffff, 3: KA >> 32,
+                            14: wx, 15: wy}
+                else:
+                    sgpr = {0: KA & 0xffffffff, 1: KA >> 32, 14: wx, 15: wy}
+                E.run_workgroup(prog, g, lds, 256, sgpr, max_steps=30_000_000)
         cur = g.regions[1].arr.copy()
     return base, cur
 
@@ -181,9 +209,9 @@ def net_run(steps_list, seed):
     all_steps = steps()
     blob = b''; lines = []
     for step_idx in steps_list:
-        sym, ka, lds = all_steps[step_idx]
+        sym, ka, lds, gx, gy = all_steps[step_idx]
         o = len(blob); blob += ka
-        lines.append('%s|%s|%d|%d|1|1|256' % (MOD(sym), sym, o, len(ka)))
+        lines.append('%s|%s|%d|%d|%d|%d|256' % (MOD(sym), sym, o, len(ka), gx, gy))
     (OUT / 'm.txt').write_text('\n'.join(lines) + '\n')
     (OUT / 'k.bin').write_bytes(blob)
     (OUT / 'a.bin').write_bytes(arena(seed).tobytes())
@@ -194,9 +222,10 @@ def net_run(steps_list, seed):
     return r.returncode, msg, out
 
 
-print('block 31: one complete ViT block, %d dispatches, H=W=%d' % (len(steps()), H))
-for i, (sym, ka, lds) in enumerate(steps(), 1):
-    print('  %d. %-42s lds=%d' % (i, sym.split('E')[0][:42], lds))
+print('block %d: one complete ViT block, %d dispatches, H,W=%d,%d NTOK=%d gx=%d VIT_REAL=%d'
+      % (BLOCK, len(steps()), H, W, NTOK, GX, VIT_REAL))
+for i, (sym, ka, lds, gx, gy) in enumerate(steps(), 1):
+    print('  %d. %-42s lds=%-6d grid=(%d,%d)' % (i, sym.split('E')[0][:42], lds, gx, gy))
 
 # Run full 5-step chain
 rc, msg, out = net_run([0, 1, 2, 3, 4], 1)
