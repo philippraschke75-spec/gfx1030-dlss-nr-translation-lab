@@ -2581,3 +2581,30 @@ decoder 48         100% NaN   <- the remaining break
 skip input**. This file records the skip wiring at `ctx+0x2a8`, "opposite indexing on each side",
 and the runner wires none of it. A decoder block reading an unwired skip buffer is the obvious
 candidate for 100% NaN from a healthy input.
+
+## Decoder block 48: not the skip connections, and probably not a wiring detail at all
+
+`ctx+0x2a8[r9d]` is passed to launcher A as its `in_ptr`, and the encoder indexes that array as
+`[3-stage]` while the decoder indexes it as `[stage]`, so decoder iteration `di` reads the encoder
+buffer of matching channel width. The runner wired none of this - it read the previous decoder
+stage's output and never touched an encoder buffer.
+
+Wiring the skips **changes nothing**: block 48 returns 100% `0x7f` with `DEC_SKIP=0` and with
+`DEC_SKIP=1`. So the missing skip connection is a real omission and worth having fixed, but it is
+not the cause.
+
+The input feeding block 48 is healthy - the new `mid -> dec` transition measures 254 and 239 distinct
+byte values - and the same kernel (`k_swin_var<256,false>`) at the same geometry (`stage_hw(3)` =
+112x64) works correctly as encoder blocks 15-22. Same kernel, same size, healthy input, and it
+returns all-NaN only in the decoder.
+
+**The likely reason is structural.** The phase table describes the decoder loop
+(`0x180030870`-`0x180030b18`) as **"launcher A x2, launcher B x3"**. Launcher B is the attention/FFN
+dispatcher - the five-kernel recipe used by the C=512 blocks - so a decoder stage is *not* 22
+`k_swin_var` blocks in a row, which is exactly how the runner dispatches it. Blocks 48-69 are listed
+in the block table as "launcher A + launcher B", and that half of it has never been implemented.
+
+This also puts the earlier decoder-stage verification in context: `net_encoder_stage1.py` passes for
+blocks 48-55, 56-61, 62-65 and 66-69 at 0 mismatches - but it dispatches them all as `k_swin_var`,
+i.e. it verifies the same wrong structure the frame runner uses. A chain runner can only verify the
+schedule it was told to run.
