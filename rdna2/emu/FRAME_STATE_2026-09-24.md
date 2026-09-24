@@ -316,3 +316,53 @@ cheapest first:
 
 `BH`/`BW` env vars (now wired to a real grid) make any smaller reproduction case
 cheap to test before spending emulator time on the full 28-workgroup grid.
+
+## Update 9: Update 8's FAIL was the harness, not the translation - the C=512 block passes at grid > 1
+
+The 23,466 mismatches came from `net_block512.py`'s emulator loop, not from any kernel. `k_ffwd_inpview` and
+`k_conv_res_views` are 1-D (`.amdhsa_system_sgpr_workgroup_id_y 0`). Their translated prologue is
+`s_mov_b32 s15, s2`: the original reads its tile index from s15, and the hardware X id supplies it
+(net_frame_full.py's `wants_2d` docstring, :454-462, already says so). The harness gave every kernel
+`{14: wx, 15: wy}`. So at grid (2,1), every emulated workgroup of the 1-D kernels got s15 = 0 and recomputed
+tile 0, while the GPU computed tiles 0 and 1. The 2-D kernels (`k_ffwd2`, `k_qkv_attn`: s14 = x, s15 = y) were
+wired correctly.
+
+Fixed in `net_block512.py`:
+* 1-D kernels get `{14: 0, 15: i}` in the emulator.
+* They also get net_frame_full.py's own buffer-sized grid, `ceil(512*ceil(H/4)*ceil(W/4)*16 / 16384)`, instead of
+  the 2-D (GX, GY). The fix covers the kernarg hidden args, the GPU manifest and the emulator loop.
+* `STEPS=` selects a prefix of the chain.
+
+| run | grids (1-D / 2-D) | result |
+|---|---|---|
+| STEPS=0, BH=8 BW=16 | (4,1) / - | 0 mismatches |
+| all 5, BH=8 BW=16 | (4,1) / (2,1) | **0 mismatches**, 163,185 bytes written |
+| all 5, BH=16 BW=16 | (8,1) / (2,2) | **0 mismatches**, 326,390 bytes written |
+
+`k_qkv_attn`'s window origin (+0x20 = (0,0)) is per dispatch. It is also correct at grid (2,2), so no per-tile
+value is needed. **Update 8's conclusion is withdrawn: the C=512 translation is not shown to be defective.** This
+was not run at the real 32x56 (28 two-D and 28 one-D workgroups). Nothing here suggests size-specific behaviour,
+but that is an assumption.
+
+**The host grid for the 1-D kernels is twice what the runner launches (read from the launcher; no frame run yet).**
+The launcher at 0x180033660 receives rdi = &{&[rbp+0x604], ctx, &stage4, &stage5} (0x18002f972-0x18002f99c).
+[rbp+0x604] = ctx[0x308] = ceil(H5/4)*ceil(W5/4) (0x18002e3ed-0x18002e430). All three 1-D launches use
+grid ([rdi], 1, 1):
+* `k_ffwd_inpview` (handle 0x1800663c8, grid at 0x18003375d-0x180033787)
+* `k_conv_res_views` layer 1 (grid at 0x180033931-0x18003395b)
+* `k_conv_res_views` layer 3 (grid at 0x180033fe1-0x18003400b)
+
+The runner uses `grid_for(..., N512, per_wg=C512_WG=16384)` = 512*tiles*16/16384 = **tiles/2** (56 instead of
+112 at 32x56). Each workgroup covers one 4x4 tile across 512 channels = 8192 bytes. `k_dec_upsample` already
+uses the same 8192 B per workgroup and ctx[0x308]. With the host grid in `net_block512.py` (BH=8 BW=16, 1-D grid 8
+instead of 4), the chain still matches the emulator exactly (0 mismatches), and it writes **261,119 bytes instead
+of 163,185**. At the runner's grid, part of every 1-D output is never written. In the frame, that is about half of
+the C=512 stage's tiles in 3 of 5 dispatches, across all 16 blocks (23-30, 40-47).
+
+Runner change to test (no code change needed): `C512_WG=8192` gives `grid_for` exactly ctx[0x308]. If it scores
+better, change the default at net_frame_full.py:518 from '16384' to '8192', citing the addresses above.
+
+Still open behind that: Update 6's two remaining suspects (block 30's pooled-write layout, the identity of
+ctx+0x228), and the unmapped 2-D paths of the launcher (0x1800336cc: grid ((tiles+3)/4, 8, 1);
+0x180033b7b: ((tiles+3)/4, 4, 1)). Their handles have not been matched to kernels yet, so whether the runner's
+(ceil(W/8), ceil(H/8)) for `k_ffwd2`/`k_qkv_attn` is right is a hypothesis to check next.

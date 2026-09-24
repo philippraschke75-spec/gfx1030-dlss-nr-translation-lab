@@ -39,6 +39,16 @@ BLOCK = int(_os.environ.get('BLOCK', '23'))
 H = int(_os.environ.get('BH', '8'))
 W = int(_os.environ.get('BW', '8'))
 GX, GY = -(-W // 8), -(-H // 8)
+# k_ffwd_inpview and k_conv_res_views are 1-D (workgroup_id_y disabled): the translated prologue
+# does s_mov_b32 s15, s2, i.e. the original reads its tile index from s15 and the hardware X id
+# supplies it. Giving them (GX, GY) and the emulator {14: wx, 15: wy} made every emulated
+# workgroup compute tile 0 while the GPU computed tiles 0..GX-1 - the grid=(2,1) FAIL of
+# FRAME_STATE Update 8. The emulator now puts the index in s15. The grid is the host's: the launcher
+# 0x180033660 gives both kernels ([rdi], 1, 1) with [rdi] -> ctx[0x308] = ceil(H/4)*ceil(W/4)
+# (0x180033787, 0x18003395b, 0x18003400b; ctx[0x308] set at 0x18002e3ed-0x18002e430).
+N1D = -(-H // 4) * -(-W // 4)
+# STEPS=0,1,2 runs a prefix of the chain (net_vit.py's incremental check); default all five.
+STEPS = [int(x) for x in _os.environ.get('STEPS', '0,1,2,3,4').split(',')]
 NGROUP = 4                      # min(n*16, H*W); 4*16 == 8*8 so the whole tile is live
 # arena slots: the four ctx buffers, then the four weight records
 B228, B230, B238, B240, BIN = 0, 1, 2, 3, 4
@@ -109,14 +119,25 @@ def steps():
 
     final = []
     for sym, ka, (explicit, ksize, lds, hid) in out:
-        for name, val in (('block_count_x', GX), ('block_count_y', GY), ('block_count_z', 1),
+        gx, gy = grid(sym)
+        for name, val in (('block_count_x', gx), ('block_count_y', gy), ('block_count_z', 1),
                           ('group_size_x', 256), ('group_size_y', 1), ('group_size_z', 1),
                           ('grid_dims', 2)):
             if name in hid:
                 o, sz = hid[name]
                 struct.pack_into('<' + {2: 'H', 4: 'I', 8: 'Q'}[sz], ka, o, val)
         final.append((sym, bytes(ka), lds))
-    return final
+    return [final[i] for i in STEPS]
+
+
+def is_2d(sym):
+    t = (D.ROOT / 'build' / 'kernels-hw-scratch' / (sym + '.s')).read_text(errors='replace')
+    kd = t.split('.amdhsa_kernel ' + sym, 1)[1].split('.end_amdhsa_kernel', 1)[0]
+    return '.amdhsa_system_sgpr_workgroup_id_y 1' in kd
+
+
+def grid(sym):
+    return (GX, GY) if is_2d(sym) else (N1D, 1)
 
 
 def arena(seed):
@@ -142,8 +163,10 @@ def emulate(seed):
         g, KA = V.build(seed, ka, NSLOT)
         g.regions[1].arr[:] = cur
         dp = wants_dispatch_ptr(sym)
-        for wy in range(GY):
-            for wx in range(GX):
+        gx, gy = grid(sym); two_d = is_2d(sym)
+        for wy in range(gy):
+            for wx in range(gx):
+                ids = {14: wx, 15: wy} if two_d else {14: 0, 15: wx}
                 if dp:
                     DP = 0x7100_0000_0000
                     pkt = bytearray(64)
@@ -151,10 +174,9 @@ def emulate(seed):
                     struct.pack_into('<III', pkt, 12, 256, 1, 1)
                     struct.pack_into('<II', pkt, 24, 64, lds)
                     g.add('dispatch', DP, np.frombuffer(bytes(pkt), np.uint8).copy())
-                    sgpr = {0: DP & 0xffffffff, 1: DP >> 32, 2: KA & 0xffffffff, 3: KA >> 32,
-                            14: wx, 15: wy}
+                    sgpr = {0: DP & 0xffffffff, 1: DP >> 32, 2: KA & 0xffffffff, 3: KA >> 32, **ids}
                 else:
-                    sgpr = {0: KA & 0xffffffff, 1: KA >> 32, 14: wx, 15: wy}
+                    sgpr = {0: KA & 0xffffffff, 1: KA >> 32, **ids}
                 E.run_workgroup(prog, g, lds, 256, sgpr, max_steps=30_000_000)
         cur = g.regions[1].arr.copy()
     return base, cur
@@ -164,7 +186,7 @@ def net_run(seed):
     blob = b''; lines = []
     for sym, ka, lds in steps():
         o = len(blob); blob += ka
-        lines.append('%s|%s|%d|%d|%d|%d|256' % (MOD(sym), sym, o, len(ka), GX, GY))
+        lines.append('%s|%s|%d|%d|%d|%d|256' % ((MOD(sym), sym, o, len(ka)) + grid(sym)))
     (OUT / 'm.txt').write_text('\n'.join(lines) + '\n')
     (OUT / 'k.bin').write_bytes(blob)
     (OUT / 'a.bin').write_bytes(arena(seed).tobytes())
@@ -175,9 +197,9 @@ def net_run(seed):
     return r.returncode, msg, out
 
 
-print('block 23: one complete C=512 attention block, %d dispatches, H=W=%d' % (len(steps()), H))
-for i, (sym, ka, lds) in enumerate(steps(), 1):
-    print('  %d. %-42s lds=%d' % (i, sym.split('E')[0][:42], lds))
+print('block %d: C=512 attention block, steps %s, H=%d W=%d' % (BLOCK, STEPS, H, W))
+for i, (sym, ka, lds) in zip(STEPS, steps()):
+    print('  %d. %-42s lds=%d grid=%s' % (i + 1, sym.split('E')[0][:42], lds, grid(sym)))
 rc, msg, out = net_run(1)
 print('\n', msg.splitlines()[-1] if msg else 'no output')
 if out is None:
@@ -189,6 +211,6 @@ touched = sorted({int(i // V.SLOT) for i in np.nonzero(ref != base)[0]})
 names = {B228: 'ctx+0x228(out)', B230: 'ctx+0x230', B238: 'ctx+0x238', B240: 'ctx+0x240'}
 print('emulator chain wrote %d bytes into slots %s  (%s)'
       % (int((ref != base).sum()), touched, ', '.join(names.get(s, 'slot%d' % s) for s in touched)))
-print('net_run vs emulator over the 5-step block: %d mismatches -> %s'
-      % (len(d), 'PASS' if len(d) == 0 and len(touched) else 'FAIL'))
+print('net_run vs emulator over steps %s: %d mismatches -> %s'
+      % (STEPS, len(d), 'PASS' if len(d) == 0 and len(touched) else 'FAIL'))
 raise SystemExit(0 if (len(d) == 0 and len(touched)) else 1)
