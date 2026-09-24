@@ -2456,3 +2456,35 @@ Current state of the C=512 stage, deterministic and with correct geometry:
 So the NaN source moved from `k_qkv_attn` to `k_conv_res_views`, which means the earlier attribution
 was a consequence of the wrong geometry rather than a property of either kernel. Both readings were
 taken on a deterministic chain; the difference is the geometry, not noise.
+
+## The C=512 stage is verified at its REAL geometry - so the NaN comes from its input
+
+`net_block512.py` now takes `BH`/`BW`. Run at the geometry the stage actually has in a 1707x960
+frame - stage 4 of the padded table, `56x32`, which is only 7x4 workgroups and well within the
+emulator's reach:
+
+```
+H=8   W=8    0 mismatches -> PASS
+H=32  W=56   0 mismatches -> PASS
+```
+
+**All five kernels of the C=512 block are correct at the size they really run at.** That is an
+elimination against ground truth, not an inference from symptoms - and it retires the whole stage as
+a suspect, including both attributions of the NaN made earlier (`k_qkv_attn`, then
+`k_conv_res_views`). Neither kernel is defective; they are being handed input that contains a zero
+denominator.
+
+### Method note, because three attributions in a row were wrong
+
+Each of those came from reading NaN percentages in the frame chain and pointing at whichever
+dispatch showed them first. That is symptom-chasing: in a chain where a dozen launch parameters are
+guesses, fixing one moves the symptom to the next and each move looks like a new discovery. Three
+"localisations" of the same NaN were three different guessed parameters upstream.
+
+The reference test settles in one run what three rounds of that did not. **Where a difftest can be
+run at the real geometry, run it before inferring anything from the frame chain.** Passing at 8x8
+says nothing about 56x32, which is why this was worth redoing.
+
+What that leaves: the input to the C=512 stage is `k_repack`'s output, which is 86% zeros. Whether
+that is correct is unknown - `RepackParams`' four i32 are still guessed, and `k_repack` is the last
+unverified thing between the healthy encoder and the verified C=512 stage.
