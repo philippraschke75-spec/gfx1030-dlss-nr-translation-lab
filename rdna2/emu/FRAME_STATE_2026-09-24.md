@@ -208,22 +208,29 @@ close the gap Update 4 identified, and lag8 creeping toward 1.0 suggests the
 column-periodic structure is leaking back in rather than being resolved by the
 real ping-pong.
 
-**What is uncertain in the MID_HOST=1 implementation, most likely candidates for
-the miss:**
-* The two `k_repack` dispatches (into and out of the ViT token buffer) reuse
-  the FIRST repack's `_rp`/`g_rp` (dims and grid derived for the encoder->C=512
-  transition, C=512 at H5,W5). The ViT repacks almost certainly need their own
-  dims - the host reads in this file's earlier updates never nailed down the
-  exact element-count formula for the vit1d<->tokens repack, only the buffer
-  identities and that the same handle (0x1800663e0) is reused.
-* The per-kernel ViT grids still use one shared `g = grid_for(CONTRACT2, N1024,
-  (H5, W5))` for all 5 kernels x 8 blocks, not grids read individually per
-  kernel from the host loop (0x18002fd47-0x1800303a0). Only k_expand2's grid
-  was ever confirmed from the host in an earlier note.
-* `k_final_head`'s dispatch into off_pooled/off_headb and its exact +0x00/+0x08
-  wiring (ctx+0x248 pooled -> ctx+0x250 head) has not been independently
-  checked against a host read in this file.
+## Update 6: the MID_HOST=1 launches match the host; the loss is not in launch geometry
 
-Next: read the ViT repack dims and the 5 per-kernel grids properly from the
-host disassembly (0x18002fd05-0x180030509 in the embedded PE used throughout
-this file), rather than reusing the encoder repack's numbers.
+An earlier draft of Update 5 listed three open guesses: shared repack dims, one shared ViT grid, and unchecked
+`k_final_head` wiring. None of them applies to the committed code (b866d1c). All three were read from the host PE
+(`version.dll`, base 0x180000000) and compared field by field with `net_frame_full.py`'s `MID_HOST` branch.
+In every launch below, `0x180065910` takes the grid in rcx and the block (256) in rdx.
+
+* `k_final_head` (0x1800663d8, launch 0x18002fbbf): grid (ctx[0x30c],1,1). +0x00/+0x08 = ctx+0x248/+0x250 (one
+  16-byte copy at 0x18002faea). +0x10 = `block30.layer4.layer`. The host dumps ctx+0x250 at ctx[0x30c]<<14 bytes.
+* `k_repack` forward (0x1800663e0, launch 0x18002fd1a): grid (256,1,1). +0x00 = ctx+0x250, +0x08 = ctx+0x258,
+  +0x10 = [rbp+0x4a4] = ctx+0x1d0/0x1d4 = (H6,W6) (set at 0x18002f957), +0x18 = ctx[0x314], +0x1c = 1.
+* `k_repack` back (launch 0x180030486): the same, except +0x00 = the last ViT output (ctx+0x258 after 8 swaps),
+  +0x08 = ctx+0x250, +0x1c = 0. The trailing field is a direction flag. The C=512 dims are not used.
+* The five ViT launches all have gx = ctx[0x314]/64. The gy values are expand2 32, contract2 **8**, qkv2 32,
+  attention2 32, contract2 **8** (r14/r12 = 0x100000020/0x100000008). contract2 +0x20 is (4096, 0x400000), then
+  (1024, 0x100000), with +0x28 = 4. attention2 +0x20 is ctx+0x310 after `pshufd 0xe1` = (NTOK, H6*W6).
+  ctx+0x310 = H6*W6 (0x18002e468).
+* `k_dec_upsample`: +0x20 = ctx+0x1c4/0x1c8 = (H5,W5), grid (ctx[0x308],1,1).
+
+The ping-pong (swap at 0x18002fd80), the weight layers 0/1/2/4 and the pooled pointer of block 30 also match.
+**No host-launch parameter in this section is left to change**, so the drop from 0.547 to 0.528 comes from inside the
+kernels or buffers. The remaining suspects, from cheapest to check to most expensive:
+1. The ViT kernels at the real size. `net_vit.py`'s bit-exact difftest should be re-run at NTOK=448 with
+   ctx+0x310 = 16*28. This is the same trap as the pre-block difftests at H=W=16, and it needs no GPU.
+2. The layout of block 30's pooled write (+0x38 -> ctx+0x248) versus the layout `k_final_head` reads.
+3. Whether ctx+0x228 really is `c512_1[0]` after blocks 23-30.
