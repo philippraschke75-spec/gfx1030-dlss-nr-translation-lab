@@ -11,8 +11,9 @@
 // usage: net_run manifest.txt kernargs.bin arena.bin arena_base_hex
 //
 // manifest.txt: one dispatch per line, '#' comments and blank lines ignored:
-//     <module.co>|<symbol>|<ka_offset>|<ka_size>|<gx>|<gy>|<threads>
-// ('|' separated because module paths contain spaces.)
+//     <module.co>|<symbol>|<ka_offset>|<ka_size>|<gx>|<gy>|<threads>[|<gz>]
+// ('|' separated because module paths contain spaces.) gz is optional and defaults to 1 -
+// k_qkv_attn2 is the first kernel in this project needing a 3-D grid (FRAME_STATE Update 11).
 // kernargs.bin holds every dispatch's kernarg block back to back; ka_offset/ka_size select one.
 // Every 8-byte aligned qword of a kernarg lying inside [arena_base, arena_base+size) is rebased to
 // the device arena, the same rule var_gpu_test uses. arena.bin is overwritten with the final
@@ -41,7 +42,7 @@ static std::vector<uint8_t> rd(const char* p){
   std::vector<uint8_t> v((size_t)n); if(n&&std::fread(v.data(),1,(size_t)n,f)!=(size_t)n)std::exit(9);
   std::fclose(f); return v;
 }
-struct Step { std::string mod, sym; size_t off, len; unsigned gx, gy, thr; };
+struct Step { std::string mod, sym; size_t off, len; unsigned gx, gy, thr, gz; };
 
 int main(int argc,char**argv){
   if(argc<5){ std::printf("usage: net_run manifest kernargs.bin arena.bin arena_base_hex\n"); return 1; }
@@ -59,10 +60,11 @@ int main(int argc,char**argv){
       std::vector<std::string> f; size_t pos=0;
       for(;;){ size_t q=s.find('|',pos); if(q==std::string::npos){ f.push_back(s.substr(pos)); break; }
                f.push_back(s.substr(pos,q-pos)); pos=q+1; }
-      if(f.size()!=7){ std::printf("bad manifest line (%zu fields): %s\n",f.size(),line); return 1; }
+      if(f.size()!=7 && f.size()!=8){ std::printf("bad manifest line (%zu fields): %s\n",f.size(),line); return 1; }
       steps.push_back({f[0],f[1],(size_t)std::strtoull(f[2].c_str(),nullptr,10),
                        (size_t)std::strtoull(f[3].c_str(),nullptr,10),
-                       (unsigned)atoi(f[4].c_str()),(unsigned)atoi(f[5].c_str()),(unsigned)atoi(f[6].c_str())});
+                       (unsigned)atoi(f[4].c_str()),(unsigned)atoi(f[5].c_str()),(unsigned)atoi(f[6].c_str()),
+                       f.size()==8?(unsigned)atoi(f[7].c_str()):1u});
     }
     std::fclose(f);
   }
@@ -99,7 +101,7 @@ int main(int argc,char**argv){
     size_t sz=ka.size();
     void* cfg[]={HIP_LAUNCH_PARAM_BUFFER_POINTER,ka.data(),HIP_LAUNCH_PARAM_BUFFER_SIZE,&sz,HIP_LAUNCH_PARAM_END};
     hipEvent_t e0,e1; hipEventCreate(&e0); hipEventCreate(&e1); hipEventRecord(e0);
-    CHECK(hipModuleLaunchKernel(fns[key],s.gx,s.gy,1,s.thr,1,1,0,nullptr,nullptr,cfg));
+    CHECK(hipModuleLaunchKernel(fns[key],s.gx,s.gy,s.gz,s.thr,1,1,0,nullptr,nullptr,cfg));
     hipEventRecord(e1);
     auto t0=std::chrono::steady_clock::now();
     while(hipEventQuery(e1)==hipErrorNotReady){
