@@ -2529,3 +2529,55 @@ kept the guards quiet and the unused half was mistaken for data.
 **Still open:** `k_conv_res_views` produces NaN either way (1.79% at ELEM=2, 3.57% at ELEM=1), even
 though the whole C=512 stage passes its difftest at this exact geometry. So the NaN is still coming
 from something about the frame chain's data that the difftest's fixture does not reproduce.
+
+## The NaN was a wrong weight mapping, found by diffing against the verified runner
+
+`net_block512.py` passes its difftest at the real geometry, so it is ground truth for this stage.
+Comparing the frame runner's kernargs against it field by field: the buffers all matched, the
+**weights did not**.
+
+```
+verified (net_block512)   ffwd_inpview L0   ffwd2 L0   conv_res_1 L1   qkv_attn L2   conv_res_2 L3
+frame runner (was)        ffwd_inpview L0   ffwd2 L1   conv_res_1 L2   qkv_attn L3   conv_res_2 L2
+```
+
+`k_ffwd_inpview` and `k_ffwd2` **share layer0**; the runner had shifted every dispatch from the
+second onward, so four of the five kernels ran on the wrong weights. Correcting it removes the NaN
+from the stage entirely:
+
+```
+before   conv_res_1 0x7f 1.79%   qkv_attn 0x7f 3.57%   conv_res_2 0x7f 3.57%
+after    conv_res_1 254 distinct, no 0x7f anywhere in the stage
+```
+
+This is what three rounds of symptom-chasing had been calling "the `k_qkv_attn` NaN" and then "the
+`k_conv_res_views` NaN". Neither kernel was ever at fault. **Diff against a passing runner before
+theorising about a kernel.**
+
+### Two more wiring fixes it exposed
+
+* **`k_dec_upsample` writes through `+0x10`, not `+0x08`.** After block 39, `c512_2[0]` holds 243
+  distinct byte values while the buffer at `+0x08` is entirely zero. The second C=512 stage was
+  being fed the empty one.
+* **The `mid -> dec` transition was missing.** The phase table has `k_repack, k_dec_upsample` there,
+  and the C=512 stage ends at stage 4 (56x32, C=512) while the decoder starts at stage 3 (112x64,
+  C=256). Both are now dispatched and both produce healthy output (254 and 239 distinct).
+
+### State of the chain
+
+```
+block 0            healthy    min -88  max 52   absmean 1.71
+encoder 1-22       healthy    100% coverage, 216-254 distinct
+k_repack           healthy    96.43% coverage at one byte per element
+C=512 23-30        healthy    253 distinct, no NaN
+ViT 31-38          healthy    253-254 distinct
+block 39           healthy    243 distinct (through +0x10)
+C=512 40-47        healthy    252-254 distinct
+mid->dec           healthy    repack 254, upsample 239
+decoder 48         100% NaN   <- the remaining break
+```
+
+**Next**: the decoder blocks are dispatched with the encoder's kernarg convention and **no U-net
+skip input**. This file records the skip wiring at `ctx+0x2a8`, "opposite indexing on each side",
+and the runner wires none of it. A decoder block reading an unwired skip buffer is the obvious
+candidate for 100% NaN from a healthy input.
