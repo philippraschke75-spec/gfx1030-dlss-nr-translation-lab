@@ -150,6 +150,9 @@ c512_1 = [place('c512_1 w%d' % i, N512) for i in range(4)]
 vit_buf = [place('vit b%d' % i, N1024) for i in range(6)]
 c512_2 = [place('c512_2 w%d' % i, N512) for i in range(4)]
 off_b39 = place('block39 out', N512)
+# ctx+0x250, the ViT's own buffer ('vit1d'). Its input ctx+0x228 ('vit512a') must survive the ViT: block 39 reads it
+# back at +0x08 as the skip around the ViT.
+off_vit = place('vit out (ctx+0x250)', N1024)
 
 # decoder mirrors the encoder: 4 stages, channels halving as the size doubles back up
 DEC_STAGES = [('256_0', list(range(48, 56)), 256), ('128_0', list(range(56, 62)), 128),
@@ -304,13 +307,28 @@ if PRE_1H:
     struct.pack_into('<Q', ka, 0x08, BASE + off_a)
     struct.pack_into('<Q', ka, 0x10, BASE + off_w0)
     struct.pack_into('<ii', ka, 0x18, _ph, _pw)
-    struct.pack_into('<f', ka, 0x20, 1.0)
+    # Host values for the scalars (prologue loads at 0x18002ef05-0x18002ef57; ctx = BSS global 0x18009a100):
+    #   +0x20 = ctx+0x34 = 0.0625, set once by the ctx constructor (0x18001f211 -> 0x180020468/0x180020470,
+    #           an 8-byte store of {0.03125, 0.0625} from 0x18006d2e0 into ctx+0x30/0x34). At 0 the kernel
+    #           ignores its RGB input entirely (impulse vs black frame: 0 differing output bytes).
+    #   +0x24 = ctx+0x38: 0 (0x18002d6d3)
+    #   +0x28 = ctx+0x20: ini [LocalTone, LocalStructure] masked off when ToneChannels == 0 (default) -> 0, 0
+    #   +0x48 = ctx+0x28/0x2c: f32 pair from 0x18001a6f2-0x18001a725. With UseAutoMask defaulting to 1
+    #           and SkinStructure to -1, both are LocalStructure = 1.0 (was packed as int 0, 0)
+    struct.pack_into('<f', ka, 0x20, float(os.environ.get('PRE_F20', '0.0625')))
     struct.pack_into('<i', ka, 0x24, 0)
     struct.pack_into('<ff', ka, 0x28, 0.0, 0.0)
     struct.pack_into('<i', ka, 0x30, 0)
     struct.pack_into('<Q', ka, 0x38, BASE + off_p38)
-    struct.pack_into('<Q', ka, 0x40, BASE + off_scratch)
-    struct.pack_into('<ii', ka, 0x48, 0, 0)
+    # +0x40 is NOT scratch. The host passes ctx+0x118 (0x18002ed8d -> [rbp+0x618] -> 0x18002ef4a), and the
+    # kernel reads it as a second 12 B/pixel RGB source at the same index as +0x00, falling back to +0x00
+    # when it is null (s_cmp_eq_u64 s[26:27], 0 / v_cndmask at 0x2EFC-0x2FE8). With scratch there, the
+    # pre-block's output was byte-identical for a real frame, a black frame and an impulse frame.
+    # ctx+0x118 is 0 on the path at 0x18002d6da and ctx+0x108 on the path at 0x18002dd04.
+    # PRE_40=null (default) | ctx118 | scratch.
+    _p40 = os.environ.get('PRE_40', 'null')
+    struct.pack_into('<Q', ka, 0x40, 0 if _p40 == 'null' else BASE + (off_ctx118 if _p40 == 'ctx118' else off_scratch))
+    struct.pack_into('<ff', ka, 0x48, *[float(x) for x in os.environ.get('PRE_F48', '1.0,1.0').split(',')])
     # Explicit struct is 0x50 B (kernel metadata), so the hidden block counts sit at +0x50 and
     # the group sizes at +0x5c - not the VarParams 0xa8/0xb4.
     struct.pack_into('<III', ka, 0x50, g_pre[0], g_pre[1], 1)
@@ -564,13 +582,20 @@ if stop in ('full', 'all'):
     # of each buffer is written and the rest keeps block 30's output, which is why the
     # distinct-byte counts looked healthy - most of it was passthrough.
     g = grid_for(CONTRACT2, N1024, (H5, W5))
-    BIN_ = c512_1[0]
+    # The host dumps ctx+0x228 as 'vit512a' (0x18002fa17-0x18002fa6a) and passes it to k_dec_upsample +0x08,
+    # with the ViT's output ctx+0x250 ('vit1d') at +0x00 (0x180030509-0x180030555). The runner ran the ViT in
+    # place on c512_1[0], destroying that skip, and gave +0x08 the never-written off_b39. VIT_SEP=0 restores that.
+    # Default off: with the ViT itself mis-launched (see FRAME_STATE Update 4) its output is all zero, so VIT_SEP=1
+    # feeds block 39 a zero +0x00. Neither wiring is right until the ViT section is rebuilt from the host.
+    VIT_SEP = os.environ.get('VIT_SEP', '0') == '1'
+    BIN_ = off_vit if VIT_SEP else c512_1[0]
     B260, B268, B270, B278, B280, B288 = vit_buf
     for blk in range(31, 39):
         L = lambda n: wt['block%d_layer%d' % (blk, n)][0]
-        steps.append((EXPAND2, ka_for(EXPAND2, [(0x00, BIN_), (0x08, B260), (0x10, L(0))],
+        _vin = c512_1[0] if (VIT_SEP and blk == 31) else BIN_   # block 31 reads the C=512 output, writes BIN_
+        steps.append((EXPAND2, ka_for(EXPAND2, [(0x00, _vin), (0x08, B260), (0x10, L(0))],
                                       [], g), g, 256))
-        steps.append((CONTRACT2, ka_for(CONTRACT2, [(0x00, B260), (0x08, BIN_), (0x10, B268),
+        steps.append((CONTRACT2, ka_for(CONTRACT2, [(0x00, B260), (0x08, _vin), (0x10, B268),
                                                     (0x18, L(1))],
                                         [(0x20, '<ii', (H5, W5)), (0x28, '<i', (4,))], g), g, 256))
         steps.append((QKV2, ka_for(QKV2, [(0x00, B268), (0x08, B270), (0x10, B278), (0x18, B280),
@@ -592,7 +617,8 @@ if stop in ('full', 'all'):
     # the only global store), +0x18 weights; +0x20 is TWO i32 (s2, s3; s4 = s3/4 = tiles per row), not a pointer.
     # 1-D (workgroup_id_y disabled), 8192 B of output per workgroup.
     _dd = [int(x) for x in os.environ.get('DECUP_DIMS', '%d,%d' % (H5, W5)).split(',')]
-    _dout, _dskip = (off_b39, c512_2[0]) if os.environ.get('DECUP_SWAP') == '1' else (c512_2[0], off_b39)
+    _skip39 = c512_1[0] if VIT_SEP else off_b39
+    _dout, _dskip = (_skip39, c512_2[0]) if os.environ.get('DECUP_SWAP') == '1' else (c512_2[0], _skip39)
     g_du = (int(os.environ.get('DECUP_GRID', str(-(-N512 // 8192)))), 1)
     steps.append((DECUP, ka_for(DECUP, [(0x00, BIN_), (0x08, _dskip), (0x10, _dout),
                                         (0x18, wt['block39'][0])],
@@ -702,12 +728,18 @@ if stop in ('full', 'all'):
     #   +0x40 ctx+0x118   = ctx+0x108, H*W*4
     # Grid: 256x1x1 threads over (W//8, H//8). The /8 TRUNCATES (psrad/psrld/paddd/psrad at
     # 0x180030dbe), which is exact only because the dims are padded to a multiple of 128.
-    POST_F30 = float(os.environ.get('POST_F30', '1.0'))
+    # ctx+0x30 = [DlssNrOnAmd] Scale from the ini, default 0.03125 (0x1800082b0-0x1800082d3 -> 0x18009ad14,
+    # copied to ctx+0x30 each frame at 0x18001a735). Not unwritten: the store is RIP-relative.
+    POST_F30 = float(os.environ.get('POST_F30', '0.03125'))
     # xmm6 at 0x180030ea4 has two paths: `pxor xmm6,xmm6` (0x180030cf0) and `movaps xmm6,xmm7`
     # (0x180030cfd). The zero path is the right one: at 1.0 the frame comes out 17x too dark
     # (mean 6.4 vs the import's 108.7) with even columns carrying 1.88x the odd ones; at 0.0
     # the mean is 46.6 and the column ratio falls to 1.12.
-    POST_F48 = float(os.environ.get('POST_F48', '0.0'))
+    # Host read overturns that: the zero path is taken only when env DLSSNR_NOBLEND is set
+    # (getenv at 0x1800314d6-0x1800314e5 -> byte [0x18009b1f8]). Otherwise xmm6 = ctx+0xd8, which is the
+    # f16 tensor 'block70.layer0.blend_scale' read back to the host at 0x180030b7c-0x180030c4f.
+    POST_F48 = float(os.environ['POST_F48']) if 'POST_F48' in os.environ else float(np.fromfile(WEIGHTS / 'block70_layer0_blend_scale.bin', np.float16)[0])
+    print('post-block +0x30 Scale=%g  +0x48 blend_scale=%g' % (POST_F30, POST_F48))
     g_post = (PAD_W // 8, PAD_H // 8)
     # POST_CONST is a set of field offsets to replace with constant buffers, e.g.
     # POST_CONST=0x00,0x08,0x38,0x40 for M2 run 5.
@@ -750,11 +782,18 @@ if stop in ('full', 'all'):
     struct.pack_into('<i', ka, 0x28, int(os.environ.get('EXPORT_MODE', '0')))
     struct.pack_into('<i', ka, 0x08, PAD_W)   # input row stride: ctx+0x100 is PAD_W wide
     struct.pack_into('<Q', ka, 0x30, BASE + off_rgb)
-    # +0x38/+0x3c are the two f32 job strengths (C:77), from xmm6/xmm7 in the frame function.
-    # Never read from the host (R8 item 3). With both at 1.0 the export surface fits
-    # `a - 1.4*input` at R2 0.83, i.e. it SUBTRACTS the import instead of blending it.
-    struct.pack_into('<ff', ka, 0x38, float(os.environ.get('EXP_S0', '1.0')),
-                     float(os.environ.get('EXP_S1', '1.0')))
+    # +0x38/+0x3c come from xmm6/xmm7 in the frame function (0x18002d476-0x18002d488), which reads
+    # them from the job struct (its 10th argument). The host read (0x18001a0a4-0x18001a822) settles both:
+    #   +0x38 = job +0x40, an INT history-valid flag, not a float: 0 at init, set to 1 only when
+    #           byte [0x18009ac5c] == 1 (setns over the history resource creation calls, 0x1800152e4).
+    #           The null-job call site (0x180015b24) gives 0 as well.
+    #   +0x3c = job +0x3c = f32 table [0x180096cd0 + 4*slot], which is 1.0 for all four slots; 1.0
+    #           (0x18006d2c8) again for the null job.
+    # EXP_HIST packs +0x38 as the int flag. EXP_S0 still overrides it with a raw float, for comparison.
+    struct.pack_into('<i', ka, 0x38, int(os.environ.get('EXP_HIST', '0')))
+    if 'EXP_S0' in os.environ:
+        struct.pack_into('<f', ka, 0x38, float(os.environ['EXP_S0']))
+    struct.pack_into('<f', ka, 0x3c, float(os.environ.get('EXP_S1', '1.0')))
     g_exp = ((SRC_W + 255) // 256, SRC_H)
     struct.pack_into('<III', ka, 0x40, g_exp[0], g_exp[1], 1)
     struct.pack_into('<HHH', ka, 0x4c, 256, 1, 1)
@@ -930,7 +969,10 @@ def report(name, buf):
 
 
 print('\n=== buffers after the run ===')
-rgb = res[off_rgb:off_rgb + SRC_H * SRC_W * 12].view(np.float32).reshape(SRC_H, SRC_W, 3)
+# k_import writes at the PADDED pitch (it is given PAD_H/PAD_W and a padded grid, and the buffer is
+# PAD_H*PAD_W*12). Reading it packed at SRC_W shears every row by PAD_W-SRC_W = 85 px, and imported.png -
+# the reference smid.py scores against - was that sheared image: adjacent-row corr 0.21 vs 0.75.
+rgb = res[off_rgb:off_rgb + PAD_H * PAD_W * 12].view(np.float32).reshape(PAD_H, PAD_W, 3)[:SRC_H, :SRC_W]
 report('k_import RGB', res[off_rgb:off_rgb + SRC_H * SRC_W * 12])
 a_nan, a_nz = report('block0 out', res[off_a:off_a + S1])
 report('block0 +0x38', res[off_p38:off_p38 + S1])
@@ -1018,3 +1060,58 @@ if stop in ('full', 'all'):
           % (len(rows), SRC_H, int(rows[-1]) if len(rows) else None, full, SRC_W))
     write_png(OUT / 'rendered.png', tonemap(rep))
     print('wrote', OUT / 'rendered.png')
+
+    if os.environ.get('STRUCT_PROBE') == '1':
+        # Where does the network lose the input's structure? Per stage buffer: decode NCHW16c e4m3, band-pass
+        # each channel and the input luminance (resampled to that buffer's grid), and report the best |corr| over
+        # channels plus the fraction of channels above 0.2. A stage that still sees the image has a channel
+        # well above noise; the first stage where both collapse is where it is lost.
+        def _blur(a, r):
+            k = np.ones(2 * r + 1) / (2 * r + 1)
+            a = np.apply_along_axis(lambda m: np.convolve(m, k, 'same'), 0, a)
+            return np.apply_along_axis(lambda m: np.convolve(m, k, 'same'), 1, a)
+
+        def _band(a):
+            return _blur(a, 1) - _blur(a, 3)
+
+        _lum = np.nan_to_num(rgb) @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+
+        def _lum_at(h, w):
+            # Pad to the padded frame, then block-average to h x w.
+            L = np.zeros((PAD_H, PAD_W), np.float32); L[:SRC_H, :SRC_W] = _lum
+            fy, fx = PAD_H // h, PAD_W // w
+            return L[:h * fy, :w * fx].reshape(h, fy, w, fx).mean(axis=(1, 3)), fy
+
+        def _probe(name, off, h, w, C):
+            n = C * h * w
+            v = e4m3(res[off:off + n]).astype(np.float32)
+            v = np.nan_to_num(v).reshape(C // 16, h, w, 16).transpose(0, 3, 1, 2).reshape(C, h, w)
+            L, f = _lum_at(h, w)
+            vy, vx = min(h, -(-SRC_H // f)), min(w, -(-SRC_W // f))   # valid (unpadded) region
+            bl = _band(L)[:vy, :vx].ravel(); bl = (bl - bl.mean()) / max(bl.std(), 1e-12)
+            rs = []
+            for c in range(C):
+                bc = _band(v[c])[:vy, :vx].ravel()
+                s = bc.std()
+                rs.append(0.0 if s < 1e-12 else float(np.dot(bl, (bc - bc.mean()) / s) / bl.size))
+            rs = np.abs(np.array(rs))
+            print('  %-22s %4dx%-4d C=%-4d best|r|=%.3f (ch %3d)  ch>0.2: %5.1f%%  dead ch: %d'
+                  % (name, h, w, C, rs.max(), int(rs.argmax()), 100.0 * float((rs > 0.2).mean()),
+                     int(sum(1 for c in range(C) if v[c].std() < 1e-12))))
+
+        print('\n=== structure probe (band-passed corr with input luminance) ===')
+        for si, (key, blocks, C) in enumerate(ENC_STAGES):
+            h, w, C, n = stage_geom[si]
+            for _nm, _o in zip(('ping', 'pong', 'pool'), stage_buf[si]):
+                try:
+                    _probe('enc s%d %s' % (si + 1, _nm), _o, h if _nm != 'pool' else h // 2,
+                           w if _nm != 'pool' else w // 2, C)
+                except Exception as e:
+                    print('  enc s%d %s: %s' % (si + 1, _nm, e))
+        for di, (_k, _b, C) in enumerate(DEC_STAGES):
+            h, w, C, n = dec_geom[di]
+            for _nm, _o in zip(('ping', 'pong'), dec_buf[di][:2]):
+                try:
+                    _probe('dec s%d %s' % (di + 1, _nm), _o, h, w, C)
+                except Exception as e:
+                    print('  dec s%d %s: %s' % (di + 1, _nm, e))
