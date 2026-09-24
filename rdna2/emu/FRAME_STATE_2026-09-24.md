@@ -366,3 +366,32 @@ Still open behind that: Update 6's two remaining suspects (block 30's pooled-wri
 ctx+0x228), and the unmapped 2-D paths of the launcher (0x1800336cc: grid ((tiles+3)/4, 8, 1);
 0x180033b7b: ((tiles+3)/4, 4, 1)). Their handles have not been matched to kernels yet, so whether the runner's
 (ceil(W/8), ceil(H/8)) for `k_ffwd2`/`k_qkv_attn` is right is a hypothesis to check next.
+
+## Update 10: C512_WG=8192 changes nothing - grid.x is not what limits coverage here
+
+Ran the real frame with `C512_WG=8192` (grid.x=112, matching the host per Update 9)
+against the default `C512_WG=16384` (grid.x=56). **The rendered output is byte-for-byte
+identical** (same SHA256, both runs) - not just close in `smid.py`'s score
+(+0.5282 both times), the actual PNG bytes match exactly.
+
+So doubling the 1-D kernels' workgroup count across all 16 C=512 blocks changed
+nothing visible in the final frame. That rules out "half the tiles are simply
+unwritten" as the mechanism, at least for the visible output - either:
+* something downstream (a later block's dispatch, or the C=512->ViT repack)
+  fully overwrites or recomputes whatever the extra workgroups would have
+  filled in, so grid.x here is coverage-redundant rather than coverage-limited, or
+* the kernel derives its own internal loop bound from H,W (baked into the
+  kernarg) rather than purely from block_count_x, so launching more workgroups
+  at the SAME H,W just means some of them redundantly recompute the same tiles
+  rather than reaching previously-unwritten ones.
+
+Either way, Update 9's C512_WG lead does not explain the mid-section's low
+S_mid on its own. Runner reverted to C512_WG=16384 default (no observed
+difference, and it matches the previously-passing net_block512.py baseline
+grid more closely pending further investigation).
+
+**Next, in order:** Update 6's two still-untouched suspects (block 30's pooled-write
+layout into off_pooled/off_headb; whether ctx+0x228 is really c512_1[0] after
+blocks 23-30) are now the most promising remaining leads, since the grid-count
+and translation-correctness questions (Updates 7-10) have both come back clean
+or inconclusive-but-inert.
