@@ -203,6 +203,7 @@ for _blk, (_o, _n) in enc_weight_off.items():
     arena[_o:_o + _n] = np.frombuffer((WEIGHTS / ('block%d.bin' % _blk)).read_bytes(), np.uint8)
 
 steps = []
+C512_PROBE = []      # (label, buffer offset, dispatch count) probes, populated when C512_TRACE is set
 
 # ---------------------------------------------------------------- k_import (verified at this size)
 ka = bytearray(0x130)
@@ -288,6 +289,10 @@ if stop != 'preblock':
             wgt = enc_weight_off[blk][0]
             steps.append((sym, enc_kernarg(h, w, oy, ox, flags, grid, src, dst, wgt, pool),
                           grid, 256))
+            if os.environ.get('C512_TRACE') == '2' and os.environ.get('PROBE_ENC') == '1':
+                # Block 0 hands the encoder absmean 1.7 and stage 1 returns 27 pinned to +/-448.
+                # Probe every encoder block to see whether that is one step or an accumulation.
+                C512_PROBE.append(('enc block %-3d-> dst' % blk, dst, len(steps)))
         stage_in = pool                             # the pooled output is the next stage's input
         DET_PTS.append(('enc stage %d pool' % (si + 1), pool, stage_geom[si][3], len(steps)))
 
@@ -353,7 +358,6 @@ def ka_for(sym, ptrs, ints=(), grid=(1, 1)):
     return bytes(ka)
 
 
-C512_PROBE = []          # (label, buffer offset) captured per dispatch when C512_TRACE=1
 
 
 def c512_stage(blocks, work, src_in):
@@ -413,7 +417,10 @@ if stop in ('full', 'all'):
     # enc -> mid is `k_repack, k_final_head` in the driver's phase table. The runner had neither, so
     # the C=512 stage was reading the last encoder pool at C=256/120x213 while running at 60x106.
     # k_repack is a pure relayout (2 pointers + four i32, difftest PASS), which is what bridges them.
-    _rp = [int(x) for x in os.environ.get('REPACK_DIMS', '60,106,256,512').split(',')]
+    # Derive from the stage table rather than a literal: the geometry correction moved this
+    # stage from 106x60 to 56x32 and a hard-coded default would have silently gone stale.
+    _rp = [int(x) for x in os.environ.get('REPACK_DIMS',
+                                          '%d,%d,256,512' % (H5, W5)).split(',')]
     # 16384 B/workgroup is the figure derived for k_final_head, not for k_repack. REPACK_WG
     # lets the real per-workgroup span be found by measurement.
     g_rp = grid_for(REPACK, N512, per_wg=int(os.environ.get('REPACK_WG', '16384')))
