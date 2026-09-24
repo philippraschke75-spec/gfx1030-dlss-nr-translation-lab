@@ -10,6 +10,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import kernelspec as K
 
 SPECS = {
+    # Epilogue dispatch A: the only writer of ctx+0x100, and the one kernel on the image path that
+    # has never been difftested. Layout from the host stores at 0x180030e13..0x180030ea4.
+    # +0x20 = H, +0x24 = W (one qword load of ctx+0x18); grid is (W//8, H//8) as the host computes it.
+    'post_block': lambda: K.Spec(
+        '_Z22k_post_block_1h_32_fp810PostParams',
+        pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x38: 3, 0x40: 4, 0x18: 5},
+        scalars={0x20: ('<i', 16), 0x24: ('<i', 32), 0x28: ('<Q', 0), 0x30: ('<f', 1.0),
+                 0x34: ('<i', 1), 0x48: ('<f', 0.0)},
+        weights={5: 'block70_layer0.bin'},
+        fill={2: 'zero', 3: 'f32', 4: 'f32'},
+        grid=(4, 2)),
+    # E6b: every input spatially constant, so any x%8 structure in the output is the kernel's own
+    # response to these parameters, not a consequence of how its real inputs are laid out.
+    'post_block_const': lambda: K.Spec(
+        '_Z22k_post_block_1h_32_fp810PostParams',
+        pointers={0x00: 0, 0x08: 1, 0x10: 2, 0x38: 3, 0x40: 4, 0x18: 5},
+        scalars={0x20: ('<i', 16), 0x24: ('<i', 32), 0x28: ('<Q', 0), 0x30: ('<f', 1.0),
+                 0x34: ('<i', 1), 0x48: ('<f', 0.0)},
+        weights={5: 'block70_layer0.bin'},
+        fill={0: 'byte:0x38', 1: 'byte:0x38',   # e4m3 0x38 = 1.0
+              2: 'zero', 3: 'f32c:0.5', 4: 'f32c:1.0'},
+        grid=(4, 2)),
     # Ported from the hand-written difftests, which these reproduce byte-for-byte.
     'ffwd2': lambda: K.Spec(
         '_Z7k_ffwd211Ffwd2Params',

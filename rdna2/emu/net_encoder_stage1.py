@@ -26,7 +26,12 @@ import gfx11emu as E, run_emu as R, run_var as V, difftest_var as D
 KEY = sys.argv[2] if len(sys.argv) > 2 else '32_0'
 SYM, _lds = D.SYMS[KEY]
 LDS = _lds or D.group_size(SYM)
-H = W = 16
+# H/W were fixed at 16, i.e. two 8-px windows per axis. A column artefact with a period of 4
+# cannot be distinguished from noise at that width, so every PASS this harness has recorded is
+# blind to it. DIFF_H/DIFF_W make the geometry settable.
+import os as _os
+H = int(_os.environ.get('DIFF_H', '16'))
+W = int(_os.environ.get('DIFF_W', '16'))
 MODES = [(0, 0), (-4, -4), (-4, 0), (0, -4)]          # table 0x180066410
 # Any same-width run of blocks dispatched through launcher A. The decoder uses the identical
 # launcher and the identical k_swin_var kernels as the encoder - only the weights and the stage
@@ -116,4 +121,21 @@ final_slot = len(BLOCKS) % 2
 print('emulator chain wrote %d bytes; final activations in slot %d' % (changed, final_slot))
 print('net_run vs emulator over the 4-block chain: %d mismatches -> %s'
       % (len(d), 'PASS' if len(d) == 0 and changed else 'FAIL'))
+# The artefact this harness was blind to: a period-4 column structure. Report it for the
+# EMULATOR's output, i.e. the original gfx1100 kernel's own result. If the reference shows it too,
+# the period is what the kernel does with these launch parameters, not a translation defect.
+def _e4m3(b):
+    b = b.astype(np.uint8); sg = np.where(b >> 7, -1.0, 1.0)
+    e = ((b >> 3) & 0xF).astype(np.int32); m = (b & 7).astype(np.float64)
+    return np.where(b == 0x7f, np.nan,
+                    sg * np.where(e == 0, (m / 8.0) * 2.0 ** -6, (1.0 + m / 8.0) * 2.0 ** (e - 7)))
+for _nm, _buf in (('emulator (reference)', ref), ('gpu (translated)', out)):
+    _a = _buf[final_slot * V.SLOT:final_slot * V.SLOT + 32 * H * W]
+    _v = _e4m3(_a.reshape(2, H, W, 16))
+    _cm = np.nanmean(np.abs(_v), axis=(0, 1, 3)); _dd = _cm - _cm.mean()
+    _ac = np.correlate(_dd, _dd, 'full')[len(_dd) - 1:]; _ac /= max(_ac[0], 1e-12)
+    _ph = np.array([np.nanmean(_cm[k::4]) for k in range(4)])
+    print('  %-22s lag2 %+.2f lag4 %+.2f  phase means %s  phase-var/var %.3f'
+          % (_nm, _ac[2] if len(_ac) > 2 else 0, _ac[4] if len(_ac) > 4 else 0,
+             ' '.join('%.2f' % x for x in _ph), _ph.var() / max(_cm.var(), 1e-12)))
 raise SystemExit(0 if (len(d) == 0 and changed) else 1)
