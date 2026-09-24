@@ -395,3 +395,45 @@ layout into off_pooled/off_headb; whether ctx+0x228 is really c512_1[0] after
 blocks 23-30) are now the most promising remaining leads, since the grid-count
 and translation-correctness questions (Updates 7-10) have both come back clean
 or inconclusive-but-inert.
+
+## Update 11: the C=512 blocks run the VIT512_OLD kernels; the host's default path uses different ones
+
+**Update 6's two leads are confirmed correct, with no change needed:**
+* Block 30's pooled write matches. When the launcher's 6th argument r15 is nonzero (only for block 30:
+  ctx+0x248, 0x18002f9c5-0x18002f9ca), step 5 takes the `k_conv_res_views` path (0x180033e95 -> 0x180033fce) with
+  +0x38 = r15 and +0x40 = stage-5 (H6,W6) (0x180034089-0x1800340a2), grid (ctx[0x308],1,1). `k_final_head` +0x00
+  reads the same ctx+0x248 (0x18002faea). The runner's `_pool30` dispatch matches field for field.
+* ctx+0x228 is `c512_1[0]`. In each block the launcher writes it only through step 5's +0x18 (0x180033f2f, 0x180034042).
+  The runner's step 5 writes `work[0]` there too.
+
+**What is wrong is which kernels run.** Every branch in the launcher 0x180033660 tests the byte at 0x18009b208.
+That byte is a static initialised to `atoi(getenv("VIT512_OLD"))`, or **0** when the variable is unset
+(0x18003422d-0x180034275; the string is at 0x18007fd0d). With 0, every `test byte,N` is clear. Handles were
+resolved from the registration table (`lea rdx,slot; lea r8,name`), not from earlier notes:
+
+| step | runner / net_block512.py (flag bit set = VIT512_OLD path) | host default (flag 0) |
+|---|---|---|
+| 1 | `k_ffwd_inpview` (0x1800663c8) | **not dispatched** |
+| 2 | `k_ffwd2`, grid (ceil(W/8), ceil(H/8)), +0x28 = 4 | `k_ffwd2` (0x180066370, launch 0x180033a4d), grid **((T+3)/4, 8, 1)**, +0x28 = **T** |
+| 3 | `k_conv_res_views` | **`k_conv_res2`** (0x180066378, launch 0x180034216), grid ((T+3)/4, 4, 1) |
+| 4 | `k_qkv_attn`, origin (0,0) | **`k_qkv_attn2`** (0x180066380, launch 0x180033e5e), 3-D grid, **shifted origins** |
+| 5 | `k_conv_res_views` | **`k_conv_res2`** (launch 0x1800340fb via 0x180033fc2), grid ((T+3)/4, 4, 1); block 30 only: `k_conv_res_views` + pooled |
+
+Here T = ctx[0x308] = ceil(H5/4)*ceil(W5/4). The grids are set at 0x1800336cc-0x180033721, 0x180033b7b-0x180033bd0
+and 0x180033eab-0x180033f00. "First block" means r14 = the stage input, which is nonzero only for block 23
+(0x18002f9e7-0x18002f9f0).
+
+Host kernargs (default path):
+* `k_ffwd2` (0x18003399c-0x1800339f4): +0x00 = first block ? **0** : ctx+0x228, +0x08 = first ? input : **0**,
+  +0x10 = ctx+0x230, +0x18 = layer 0, +0x20 = (H,W), +0x28 = T.
+* `k_conv_res2` step 3 (0x18003413e-0x1800341bd): +0x00 = ctx+0x230, +0x08 = first ? 0 : ctx+0x228,
+  +0x10 = first ? input : 0, +0x18 = ctx+0x238, +0x20 = 0 (qword), +0x28 = layer 1, +0x30 = (H,W), +0x38 = T.
+* `k_qkv_attn2` (0x180033c0f-0x180033cda): +0x00/+0x08 = ctx+0x238/+0x240, +0x10 = layer 2, +0x18 = (H,W),
+  +0x20 = origin = table 0x180066410[(blk-23)%4] = (0,0), (-4,-4), (-4,0), (0,-4). Grid = ((W+7-ox)>>3, (H+7-oy)>>3,
+  **16**) (constant (7,7,0,0) at 0x18006d570). The translated .s enables workgroup_id_z.
+* `k_conv_res2` step 5 (0x180033f0d-0x180033f7b): +0x00 = ctx+0x240, +0x08 = ctx+0x238 (pshufd 0x4e swap),
+  +0x10 = 0, +0x18 = ctx+0x228, +0x20 = first ? input : 0, +0x28 = layer 3, +0x30 = (H,W), +0x38 = T.
+
+All three kernels have translations in `build/kernels-hw-scratch/`. Blocks 40-47 (the second C=512 stage) use the
+same launcher, but their call site and first-block input were not read here. That is an assumption to check.
+Applying this needs z-grid support: net_run.cpp:102 passes gz = 1, and `ka_for` writes block_count_z = 1.
