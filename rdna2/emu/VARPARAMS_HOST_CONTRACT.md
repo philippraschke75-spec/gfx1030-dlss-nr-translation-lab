@@ -176,8 +176,9 @@ embedded payload from a direct disassembly pass). The registration table in `.rd
 string with its handle slot (`lea rdx,[handle_slot]; lea r8,[name_string]; call 0x180065930`): `_Z10k_qkv_attn10AttnParams`'s
 name string lives at `0x18006ce25` and its handle slot is **`0x180066368`**. That handle is dispatched from the
 same launcher function that already handles `k_ffwd`/`k_ffwd2` (continuing past `0x180033660`), specifically the
-branch taken when `test byte[0x18009b208],0x4` is *not* set (the alternate branch dispatches handle `0x180066380`,
-presumably `k_qkv_attn2`, the mangled `_Z11k_qkv_attn210AttnParams`).
+branch taken when `test byte[0x18009b208],0x4` IS set (jne at 0x180033c09 -> 0x180033d2f). **Corrected
+2026-09-24 (FRAME_STATE Update 11):** the bit-clear default branch dispatches `0x180066380` = `_Z11k_qkv_attn210AttnParams`
+(registration table), and the flag byte is `atoi(getenv("VIT512_OLD"))`, 0 when unset (0x180034246-0x180034263).
 
 **Kernarg construction at `0x180033c22`-`0x180033cda`** (this resolves and *corrects* the earlier partial finding -
 the previous read-trace's "+0x18 (16 B, another pointer pair)" was a wrong inference; it's one 128-bit load
