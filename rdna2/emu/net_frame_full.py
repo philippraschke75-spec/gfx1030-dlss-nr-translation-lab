@@ -419,8 +419,15 @@ if stop in ('full', 'all'):
     # k_repack is a pure relayout (2 pointers + four i32, difftest PASS), which is what bridges them.
     # Derive from the stage table rather than a literal: the geometry correction moved this
     # stage from 106x60 to 56x32 and a hard-coded default would have silently gone stale.
+    # +0x18 is the work count in units of 1024 elements: the kernel's bounds check is
+    # 'active while global_id < [+0x18] << 10' (s_lshl_b64 s[8:9], s[4:5], 10 at +9,
+    # v_cmpx_gt_u64 at +16). So it is C*ceil(H/4)*ceil(W/4)*16 / 1024. Passing 256 covered
+    # 13.78% of the buffer; the derived 896 covers 48.21%, which is the 50% the element
+    # count predicts. +0x1c is only compared against zero, i.e. a flag, and makes no
+    # difference here. +0x14 is a divisor and also taken ceil(/4); +0x10 multiplies it.
+    _elems = 512 * (-(-H5 // 4)) * (-(-W5 // 4)) * 16
     _rp = [int(x) for x in os.environ.get('REPACK_DIMS',
-                                          '%d,%d,256,512' % (H5, W5)).split(',')]
+                                          '%d,%d,%d,0' % (H5, W5, _elems // 1024)).split(',')]
     # 16384 B/workgroup is the figure derived for k_final_head, not for k_repack. REPACK_WG
     # lets the real per-workgroup span be found by measurement.
     g_rp = grid_for(REPACK, N512, per_wg=int(os.environ.get('REPACK_WG', '16384')))
