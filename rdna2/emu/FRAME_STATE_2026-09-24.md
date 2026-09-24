@@ -274,3 +274,45 @@ translation is bit-exact at real token count and real grid.x. **The
 cross-workgroup / split-K concern is closed: it is not a translation defect.**
 The mid-section's low S_mid is somewhere else - most likely the block 30
 pooled-write layout or the ctx+0x228 identity, per Update 6's remaining list.
+
+## Update 8: net_block512.py had the SAME blind spot as net_vit.py - and here it FAILS at scale
+
+`net_block512.py` (the C=512 stage's 5-kernel chain, blocks 23-30/40-47) had the identical
+`block_count_x/y` hardcoded to `(1,1)` bug as net_vit.py, in the kernarg hidden args, the
+GPU dispatch manifest, and the emulator's workgroup loop - three places, same as before.
+Its own docstring even said "Verifying the recipe at its REAL geometry is the point" while
+never actually doing so. Fixed the same way: `GX, GY = ceil(W/8), ceil(H/8)` (these are
+2-D k_swin_var-family kernels), threaded through all three places.
+
+**Unlike the ViT fix, this one FAILS as soon as more than one workgroup runs:**
+
+| grid | result |
+|---|---|
+| (1,1) - the old default, BH=BW=8 | 0 mismatches, PASS (unchanged from before the fix) |
+| (2,1) - BH=8 BW=16, the minimum that adds a second workgroup | **23,466 mismatches, FAIL** |
+
+This is very likely the actual defect behind the mid-section's low S_mid
+(+0.53-0.55, Updates 3-6): the C=512 stage runs in the real frame at grid
+(7,4) = 28 workgroups (56x32, stage_hw(4) of 1707x960), and its translation
+has never been checked at more than one workgroup until now. The real chain
+in net_frame_full.py has been dispatching a translation nobody verified
+correct at that scale.
+
+**Not yet done, and the natural next step:** localise the mismatch. Candidates,
+cheapest first:
+* Which of the 5 kernels first diverges (test steps [0], [0,1], [0,1,2], ... like
+  net_vit.py's incremental checks already do for the ViT chain).
+* Whether the mismatch is spatially structured (confined to one workgroup's tile,
+  or a border/seam between tiles) or scattered throughout both.
+* `k_qkv_attn`'s window-origin field (`+0x20/+0x24`, fixed at `(0,0)` for block 23
+  regardless of which workgroup tile) - every other verified kernel in this
+  codebase takes one shift/mode value per DISPATCH, not per workgroup, so this is
+  probably not it, but it is the one kernarg field whose per-tile correctness has
+  never been separately confirmed at grid>1.
+* An LDS or barrier assumption inside one of these kernels that happens to be
+  invisible at grid=(1,1) (e.g., a reduction that silently uses uninitialised
+  neighbour-tile memory when there IS a neighbour tile, which a single-workgroup
+  run can never expose).
+
+`BH`/`BW` env vars (now wired to a real grid) make any smaller reproduction case
+cheap to test before spending emulator time on the full 28-workgroup grid.
