@@ -535,3 +535,42 @@ One thing worth flagging for whoever builds that difftest: gy=7 matches gx (also
 particular H5,W5=32,56. Whether that is because the constant genuinely does not depend on
 frame geometry, or because it happens to equal ceil(W5/8) at every C=512 stage size this project
 uses, was not read from the host and would fail silently at a different resolution.
+
+## Update 14: stage 40-47 wiring read from the host - C512_HOST=1 reaches S_mid +0.711
+
+The stage-2 call site (0x1800305c4-0x18003064d) and the launcher's step-5 argument reload show three wiring
+errors in C512_HOST=1. Each was taken from a host read:
+
+1. **Stage 2 has no first block.** Before the loop the host swaps ctx+0x228 <-> ctx+0x298, so ctx+0x228 becomes
+   k_dec_upsample's output (0x1800305c4-0x1800305e0). It then calls the launcher with a 3rd arg (the stage input)
+   of `xor r8d, r8d` = 0 for every block 40-47 (0x18003063a). The runner gave block 40 the first-block wiring.
+   Now `first = bi == 0 and blocks[0] == 23`.
+2. **Step 5's +0x20 is not the stage input.** Before step 5 the launcher reloads r14 from its 5th stack arg
+   (`mov r14, [rsp+0x3b0]`, 0x180033e8d). That arg is 0 for all of stage 1 (0x18002f9fd) and ctx+0x2a0 at block 47
+   (0x180030605-0x180030627). In k_conv_res2 it is an optional second output: `s_cmp_lg_u64 s[48:49], 0` plus a
+   store address built from s48. The runner passed the stage input there at block 23, so block 23 wrote its
+   output over the stage input.
+3. **The decoder reads ctx+0x2a0** (0x180030849 -> [rbp+0x668]), block 47's second output, not ctx+0x228.
+   New buffer `off_2a0`, written by block 47's step 5 and used as `stage_in` for the decoder when C512_HOST=1.
+
+Score, same frame, MID_HOST=1 C512_HOST=1. Each row reverts one fix:
+
+| | S_mid | S_fine | lag8 |
+|---|---|---|---|
+| all three fixes | **+0.7106** | +0.6844 | +0.98 |
+| revert 1 (stage 2 first-block wiring) | +0.3888 | +0.4732 | +0.90 |
+| revert 2 (block 23 +0x20 = input) | +0.6485 | +0.6580 | +0.97 |
+| revert 3 (decoder from ctx+0x228, no 0x2a0 write) | +0.5080 | +0.5989 | +0.92 |
+| before this update (Update 13) | +0.4770 | +0.5757 | +0.96 |
+| C512_HOST=0 (old kernels) | +0.5282 | +0.6288 | +0.97 |
+
+All runs had guards intact, and the full-fix result reproduces. **This is the first score above the input-blind
+network's +0.651.** lag8 stays at 0.98, so the column-periodic structure is still there.
+
+C512_HOST still defaults to 0. Flipping it is the obvious next change, but it waits on the net_block512_2.py
+difftest below.
+
+`net_block512_2.py` is new. It difftests k_ffwd2 -> k_conv_res2 -> k_qkv_attn2 -> k_conv_res2 on the GPU
+against the gfx1100 original in the emulator. Kernargs are packed exactly as C512_HOST=1 packs them. The
+emulator loop is 3-D, with ids in s14/s15 for ffwd2/conv_res2 and s13/s14/s15 for qkv_attn2, following each
+translated prologue. It also has STEPS/FIRST/MODE/OUT2 switches.

@@ -150,6 +150,7 @@ c512_1 = [place('c512_1 w%d' % i, N512) for i in range(4)]
 vit_buf = [place('vit b%d' % i, N1024) for i in range(6)]
 c512_2 = [place('c512_2 w%d' % i, N512) for i in range(4)]
 off_b39 = place('block39 out', N512)
+off_2a0 = place('ctx+0x2a0 (decoder input, block 47 +0x20)', N512)
 # ctx+0x250, the ViT's own buffer ('vit1d'). Its input ctx+0x228 ('vit512a') must survive the ViT: block 39 reads it
 # back at +0x08 as the skip around the ViT.
 off_vit = place('vit out (ctx+0x250)', N1024)
@@ -524,7 +525,10 @@ def c512_stage(blocks, work, src_in):
     gf = (-(-T // 4), 8)                            # k_ffwd2:     grid ((T+3)/4, 8, 1)
     gc2 = (-(-T // 4), 4)                           # k_conv_res2: grid ((T+3)/4, 4, 1)
     for bi, blk in enumerate(blocks):
-        first = (bi == 0)                           # host: r14 (stage input) nonzero only for block 23.
+        # host: the launcher's 3rd arg (the stage input) is [rbp+0x630] for block 23 only (0x18002f9e7-
+        # 0x18002f9f0) and 0 for EVERY block 40-47 (xor r8d,r8d at 0x18003063a): stage 2 has no first block,
+        # it reads ctx+0x228, which the host swaps with k_dec_upsample's ctx+0x298 (0x1800305c4-0x1800305e0).
+        first = (bi == 0) and blocks[0] == 23
         # Stage 40-47's own "first" call site was not read (Update 11 flags this as an assumption);
         # using per-stage bi==0 is the only choice consistent with each stage's work[] buffers
         # being separately allocated and uninitialised until something writes them.
@@ -601,8 +605,12 @@ def c512_stage(blocks, work, src_in):
             # +0x28 = weight pointer 0x180031bc0(ctx, blk, 3) (0x180033f51 -> 0x180033f56), as in step 3.
             _p5 = [(0x00, work[3]), (0x08, work[2]), (0x18, work[0]), (0x28, L(3))]
             _i5 = [(0x10, '<Q', (0,)), (0x30, '<ii', (H5, W5)), (0x38, '<i', (T,))]
-            if first:
-                _p5.append((0x20, a))
+            # +0x20 is the launcher's 5th arg (r14 reloaded at 0x180033e8d), NOT the stage input: an optional
+            # second output (the kernel null-checks it, s_cmp_lg_u64 s[48:49], 0, and stores through it). It
+            # is 0 in stage 1 (0x18002f9fd) and ctx+0x2a0 at block 47 (0x180030605-0x180030627), which is the
+            # decoder's input (0x180030849).
+            if blk == 47:
+                _p5.append((0x20, off_2a0))
             else:
                 _i5.append((0x20, '<Q', (0,)))
             steps.append((CONVV2, ka_for(CONVV2, _p5, _i5, gc2), gc2, 256))
@@ -781,7 +789,8 @@ if stop in ('full', 'all'):
     # odd first-block records are the upsample + skip concat, so the upsample happens
     # inside block 48's own k_swin_var call, not in a separate kernel. The second
     # k_dec_upsample was also running on block48's k_swin_var weight record.
-    stage_in = c512_2[0]
+    # C512_HOST: the decoder reads ctx+0x2a0 (0x180030849), block 47's second output, not ctx+0x228.
+    stage_in = off_2a0 if os.environ.get('C512_HOST', '0') == '1' else c512_2[0]
 
     # decoder blocks 48-69, the encoder mirrored
     for di, (key, blocks, C) in enumerate(DEC_STAGES):
