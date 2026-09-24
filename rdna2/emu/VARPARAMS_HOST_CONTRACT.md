@@ -2339,3 +2339,46 @@ three runs, where `preblock_response` at the same count is not. The two differ i
 (`difftest_var.gpu` vs `net_run.exe`) and in arena contents; arena contents were tested and are not
 it. That discrepancy is being re-checked with more runs, since three agreeing runs is exactly the
 evidence that misled me once already.
+
+## SOLVED: the pre-block's buffers were under-sized. The whole chain is now reproducible.
+
+`act_bytes(C, H, W)` under-sizes the pre-block's buffers at frame scale. Doubling **all** of them -
+the output and the `+0x38` / `+0x48` / `+0xa0` auxiliaries together - makes every one of the 170
+dispatches reproducible:
+
+```
+ACT_MULT=AUX_MULT=1   first non-reproducible: dispatch #1 (k_swin_var<32,true>, grid 214x120)
+ACT_MULT=AUX_MULT=2   the full chain is reproducible over 6 runs
+ACT_MULT=AUX_MULT=4   the full chain is reproducible over 6 runs
+```
+
+Scaling only the output (`ACT_MULT` alone) does **not** work - the auxiliaries sit next to it and the
+overflow lands in them. That is why an earlier 1x/2x/4x sweep of `ACT_MULT` appeared to refute the
+under-sizing idea; it was scaling one buffer of four.
+
+**2x is measured, not derived.** The exact per-workgroup requirement is unknown; what is established
+is that 1x races and 2x does not, over four runs of all 170 dispatches.
+
+### The control that misled, and why it was not wrong
+
+`difftest_preblock` at 64x64 really is deterministic - five runs, identical `out_sha256`, 0
+mismatches. It gives every pointer field its own 1 MiB slot, which is ample at that size.
+`preblock_response` at the same 64 workgroups is not, because it sizes the output by `act_bytes`
+(262,144 B) while the kernel writes more. Same kernel, same workgroup count, different buffer size.
+So the two results were never in conflict; the harness was.
+
+### What this restores
+
+With the chain reproducible, measurements in it mean something again. Re-measured, the `k_qkv_attn`
+NaN is real and stable:
+
+```
+1 ffwd_inpview  distinct 254   no NaN
+2 ffwd2         distinct 255   no NaN
+3 conv_res_1    distinct 255   no NaN
+4 qkv_attn      distinct 245   0x7f = 0.99%
+5 conv_res_2    distinct 246   0x7f = 0.99%
+```
+
+The hypotheses voided by the retraction - window tiling, `k_repack` dimensions, shifted-window
+origins - can now be re-tested and will mean something.
