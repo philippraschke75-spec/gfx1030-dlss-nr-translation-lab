@@ -27,7 +27,11 @@ import gfx11emu as E, run_emu as R, run_var as V, difftest_var as D, kernelspec 
 import os as _os
 BLOCK = int(_os.environ.get('BLOCK', '23'))
 
-H = W = 8
+# The C=512 stage is stage 4 of the padded table: at 1707x960 that is 56x32, i.e. 7x4
+# workgroups - small enough for the emulator. Verifying the recipe at its REAL geometry is
+# the point: passing at 8x8 says nothing about the size it actually runs at.
+H = int(_os.environ.get('BH', '8'))
+W = int(_os.environ.get('BW', '8'))
 NGROUP = 4                      # min(n*16, H*W); 4*16 == 8*8 so the whole tile is live
 # arena slots: the four ctx buffers, then the four weight records
 B228, B230, B238, B240, BIN = 0, 1, 2, 3, 4
