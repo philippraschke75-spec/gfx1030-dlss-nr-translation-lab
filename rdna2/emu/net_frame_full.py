@@ -444,8 +444,14 @@ DECUP, HEAD = '_Z14k_dec_upsample11DecUpParams', '_Z12k_final_head10HeadParams'
 REPACK = '_Z8k_repack12RepackParams'
 EXPORT = '_Z8k_export12ExportParams'
 POST = '_Z22k_post_block_1h_32_fp810PostParams'   # epilogue dispatch A, handle 0x180066350
+# The host's real C=512 default path (VIT512_OLD unset, FRAME_STATE Update 11): CONVV2/ATTN2_C512
+# replace k_conv_res_views/k_qkv_attn for steps 3-5 of every non-pool30 block. k_ffwd_inpview is
+# not dispatched at all; k_ffwd2 (FFWD2, unchanged symbol) is reused with different kernarg fields
+# and grid. ATTN2_C512 has a different mangled name from the ViT's own k_qkv2 (QKV2 above).
+CONVV2 = '_Z11k_conv_res211Conv2Params'
+ATTN2_C512 = '_Z11k_qkv_attn210AttnParams'
 M = {k: K.kernel_meta(k) for k in (POST, FFWD_IV, FFWD2, CONVV, QKV, EXPAND2, CONTRACT2,
-                                   QKV2, ATTN2, DECUP, HEAD, EXPORT, REPACK)}
+                                   QKV2, ATTN2, DECUP, HEAD, EXPORT, REPACK, CONVV2, ATTN2_C512)}
 
 
 _WG2D = {}
@@ -483,15 +489,18 @@ def grid_for(sym, nbytes, hw=None, per_wg=16384):
 
 def ka_for(sym, ptrs, ints=(), grid=(1, 1)):
     # Kernarg sized from the kernel metadata, with the HSA hidden args filled from it too.
+    # grid may be (gx, gy) or (gx, gy, gz); k_qkv_attn2 is the first kernel needing gz>1
+    # (FRAME_STATE Update 11: grid = ((W+7-ox)>>3, (H+7-oy)>>3, 16), workgroup_id_z enabled).
     n = M[sym][1]
     ka = bytearray(max(n, 424))
     for off, val in ptrs:
         struct.pack_into('<Q', ka, off, BASE + val)
     for off, fmt, vals in ints:
         struct.pack_into(fmt, ka, off, *vals)
-    for name, val in (('block_count_x', grid[0]), ('block_count_y', grid[1]), ('block_count_z', 1),
+    gz = grid[2] if len(grid) > 2 else 1
+    for name, val in (('block_count_x', grid[0]), ('block_count_y', grid[1]), ('block_count_z', gz),
                       ('group_size_x', 256), ('group_size_y', 1), ('group_size_z', 1),
-                      ('grid_dims', 2)):
+                      ('grid_dims', 3 if gz > 1 else 2)):
         if name in M[sym][3]:
             o, sz = M[sym][3][name]
             struct.pack_into('<' + {2: 'H', 4: 'I', 8: 'Q'}[sz], ka, o, val)
@@ -503,62 +512,123 @@ def ka_for(sym, ptrs, ints=(), grid=(1, 1)):
 def c512_stage(blocks, work, src_in):
     # One C=512 attention block is 5 dispatches; recipe per VARPARAMS_HOST_CONTRACT.md.
     g = (1, 1)
-    # weight layer per dispatch: contract table = ffwd_iv 0, ffwd2 0, conv_res 1, qkv_attn 2, conv_res 3
-    # Weight-to-dispatch mapping, taken from net_block512.py, which passes its difftest at
-    # this exact geometry: ffwd_inpview and ffwd2 BOTH take layer0, then conv_res_1 takes
-    # layer1, qkv_attn layer2 and conv_res_2 layer3. The runner had 0,1,2,3,2 - shifted by
-    # one from dispatch 2 onward, so four of the five kernels ran on the wrong weights.
+    # C512_HOST=1 (default): the host's REAL default path (FRAME_STATE Update 11). Every branch
+    # in the per-block launcher (0x180033660) is gated on byte [0x18009b208] = atoi(getenv(
+    # 'VIT512_OLD')), 0 when unset. This runner used to dispatch the VIT512_OLD=1 kernels
+    # (k_ffwd_inpview/k_conv_res_views/k_qkv_attn) unconditionally - not the host's default.
+    # C512_HOST=0 restores that old (wrong-by-default) path for comparison.
+    if os.environ.get('C512_HOST', '0') != '1':
+        _c512_stage_old(blocks, work, src_in)
+        return
+    T = (-(-H5 // 4)) * (-(-W5 // 4))              # ctx[0x308]
+    gf = (-(-T // 4), 8)                            # k_ffwd2:     grid ((T+3)/4, 8, 1)
+    gc2 = (-(-T // 4), 4)                           # k_conv_res2: grid ((T+3)/4, 4, 1)
+    for bi, blk in enumerate(blocks):
+        first = (bi == 0)                           # host: r14 (stage input) nonzero only for block 23.
+        # Stage 40-47's own "first" call site was not read (Update 11 flags this as an assumption);
+        # using per-stage bi==0 is the only choice consistent with each stage's work[] buffers
+        # being separately allocated and uninitialised until something writes them.
+        a = src_in if first else work[0]
+        L = lambda n: wt['block%d_layer%d' % (blk, n)][0]
+
+        # Step 2: k_ffwd2 (0x18003399c-0x1800339f4). +0x00 = first?NULL:ctx+0x228, +0x08 =
+        # first?input:NULL, +0x10 = ctx+0x230, +0x18 = layer0, +0x20 = (H,W), +0x28 = T.
+        _p2 = [(0x10, work[1]), (0x18, L(0))]
+        _i2 = [(0x20, '<ii', (H5, W5)), (0x28, '<i', (T,))]
+        if first:
+            _p2.append((0x08, a))
+            _i2.append((0x00, '<Q', (0,)))
+        else:
+            _p2.append((0x00, work[0]))
+            _i2.append((0x08, '<Q', (0,)))
+        steps.append((FFWD2, ka_for(FFWD2, _p2, _i2, gf), gf, 256))
+        if os.environ.get('C512_TRACE') == '1' and bi == 0:
+            C512_PROBE.append(('2 ffwd2        -> w1', work[1], len(steps)))
+
+        # Step 3: k_conv_res2 (0x18003413e-0x1800341bd). +0x00 = ctx+0x230, +0x08 =
+        # first?NULL:ctx+0x228, +0x10 = first?input:NULL, +0x18 = ctx+0x238, +0x20 = 0 (qword),
+        # +0x28 = layer1, +0x30 = (H,W), +0x38 = T.
+        _p3 = [(0x00, work[1]), (0x18, work[2])]
+        _i3 = [(0x20, '<Q', (0,)), (0x28, '<i', (1,)), (0x30, '<ii', (H5, W5)), (0x38, '<i', (T,))]
+        if first:
+            _p3.append((0x10, a))
+            _i3.append((0x08, '<Q', (0,)))
+        else:
+            _p3.append((0x08, work[0]))
+            _i3.append((0x10, '<Q', (0,)))
+        steps.append((CONVV2, ka_for(CONVV2, _p3, _i3, gc2), gc2, 256))
+        if os.environ.get('C512_TRACE') == '1' and bi == 0:
+            C512_PROBE.append(('3 conv_res2_1  -> w2', work[2], len(steps)))
+
+        # Step 4: k_qkv_attn2 (0x180033c0f-0x180033cda). +0x00/+0x08 = ctx+0x238/+0x240,
+        # +0x10 = layer2, +0x18 = (H,W), +0x20 = origin (shift-window table, same ENC_MODES the
+        # encoder uses). Grid = ((W+7-ox)>>3, (H+7-oy)>>3, 16) - the first kernel in this project
+        # needing a 3-D dispatch (net_run.cpp / ka_for both support gz now).
+        ox, oy = ENC_MODES[bi % 4]
+        _qgy = int(os.environ.get('QKV2_GY', str((H5 + 7 - oy) >> 3)))
+        gq2 = ((W5 + 7 - ox) >> 3, _qgy, 16)
+        steps.append((ATTN2_C512, ka_for(ATTN2_C512, [(0x00, work[2]), (0x08, work[3]), (0x10, L(2))],
+                                         [(0x18, '<ii', (H5, W5)), (0x20, '<ii', (ox, oy))], gq2),
+                      gq2, 256))
+        if os.environ.get('C512_TRACE') == '1' and bi == 0:
+            C512_PROBE.append(('4 qkv_attn2    -> w3', work[3], len(steps)))
+
+        # Step 5: block 30 keeps the OLD k_conv_res_views + pooled path unmodified (Update 11:
+        # "block 30 only: k_conv_res_views + pooled" - this is not part of the VIT512_OLD switch).
+        # Every other block's step 5 is k_conv_res2 (0x180033f0d-0x180033f7b): +0x00 = ctx+0x240,
+        # +0x08 = ctx+0x238, +0x10 = 0, +0x18 = ctx+0x228, +0x20 = first?input:NULL, +0x28 = layer3,
+        # +0x30 = (H,W), +0x38 = T.
+        _pool30 = MID_HOST and blk == 30
+        if _pool30:
+            _wg = int(os.environ.get('C512_WG', '16384'))
+            gc = grid_for(CONVV, N512, per_wg=_wg)
+            steps.append((CONVV, ka_for(CONVV, [(0x00, work[3]), (0x10, work[2]), (0x18, work[0]),
+                                                (0x28, L(3)), (0x38, off_pooled)],
+                                        [(0x20, '<i', (0,)), (0x30, '<ii', (H5, W5)),
+                                         (0x40, '<ii', (H6, W6))], gc), gc, 256))
+        else:
+            _p5 = [(0x00, work[3]), (0x08, work[2]), (0x18, work[0])]
+            _i5 = [(0x10, '<Q', (0,)), (0x28, '<i', (3,)), (0x30, '<ii', (H5, W5)), (0x38, '<i', (T,))]
+            if first:
+                _p5.append((0x20, a))
+            else:
+                _i5.append((0x20, '<Q', (0,)))
+            steps.append((CONVV2, ka_for(CONVV2, _p5, _i5, gc2), gc2, 256))
+        if os.environ.get('C512_TRACE') == '1' and bi == 0:
+            C512_PROBE.append(('5 conv_res2_2  -> w0', work[0], len(steps)))
+        if os.environ.get('C512_TRACE') == '2' and                 str(blk) in os.environ.get('PROBE_BLOCKS', '23,24,25,26').split(','):
+            C512_PROBE.append(('after block %-3d-> w0' % blk, work[0], len(steps)))
+
+
+def _c512_stage_old(blocks, work, src_in):
+    # C512_HOST=0: the runner's original VIT512_OLD=1 path, kept for comparison.
     W5L = [int(x) for x in os.environ.get('C512_WMAP', '0,0,1,2,3').split(',')]
     for bi, blk in enumerate(blocks):
         a = src_in if bi == 0 else work[0]
         L = lambda n: wt['block%d_layer%d' % (blk, n)][0]
-        # 16384 B per workgroup was measured for k_final_head and then applied to every 1-D kernel
-        # without checking. If the real span here is smaller, the extra workgroups overlap and race,
-        # which is what run-to-run variation looks like. C512_WG makes it measurable.
         _wg = int(os.environ.get('C512_WG', '16384'))
-        g1 = grid_for(FFWD_IV, N512, per_wg=_wg)      # 1-D: sized by the buffer
+        g1 = grid_for(FFWD_IV, N512, per_wg=_wg)
         gc = grid_for(CONVV, N512, per_wg=_wg)
-        g2 = grid_for(FFWD2, N512, (H5, W5))          # 2-D: sized by the stage geometry
+        g2 = grid_for(FFWD2, N512, (H5, W5))
         gq = grid_for(QKV, N512, (H5, W5))
         steps.append((FFWD_IV, ka_for(FFWD_IV, [(0x00, a), (0x08, work[1]), (0x10, L(W5L[0]))],
                                       [(0x18, '<ii', (H5, W5))], g1), g1, 256))
-        if os.environ.get('C512_TRACE') == '1' and bi == 0:
-            C512_PROBE.append(('1 ffwd_inpview -> w1', work[1], len(steps)))
-        # work[0] is written only by this block's LAST dispatch, so on the first block +0x00
-        # reads a buffer nothing has written. net_block512.py never notices: V.build fills its
-        # arena with e4m3-shaped bytes while this runner zero-fills, and a normalisation over
-        # an all-zero buffer gives 0/0 = NaN, which then spreads through every later block.
         w0 = work[0] if bi else a
         steps.append((FFWD2, ka_for(FFWD2, [(0x00, w0), (0x08, a), (0x10, work[1]),
                                             (0x18, L(W5L[1]))],
                                     [(0x20, '<iii', (H5, W5, 4))], g2), g2, 256))
-        if os.environ.get('C512_TRACE') == '1' and bi == 0:
-            C512_PROBE.append(('2 ffwd2        -> w1', work[1], len(steps)))
         steps.append((CONVV, ka_for(CONVV, [(0x00, work[1]), (0x08, a), (0x10, w0),
                                             (0x18, work[2]), (0x28, L(W5L[2]))],
                                     [(0x20, '<i', (0,)), (0x30, '<ii', (H5, W5))], gc), gc, 256))
-        if os.environ.get('C512_TRACE') == '1' and bi == 0:
-            C512_PROBE.append(('3 conv_res_1   -> w2', work[2], len(steps)))
         steps.append((QKV, ka_for(QKV, [(0x00, work[2]), (0x08, work[3]), (0x10, L(W5L[3]))],
                                   [(0x18, '<ii', (H5, W5)),
                                    (0x20, '<ii', ENC_MODES[bi % 4] if os.environ.get('C512_SHIFT') == '1'
                                     else (0, 0))], gq), gq, 256))
-        if os.environ.get('C512_TRACE') == '1' and bi == 0:
-            C512_PROBE.append(('4 qkv_attn     -> w3', work[3], len(steps)))
-        # MID_HOST: block 30 is launched with the pooled pointer (launcher 0x180033660, 6th arg = ctx+0x248 at
-        # 0x18002f9c5-0x18002f9ca), which selects k_conv_res_views with +0x38 = pooled and +0x40 = the next
-        # stage's H,W (0x180034089-0x1800340a2).
         _pool30 = MID_HOST and blk == 30
         steps.append((CONVV, ka_for(CONVV, [(0x00, work[3]), (0x10, work[2]), (0x18, work[0]),
                                             (0x28, L(W5L[4]))] + ([(0x38, off_pooled)] if _pool30 else []),
                                     [(0x20, '<i', (0,)), (0x30, '<ii', (H5, W5)),
                                      (0x40, '<ii', (H6, W6) if _pool30 else (H5, W5))], gc), gc, 256))
-        if os.environ.get('C512_TRACE') == '1' and bi == 0:
-            C512_PROBE.append(('5 conv_res_2   -> w0', work[0], len(steps)))
-        if os.environ.get('C512_TRACE') == '2' and                 str(blk) in os.environ.get('PROBE_BLOCKS', '23,24,25,26').split(','):
-            # Each probe re-runs a prefix and rewrites the whole 2.26 GB arena, so probing every
-            # block costs tens of GB of disk writes. Limit it to the blocks in question.
-            C512_PROBE.append(('after block %-3d-> w0' % blk, work[0], len(steps)))
 
 
 if stop in ('full', 'all'):
@@ -878,7 +948,10 @@ def _run_prefix(nsteps):
     b = b''; ln = []
     for sym, k, grid, thr in steps[SKIP:nsteps]:
         o = len(b); b += k
-        ln.append('%s|%s|%d|%d|%d|%d|%d' % (MOD(sym), sym, o, len(k), grid[0], grid[1], thr))
+        line = '%s|%s|%d|%d|%d|%d|%d' % (MOD(sym), sym, o, len(k), grid[0], grid[1], thr)
+        if len(grid) > 2:
+            line += '|%d' % grid[2]
+        ln.append(line)
     (OUT / 'tm.txt').write_text(chr(10).join(ln) + chr(10))
     (OUT / 'tk.bin').write_bytes(b)
     (OUT / 'ta.bin').write_bytes(arena.tobytes())
@@ -990,7 +1063,10 @@ if os.environ.get('C512_TRACE') in ('1', '2'):
 blob = b''; lines = []
 for sym, k, grid, thr in steps[SKIP:]:
     o = len(blob); blob += k
-    lines.append('%s|%s|%d|%d|%d|%d|%d' % (MOD(sym), sym, o, len(k), grid[0], grid[1], thr))
+    line = '%s|%s|%d|%d|%d|%d|%d' % (MOD(sym), sym, o, len(k), grid[0], grid[1], thr)
+    if len(grid) > 2:
+        line += '|%d' % grid[2]
+    lines.append(line)
 (OUT / 'manifest.txt').write_text('\n'.join(lines) + '\n')
 (OUT / 'kernargs.bin').write_bytes(blob)
 (OUT / 'arena.bin').write_bytes(arena.tobytes())
