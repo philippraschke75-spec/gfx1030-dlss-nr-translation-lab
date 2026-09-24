@@ -24,6 +24,11 @@ def make_kernarg(H=16, W=16, offy=-4, offx=-4, flags=0, grid=(1, 1), threads=256
     import os
     if os.environ.get('DLSSNR_REAL_LAYOUT'):
         ptr_fields = [f for f in ptr_fields if f in REAL_PTR_FIELDS]
+    # ZERO_30 nulls +0x30, which WHT's trace shows read as a 4 KiB table with 8-byte loads. A
+    # random table read by position is itself a source of position-dependent output, so it has to
+    # be excluded before a periodic output can be called intrinsic to the kernel.
+    if os.environ.get('ZERO_30'):
+        ptr_fields = [f for f in ptr_fields if f != 0x30]
     ka = bytearray(424)
     for off in ptr_fields:
         struct.pack_into('<Q', ka, off, ARENA + PTR_FIELDS.index(off) * SLOT)

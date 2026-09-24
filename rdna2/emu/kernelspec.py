@@ -91,6 +91,11 @@ class Spec:
                 # For kernels that read indices or offsets out of a buffer: random bytes there become
                 # huge offsets and fault. Zeros keep every derived address in range.
                 a[slot * V.SLOT:(slot + 1) * V.SLOT] = 0
+            elif kind.startswith('byte:'):                 # a constant byte, e.g. an e4m3 code
+                a[slot * V.SLOT:(slot + 1) * V.SLOT] = int(kind[5:], 0)
+            elif kind.startswith('f32c:'):                 # a constant f32
+                a[slot * V.SLOT:(slot + 1) * V.SLOT] = np.full(V.SLOT // 4, float(kind[5:]),
+                                                               np.float32).view(np.uint8)
             else:
                 raise ValueError(kind)
         for slot, fn in self.weights.items():
@@ -111,7 +116,12 @@ def emulate(spec, seed, max_steps=30_000_000):
     for wy in range(gy):
         for wx in range(gx):
             steps += E.run_workgroup(prog, g, spec.lds, spec.threads,
-                                     {0: KA & 0xffffffff, 1: KA >> 32, 14: wx, 15: wy},
+                                     {0: KA & 0xffffffff, 1: KA >> 32,
+                                      # These kernels declare dispatch_ptr first, so the kernarg
+                                      # pointer lands in s[2:3], not s[0:1] (see the .s
+                                      # .amdhsa_user_sgpr_* order and the s_load_b128 s[..], s[2:3]
+                                      # that opens k_post_block and k_pre_block).
+                                      2: KA & 0xffffffff, 3: KA >> 32, 14: wx, 15: wy},
                                      max_steps=max_steps)['steps']
     return bytes(ka), init, a.copy(), steps
 

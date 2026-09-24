@@ -15,7 +15,7 @@ HONEST STATUS, kept in the output so a passing run cannot imply more than it sho
 
 usage: net_frame_full.py <color.bin> <src_w> <src_h> [--stop=<stage>]   (inside sandbox.py)
 """
-import sys, os, struct, subprocess, zlib
+import sys, os, struct, subprocess, zlib, hashlib
 from pathlib import Path
 import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -84,6 +84,12 @@ off_src = place('src RGBA16F', src.size)
 off_rgb = place('import RGB32F', PAD_H * PAD_W * 12)   # host allocates PADDED H*W*12
 
 # stage 1 is at render resolution; each later stage halves spatially and doubles channels
+# R9: the prologue computes the pre-block's grid from ctx+0x18 with the SAME idiom as the
+# post-block (movq xmm0,[r10+0x18] / psrad 0x1f / psrld 0x1d / pshufd 0xe1 / psrad 3 at
+# 0x18002ee72 and 0x18002efd0), and passes ctx+0x18/0x1c as VarParams +0x18/+0x1c
+# (0x18002edbd/0x18002edc1). So the pre-block runs at the PADDED FULL FRAME, 1792x1024,
+# not at stage_hw(0). PRE_FULL=0 restores the old half-resolution wiring.
+PRE_FULL = os.environ.get('PRE_FULL', '1') == '1'
 S1 = act_bytes(32, *stage_hw(0))      # stage 0 is PADDED/2, not the capture size
 # act_bytes is the ACTIVATION size. +0x38, +0x48 and +0xa0 (scratch) are not activations and there
 # is no evidence they follow that formula; the verified difftest just gives every pointer field a
@@ -97,10 +103,15 @@ AUX = S1 * int(os.environ.get('AUX_MULT', '2'))
 # dispatches reproducible over 4 runs. 2x is measured, not derived - the exact
 # requirement is unknown, and 1x demonstrably races.
 S1 = S1 * int(os.environ.get('ACT_MULT', '2'))
-off_a = place('act A (C=32)', S1)
+# ctx+0x218, the pre-block's +0x08: full-resolution C=32 features, which the post-block
+# reads back at its +0x08 as the outermost U-net skip.
+off_a = place('act A (C=32)', max(S1, act_bytes(32, PAD_H, PAD_W)) if PRE_FULL else S1)
 off_b = place('act B (C=32)', S1)
-off_scratch = place('pre-block scratch', AUX)
-off_p38 = place('pre-block +0x38', AUX)
+# 8 KiB per workgroup (host rule, R6c 0x180030d3e..0x180030d8f). At PRE_FULL the pre-block
+# dispatches (PAD_W//8)x(PAD_H//8) = 28,672 workgroups, four times the old count.
+off_scratch = place('pre-block scratch', max(AUX, 8192 * (PAD_W // 8) * (PAD_H // 8)))
+# At PRE_FULL this holds the pre-block's half-resolution stage-0 tensor, the encoder's input.
+off_p38 = place('pre-block +0x38', max(AUX, act_bytes(64, *stage_hw(0))))
 
 off_p48 = place('pre-block +0x48', AUX)          # the "optional 3rd buffer"; difftest_preblock
                                                 # leaves make_kernarg's pointer here rather than
@@ -151,7 +162,18 @@ for di, (key, blocks, C) in enumerate(DEC_STAGES):
     dec_buf.append((place('dec s%d ping' % (di + 1), n), place('dec s%d pong' % (di + 1), n),
                     place('dec s%d pool' % (di + 1), n)))
 
+# M2 run 5: constant stand-ins for every post-block input, so any x%8 structure left in A's
+# output is produced by A from uniform data. POST_CONST selects which inputs are replaced.
+off_k_act = place('const e4m3 act', max(act_bytes(32, PAD_H, PAD_W), act_bytes(32, *stage_hw(0))))
+off_k_rgb = place('const rgb 0.5', PAD_H * PAD_W * 12)
+off_k_f32 = place('const f32 1.0', PAD_H * PAD_W * 4)
 off_head = place('head out', act_bytes(32, *stage_hw(0)) * 4)
+# ctx+0x100, the network result. The setup fn allocates ctx[0x18]*ctx[0x1c]*16 at
+# 0x18002ded7..0x18002df37 - 16 B/pixel over the PADDED frame. k_export reads it (0x18002d7ca).
+off_netout = place('net result ctx+0x100', PAD_H * PAD_W * 16)
+# ctx+0x118, the post-block's +0x40. 0x18002dd04 aliases it onto ctx+0x108, allocated
+# H*W*4 at 0x18002df3e - one f32 per pixel, not the pre-block aux.
+off_ctx118 = place('ctx+0x118 (= ctx+0x108)', PAD_H * PAD_W * 4)
 off_dst = place('export dst RGBA16F', SRC_H * SRC_W * 8)
 
 wt = {}
@@ -198,6 +220,18 @@ print('  total %.1f MB\n' % (ARENA_SZ / 1e6))
 arena = np.zeros(ARENA_SZ, np.uint8)
 arena[off_src:off_src + src.size] = src
 arena[off_w0:off_w0 + len(w_block0)] = np.frombuffer(w_block0, np.uint8)
+# SENTINEL=1 fills the pre-block's output buffers with 0xA5 so the run can report each
+# kernel's true written extent, not the extent the activation formula predicts.
+SENT_BUFS = ('act A (C=32)', 'pre-block +0x38', 'act B (C=32)', 'pre-block +0x48')
+if os.environ.get('SENTINEL') == '1':
+    for _nm, _o, _n in placements:
+        if _nm in SENT_BUFS:
+            arena[_o:_o + _n] = 0xA5
+arena[off_k_act:off_k_rgb] = 0x38                         # e4m3 0x38 = 1.0
+arena[off_k_rgb:off_k_f32] = np.full((off_k_f32 - off_k_rgb) // 4, 0.5,
+                                     np.float32).view(np.uint8)
+arena[off_k_f32:off_k_f32 + PAD_H * PAD_W * 4] = np.full(PAD_H * PAD_W, 1.0,
+                                                         np.float32).view(np.uint8)
 for _nm, (_o, _n) in wt.items():
     arena[_o:_o + _n] = np.frombuffer((WEIGHTS / (_nm + '.bin')).read_bytes(), np.uint8)
 for _blk, (_o, _n) in enc_weight_off.items():
@@ -226,8 +260,22 @@ steps.append((IMPORT_SYM, bytes(ka), g_imp, 256))
 # Convention from chain_import_preblock_real.py, NOT the encoder one: flags 0x14, +0x00 and +0x30
 # null, float-RGB input at +0x40. Built by hand rather than via make_kernarg because that fills the
 # pointer fields with 1 MiB difftest slots, which are far too small at this resolution.
+# R10: the prologue's two launches are EXCLUSIVE, and the contract has the branches the wrong
+# way round. 0x18002ee4a `cmp byte [0x18009b1f0], 1` / 0x18002ee5b `jne 0x18002efb8` sends the
+# NOT-equal case to the <32,true> path; the fall-through (==1) sets up handle 0x180066348
+# (k_pre_block_1h_32_fp8) at 0x18002efac and then `jmp 0x18002f141` PAST the <32,true> launch.
+# C:67 attributes PreParams to `byte != 1`; that is inverted.
+# The epilogue is gated on the same byte (0x180030d96 `cmp` / `jne 0x180030f19`), and its
+# fall-through is the post-block. So the two branches are coherent pairs:
+#     byte == 1 -> k_pre_block_1h_32_fp8  +  k_post_block_1h_32_fp8
+#     byte != 1 -> k_swin_var<32,true>    in both places
+# The runner was taking block 0 from one branch and the tail from the other. Since the post-block
+# is the only writer of ctx+0x100 and k_export reads it, the ==1 pair is the live one.
+# PRE_1H=0 restores the <32,true> block 0.
+PRE_1H = os.environ.get('PRE_1H', '1') == '1'
+PRE1H_SYM = '_Z21k_pre_block_1h_32_fp89PreParams'
 PRE_SYM, PRE_LDS = D.SYMS['32_1']
-_ph, _pw = stage_hw(0)
+_ph, _pw = (PAD_H, PAD_W) if PRE_FULL else stage_hw(0)   # mirror of A: H,W from ctx+0x18
 g_pre = ((_pw + 7) // 8, (_ph + 7) // 8)
 ka = bytearray(424)
 struct.pack_into('<Q', ka, 0x00, 0)
@@ -243,6 +291,30 @@ struct.pack_into('<f', ka, 0x50, 1.0)
 struct.pack_into('<Q', ka, 0xa0, BASE + off_scratch)
 struct.pack_into('<III', ka, 0xA8, g_pre[0], g_pre[1], 1)
 struct.pack_into('<HHH', ka, 0xB4, 256, 1, 1)
+
+if PRE_1H:
+    # PreParams, 0x58 B (C:60-63): +0x00 float-RGB in (ctx+0xf8), +0x08 out (ctx+0x218), +0x10
+    # weight, +0x18 H,W, +0x20 f32 (ctx+0x34), +0x24 i32 (ctx+0x38), +0x28 two f32 (ctx+0x20),
+    # +0x30 i32 0, +0x38 ptr (ctx+0x220), +0x40 ptr (the ctx+0x180 scratch, 8 KiB per workgroup),
+    # +0x48 two 32-bit (ctx+0x28). Same grid rule as the post-block.
+    PRE_LDS = D.group_size(PRE1H_SYM)
+    PRE_SYM = PRE1H_SYM
+    ka = bytearray(K.kernel_meta(PRE1H_SYM)[1])
+    struct.pack_into('<Q', ka, 0x00, BASE + off_rgb)
+    struct.pack_into('<Q', ka, 0x08, BASE + off_a)
+    struct.pack_into('<Q', ka, 0x10, BASE + off_w0)
+    struct.pack_into('<ii', ka, 0x18, _ph, _pw)
+    struct.pack_into('<f', ka, 0x20, 1.0)
+    struct.pack_into('<i', ka, 0x24, 0)
+    struct.pack_into('<ff', ka, 0x28, 0.0, 0.0)
+    struct.pack_into('<i', ka, 0x30, 0)
+    struct.pack_into('<Q', ka, 0x38, BASE + off_p38)
+    struct.pack_into('<Q', ka, 0x40, BASE + off_scratch)
+    struct.pack_into('<ii', ka, 0x48, 0, 0)
+    # Explicit struct is 0x50 B (kernel metadata), so the hidden block counts sit at +0x50 and
+    # the group sizes at +0x5c - not the VarParams 0xa8/0xb4.
+    struct.pack_into('<III', ka, 0x50, g_pre[0], g_pre[1], 1)
+    struct.pack_into('<HHH', ka, 0x5c, 256, 1, 1)
 steps.append((PRE_SYM, bytes(ka), g_pre, 256))
 DET_PTS = [('k_import RGB', off_rgb, SRC_H * SRC_W * 12, len(steps) - 1), ('block0 out (pre-block)', off_a, S1, len(steps))]
 
@@ -251,7 +323,7 @@ DET_PTS = [('k_import RGB', off_rgb, SRC_H * SRC_W * 12, len(steps) - 1), ('bloc
 # bit2 = last-of-stage (which also emits the next stage's input through the pool pointer at +0x38).
 
 
-def enc_kernarg(h, w, oy, ox, flags, grid, src, dst, wgt, pool):
+def enc_kernarg(h, w, oy, ox, flags, grid, src, dst, wgt, pool, ptrA=None):
     ka = bytearray(424)
     for off in V.PTR_FIELDS:                       # every pointer field must be real memory
         struct.pack_into('<Q', ka, off, BASE + off_spare)
@@ -263,9 +335,24 @@ def enc_kernarg(h, w, oy, ox, flags, grid, src, dst, wgt, pool):
     struct.pack_into('<Q', ka, 0x00, BASE + src)
     struct.pack_into('<Q', ka, 0x08, BASE + dst)
     struct.pack_into('<Q', ka, 0x10, BASE + wgt)
-    struct.pack_into('<Q', ka, 0x38, BASE + pool)
+    # R5/R5b: launcher A's args 10 and 11 land at +0x30 and +0x38 (the callee stores
+    # [rsp+0x4d8] -> [rsp+0x328] and [rsp+0x4e0] -> [rsp+0x330] with the struct based at
+    # rsp+0x2f8, which puts flags at +0x28 and zeroes +0x40 onward). The decoder's first
+    # block gets the previous stage's output as ptrA at +0x30, and ptrB null.
+    if ptrA is None:
+        struct.pack_into('<Q', ka, 0x38, BASE + pool)
+    else:
+        struct.pack_into('<Q', ka, 0x30, BASE + ptrA)
+        struct.pack_into('<Q', ka, 0x38, 0)
     struct.pack_into('<Q', ka, 0xa0, BASE + off_scratch)
-    struct.pack_into('<iiii', ka, 0x18, h, w, oy, ox)
+    # F12: the contract fixes +0x20 as the X origin (C:15, C:20; run_var.py:30-33 reads it from
+    # the kernel at PC 0xb0360..0xb036c), but the runner has packed oy there. SWAP_XY=1 packs
+    # ox first. The window-origin cycle has length 4, which is the period of the column
+    # artefact present in every encoder ping/pong.
+    if os.environ.get('SWAP_XY') == '1':
+        struct.pack_into('<iiii', ka, 0x18, h, w, ox, oy)
+    else:
+        struct.pack_into('<iiii', ka, 0x18, h, w, oy, ox)
     struct.pack_into('<I', ka, 0x28, flags)
     struct.pack_into('<III', ka, 0xA8, grid[0], grid[1], 1)
     struct.pack_into('<HHH', ka, 0xB4, 256, 1, 1)
@@ -273,7 +360,10 @@ def enc_kernarg(h, w, oy, ox, flags, grid, src, dst, wgt, pool):
 
 
 if stop != 'preblock':
-    stage_in = off_a                                # the pre-block's output feeds stage 1
+    # PRE_FULL: encoder stage 1 runs at stage_hw(0) = half the padded frame, so its input is
+    # the pre-block's HALF-resolution +0x38 output (ctx+0x220), not the full-resolution +0x08.
+    # HYPOTHESIS - PRE_SRC=a feeds off_a instead, for comparison in the same build.
+    stage_in = (off_p38 if os.environ.get('PRE_SRC', 'p38') == 'p38' else off_a) if PRE_FULL else off_a
     for si, (key, blocks, C) in enumerate(ENC_STAGES):
         sym, lds = D.SYMS[key]
         lds = lds or D.group_size(sym)
@@ -290,9 +380,11 @@ if stop != 'preblock':
             # iteration di reads the ENCODER stage (3-di) buffer, matching channel width.
             # The runner was reading the previous decoder stage's output and never touching
             # the encoder buffers at all, i.e. no U-net skip connections.
-            skip = enc_stage_out.get(3 - di, stage_in)
-            _first = skip if os.environ.get('DEC_SKIP', '1') == '1' else stage_in
-            src = _first if i == 0 else pp[(i + 1) % 2]
+            # The U-net skip belongs to the DECODER loop, not here. This block used to read
+            # `enc_stage_out.get(3 - di, ...)` with `di` leaking from the buffer-allocation loop
+            # (FF:147), where it is always 3 - so encoder stages 2-4 took stage 1's output as
+            # their first block's input instead of the previous stage's pool.
+            src = stage_in if i == 0 else pp[(i + 1) % 2]
             dst = pp[i % 2]
             wgt = enc_weight_off[blk][0]
             steps.append((sym, enc_kernarg(h, w, oy, ox, flags, grid, src, dst, wgt, pool),
@@ -301,7 +393,15 @@ if stop != 'preblock':
                 # Block 0 hands the encoder absmean 1.7 and stage 1 returns 27 pinned to +/-448.
                 # Probe every encoder block to see whether that is one step or an accumulation.
                 C512_PROBE.append(('enc block %-3d-> dst' % blk, dst, len(steps)))
-        enc_stage_out[si] = pp[(len(blocks) - 1) % 2]   # the skip buffer for the decoder
+        # The host never passes a skip pointer: encoder stage s ping-pongs between ctx+0x1d8[s]
+        # and ctx+0x2a8[3-s] (0x18002f637/0x18002f64f, swapped at 0x18002f693..0x18002f6af),
+        # and decoder stage d reads ctx+0x1d8[3-d]. The two are the same pair, aliased.
+        # The stage's FIRST block writes ctx+0x1d8[s] (out_ptr = [rbp+0x690], initialised from
+        # ctx+0x1d8[s] at 0x18002f6af), so with an even block count the buffer the decoder
+        # reads holds the SECOND-TO-LAST block's output, not the last one.
+        # SKIP_PARITY=0 restores the last-block choice.
+        _sp = 1 if os.environ.get('SKIP_PARITY', '1') == '1' else 0
+        enc_stage_out[si] = pp[(len(blocks) - 1 - _sp) % 2]
         stage_in = pool                             # the pooled output is the next stage's input
         DET_PTS.append(('enc stage %d pool' % (si + 1), pool, stage_geom[si][3], len(steps)))
 
@@ -313,7 +413,8 @@ QKV2, ATTN2 = '_Z6k_qkv29QkvParams', '_Z12k_attention212AttnParams1d'
 DECUP, HEAD = '_Z14k_dec_upsample11DecUpParams', '_Z12k_final_head10HeadParams'
 REPACK = '_Z8k_repack12RepackParams'
 EXPORT = '_Z8k_export12ExportParams'
-M = {k: K.kernel_meta(k) for k in (FFWD_IV, FFWD2, CONVV, QKV, EXPAND2, CONTRACT2,
+POST = '_Z22k_post_block_1h_32_fp810PostParams'   # epilogue dispatch A, handle 0x180066350
+M = {k: K.kernel_meta(k) for k in (POST, FFWD_IV, FFWD2, CONVV, QKV, EXPAND2, CONTRACT2,
                                    QKV2, ATTN2, DECUP, HEAD, EXPORT, REPACK)}
 
 
@@ -444,11 +545,19 @@ if stop in ('full', 'all'):
     # 16384 B/workgroup is the figure derived for k_final_head, not for k_repack. REPACK_WG
     # lets the real per-workgroup span be found by measurement.
     g_rp = grid_for(REPACK, N512, per_wg=int(os.environ.get('REPACK_WG', '16384')))
-    steps.append((REPACK, ka_for(REPACK, [(0x00, stage_buf[3][2]), (0x08, c512_1[0])],
-                                 [(0x10, '<iiii', tuple(_rp))], g_rp), g_rp, 256))
-    REPACK_END = len(steps)
-    if os.environ.get('STOP_AFTER_REPACK') != '1':
-        c512_stage(range(23, 31), c512_1, c512_1[0])
+    # NO_REPACK=1 drops the k_repack dispatch and feeds block 23 the encoder's own stage-4 pool
+    # directly (PLAN F7: C:230, C:865-867 - the launcher's 3rd argument is block 22's fused pool,
+    # not a repack output). The period-4 column artefact first appears at c512_1 w0, one dispatch
+    # after the clean enc s4 pool, so this is its sharpest test.
+    if os.environ.get('NO_REPACK') == '1':
+        REPACK_END = len(steps)
+        c512_stage(range(23, 31), c512_1, stage_buf[3][2])
+    else:
+        steps.append((REPACK, ka_for(REPACK, [(0x00, stage_buf[3][2]), (0x08, c512_1[0])],
+                                     [(0x10, '<iiii', tuple(_rp))], g_rp), g_rp, 256))
+        REPACK_END = len(steps)
+        if os.environ.get('STOP_AFTER_REPACK') != '1':
+            c512_stage(range(23, 31), c512_1, c512_1[0])
 
     # ViT blocks 31-38: six contiguous buffers, 5 dispatches each (net_vit.py, verified bit-exact)
     # The ViT kernels are all 2-D (workgroup_id_y enabled). At (1,1) only one workgroup's tile
@@ -520,12 +629,28 @@ if stop in ('full', 'all'):
             # bit 3 and last blocks take no pool bit. With flags=4 the last block runs the
             # fused pool and emits a C-doubled, H/W-halved tensor the next stage cannot use.
             _dflags = int(os.environ.get('DEC_FLAGS', '1'))
-            flags = ((8 if i == 0 else 0) if _dflags else
+            # R5, read from the host's decoder loop: the first block takes flag 8 (literal 0x8 at
+            # 0x180030933) and the LAST block takes flag 2 (xor r8d,r8d / cmp ebx,edi / sete r8b /
+            # add r8d,r8d at 0x180030a0e..0x180030a22). Every block in between takes 0. The runner
+            # has never set bit 1 on any dispatch. DEC_LAST2=0 restores the old 8/0/0 sequence.
+            _last2 = 2 if (last and os.environ.get('DEC_LAST2', '1') == '1') else 0
+            flags = (((8 if i == 0 else 0) | _last2) if _dflags else
                      ((1 if i == 0 else 0) | (4 if last else 0)))
             grid = ((w - ox + 7) // 8, (h - oy + 7) // 8)
-            src = stage_in if i == 0 else pp[(i + 1) % 2]
+            if i == 0 and os.environ.get('DEC_SKIP', '1') == '1':
+                # Decoder stage d's first block (flag 8) takes the U-net skip at +0x00: the
+                # encoder buffer at this stage's own C and resolution. The previous stage's
+                # 2C/half-resolution output goes to +0x38 - HYPOTHESIS, the mirror of the
+                # encoder's fused pool write (C:113-119). DEC_SKIP=0 restores the old wiring.
+                src, p38 = enc_stage_out.get(3 - di, stage_in), stage_in
+            else:
+                src, p38 = (stage_in if i == 0 else pp[(i + 1) % 2]), pool
+            # DEC_PTRA=1 follows R5: the previous stage goes to +0x30 (ptrA), not +0x38.
+            _pa = p38 if (i == 0 and os.environ.get('DEC_PTRA', '1') == '1'
+                          and os.environ.get('DEC_SKIP', '1') == '1') else None
             steps.append((sym, enc_kernarg(h, w, oy, ox, flags, grid, src, pp[i % 2],
-                                           wt['block%d' % blk][0], pool), grid, 256))
+                                           wt['block%d' % blk][0],
+                                           pool if _pa is not None else p38, ptrA=_pa), grid, 256))
             if os.environ.get('C512_TRACE') == '2' and os.environ.get('PROBE_DEC') == '1':
                 C512_PROBE.append(('dec block %-3d-> dst' % blk, pp[i % 2], len(steps)))
             last_dst = pp[i % 2]
@@ -563,15 +688,55 @@ if stop in ('full', 'all'):
               # The TRANSLATED kernel enables workgroup_id_x only (system_sgpr_workgroup_id_y 0) and its prologue does
               # s_mov_b32 s15, s2, so the original's workgroup_id_y arrives in the hardware X id: count in X.
               'x16k': ((SRC_W * SRC_H * 16 + 16383) // 16384, 1)}[_hg]
-    steps.append((HEAD, ka_for(HEAD, [(0x00, stage_in), (0x08, off_head),
-                                      (0x10, wt['block70_layer0'][0])], [], g_head), g_head, 256))
+    # The host's tail is NOT k_final_head. The driver's epilogue runs the post-block (handle
+    # 0x180066350) and then k_swin_var<32,true> with flags 0x20. Only the post-block writes
+    # ctx+0x100, which k_export reads, so B is deferred until its flags are understood.
+    # Layout from the stores at 0x180030e13..0x180030ea4, base rbp+0x280:
+    #   +0x00 [rbp+0x668] <- [rbp+0x608] at 0x180030b0a, the decoder loop's carried output
+    #   +0x08 ctx+0x218   the pre-block output, i.e. the outermost U-net skip
+    #   +0x10 ctx+0x100   THE OUTPUT
+    #   +0x18 block 70 layer 0 (both lookups pass r8d=0; blend_scale is never asked for)
+    #   +0x20/+0x24 a qword load of ctx+0x18: H, W
+    #   +0x30 f32 ctx+0x30, +0x34 i32 1, +0x48 f32 xmm6 - frame constants, values unknown
+    #   +0x38 ctx+0xf8    the k_import float RGB
+    #   +0x40 ctx+0x118   = ctx+0x108, H*W*4
+    # Grid: 256x1x1 threads over (W//8, H//8). The /8 TRUNCATES (psrad/psrld/paddd/psrad at
+    # 0x180030dbe), which is exact only because the dims are padded to a multiple of 128.
+    POST_F30 = float(os.environ.get('POST_F30', '1.0'))
+    # xmm6 at 0x180030ea4 has two paths: `pxor xmm6,xmm6` (0x180030cf0) and `movaps xmm6,xmm7`
+    # (0x180030cfd). The zero path is the right one: at 1.0 the frame comes out 17x too dark
+    # (mean 6.4 vs the import's 108.7) with even columns carrying 1.88x the odd ones; at 0.0
+    # the mean is 46.6 and the column ratio falls to 1.12.
+    POST_F48 = float(os.environ.get('POST_F48', '0.0'))
+    g_post = (PAD_W // 8, PAD_H // 8)
+    # POST_CONST is a set of field offsets to replace with constant buffers, e.g.
+    # POST_CONST=0x00,0x08,0x38,0x40 for M2 run 5.
+    _pc = {int(x, 0) for x in os.environ.get('POST_CONST', '').split(',') if x.strip()}
+    # POST_A00_FILE loads a raw byte image into the constant buffer and feeds it to A at +0x00.
+    # That lets a baseline decoder output be replayed with a few bytes changed, so A's response to
+    # a single input byte can be measured without intervening mid-chain.
+    _a00f = os.environ.get('POST_A00_FILE')
+    if _a00f:
+        _blob = np.fromfile(_a00f, np.uint8)
+        arena[off_k_act:off_k_act + _blob.size] = _blob
+        print('A +0x00 loaded from %s (%d B)' % (_a00f, _blob.size))
+    _p00 = off_k_act if (_a00f or 0x00 in _pc) else stage_in
+    _p08 = off_k_act if 0x08 in _pc else off_a
+    _p38 = off_k_rgb if 0x38 in _pc else off_rgb
+    _p40 = off_k_f32 if 0x40 in _pc else off_ctx118
+    steps.append((POST, ka_for(POST, [(0x00, _p00), (0x08, _p08), (0x10, off_netout),
+                                      (0x18, wt['block70_layer0'][0]),
+                                      (0x38, _p38), (0x40, _p40)],
+                               [(0x20, '<ii', (PAD_H, PAD_W)), (0x28, '<Q', (0,)),
+                                (0x30, '<f', (POST_F30,)), (0x34, '<i', (1,)),
+                                (0x48, '<f', (POST_F48,))], g_post), g_post, 256))
 
     # k_export, fed the network's own output at +0x00 - the first time it has had that
     # k_export's kernarg is 320 B (kernel metadata), not 280, and grid_dims lives at +0x80 -
     # it was never set, so the kernel saw 0 instead of 2 and treated a 2D grid as something
     # else. It wrote rows 0..69 of 960 and stopped.
     ka = bytearray(M[EXPORT][1] if EXPORT in M else 320)
-    struct.pack_into('<Q', ka, 0x00, BASE + off_head)
+    struct.pack_into('<Q', ka, 0x00, BASE + off_netout)   # ctx+0x100 (0x18002d7ca)
     struct.pack_into('<i', ka, 0x08, 0)
     # +0x0c is HEIGHT and +0x10 is WIDTH, not the other way round: the launcher builds the grid
     # as (ceil(width/256), height) from exactly these two fields, so swapping them makes the kernel
@@ -583,9 +748,13 @@ if stop in ('full', 'all'):
     # +0x28 is the export format/mode (ebp in the launcher) and +0x08 an i32 from xmm10; both
     # were guessed as 0. Now that the network feeds real data in, coverage is a usable signal.
     struct.pack_into('<i', ka, 0x28, int(os.environ.get('EXPORT_MODE', '0')))
-    struct.pack_into('<i', ka, 0x08, SRC_W)
+    struct.pack_into('<i', ka, 0x08, PAD_W)   # input row stride: ctx+0x100 is PAD_W wide
     struct.pack_into('<Q', ka, 0x30, BASE + off_rgb)
-    struct.pack_into('<ff', ka, 0x38, 1.0, 1.0)
+    # +0x38/+0x3c are the two f32 job strengths (C:77), from xmm6/xmm7 in the frame function.
+    # Never read from the host (R8 item 3). With both at 1.0 the export surface fits
+    # `a - 1.4*input` at R2 0.83, i.e. it SUBTRACTS the import instead of blending it.
+    struct.pack_into('<ff', ka, 0x38, float(os.environ.get('EXP_S0', '1.0')),
+                     float(os.environ.get('EXP_S1', '1.0')))
     g_exp = ((SRC_W + 255) // 256, SRC_H)
     struct.pack_into('<III', ka, 0x40, g_exp[0], g_exp[1], 1)
     struct.pack_into('<HHH', ka, 0x4c, 256, 1, 1)
@@ -765,6 +934,17 @@ rgb = res[off_rgb:off_rgb + SRC_H * SRC_W * 12].view(np.float32).reshape(SRC_H, 
 report('k_import RGB', res[off_rgb:off_rgb + SRC_H * SRC_W * 12])
 a_nan, a_nz = report('block0 out', res[off_a:off_a + S1])
 report('block0 +0x38', res[off_p38:off_p38 + S1])
+if os.environ.get('SENTINEL') == '1':
+    print()
+    print('=== sentinel extents (0xA5 = untouched) ===')
+    for _nm, _o, _n in placements:
+        if _nm not in SENT_BUFS:
+            continue
+        _x = res[_o:_o + _n]
+        _w = np.nonzero(_x != 0xA5)[0]
+        print('  %-18s alloc %10d  written %10d  highest offset %10s  sha %s'
+              % (_nm, _n, _w.size, (int(_w[-1]) if _w.size else -1),
+                 hashlib.sha256(_x.tobytes()).hexdigest()[:16]))
 if stop != 'preblock':
     for si, (key, blocks, C) in enumerate(ENC_STAGES):
         h, w, C, n = stage_geom[si]
