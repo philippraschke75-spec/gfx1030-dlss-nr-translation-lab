@@ -74,6 +74,9 @@ S1 = act_bytes(32, SRC_H, SRC_W)
 # 1 MiB slot, which is ample at 64 workgroups and says nothing about 25,680. AUX_MULT scales them
 # so the question can be answered by measurement instead of assumption.
 AUX = S1 * int(os.environ.get('AUX_MULT', '1'))
+# The pre-block is non-deterministic at 214x120 workgroups and reproducible at 8x8. If
+# act_bytes under-sizes its output, workgroups overlap and race. ACT_MULT tests that.
+S1 = S1 * int(os.environ.get('ACT_MULT', '1'))
 off_a = place('act A (C=32)', S1)
 off_b = place('act B (C=32)', S1)
 off_scratch = place('pre-block scratch', AUX)
@@ -560,6 +563,52 @@ if os.environ.get('DET_TEST'):
                 dd.tofile(os.environ['FIX_IN_SAVE'])
             row.append('%s d=%d nan=%.2f%%' % (hashlib.sha1(dd.tobytes()).hexdigest()[:8], len(np.unique(dd)), 100.0 * float((dd == 0x7f).mean())))
         print('  %-30s %s   %s' % (label, 'SAME' if len(set(r.split()[0] for r in row)) == 1 else 'DIFFERS', ' | '.join(row)), flush=True)
+    raise SystemExit(0)
+
+if os.environ.get('DET_BISECT') == '1':
+    # Find the FIRST dispatch after which two identical runs disagree. Everything measured in this
+    # chain is worthless until that point is known: yesterday four identical runs gave 94, 245, 244
+    # and 2 distinct byte values, so several parameter studies were reading noise.
+    import hashlib
+
+    def _hash_prefix(n):
+        a = _run_prefix(n)
+        return None if a is None else hashlib.sha256(a.tobytes()).hexdigest()[:16]
+
+    def _stable(n, tries=2):
+        h0 = _hash_prefix(n)
+        if h0 is None:
+            return None
+        for _ in range(tries - 1):
+            if _hash_prefix(n) != h0:
+                return False
+        return True
+
+    total = len(steps)
+    print()
+    print('=== determinism bisect over %d dispatches ===' % total)
+    if _stable(total):
+        print('  the FULL chain is reproducible over 2 runs - nothing to bisect')
+        raise SystemExit(0)
+
+    lo, hi = 0, total                      # lo known stable, hi known unstable
+    if not _stable(1):
+        lo, hi = 0, 1
+    else:
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            st = _stable(mid)
+            print('  prefix %-4d -> %s' % (mid, 'stable' if st else 'DIFFERS'), flush=True)
+            if st:
+                lo = mid
+            else:
+                hi = mid
+    sym, _k, grid, _t = steps[hi - 1]
+    print()
+    print('  last reproducible prefix : %d dispatches' % lo)
+    print('  first non-reproducible   : %d dispatches' % hi)
+    print('  the dispatch that breaks it: #%d  %s  grid %dx%d'
+          % (hi - 1, sym, grid[0], grid[1]))
     raise SystemExit(0)
 
 if os.environ.get('C512_TRACE') in ('1', '2'):
