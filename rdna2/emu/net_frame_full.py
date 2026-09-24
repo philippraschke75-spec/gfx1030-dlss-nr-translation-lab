@@ -451,7 +451,10 @@ if stop in ('full', 'all'):
         c512_stage(range(23, 31), c512_1, c512_1[0])
 
     # ViT blocks 31-38: six contiguous buffers, 5 dispatches each (net_vit.py, verified bit-exact)
-    g = (1, 1)
+    # The ViT kernels are all 2-D (workgroup_id_y enabled). At (1,1) only one workgroup's tile
+    # of each buffer is written and the rest keeps block 30's output, which is why the
+    # distinct-byte counts looked healthy - most of it was passthrough.
+    g = grid_for(CONTRACT2, N1024, (H5, W5))
     BIN_ = c512_1[0]
     B260, B268, B270, B278, B280, B288 = vit_buf
     for blk in range(31, 39):
@@ -465,7 +468,10 @@ if stop in ('full', 'all'):
                                           (0x20, L(2))], [], g), g, 256))
         steps.append((ATTN2, ka_for(ATTN2, [(0x00, B270), (0x08, B278), (0x10, B280), (0x18, B288)],
                                     [(0x20, '<ii', (W5, H5))], g), g, 256))
-        steps.append((CONTRACT2, ka_for(CONTRACT2, [(0x00, B288), (0x08, B270), (0x10, BIN_),
+        # +0x08 is ctx+0x268, step 2's output - net_vit.py:120 passes B268 here and passes its
+        # difftest. B270 is k_qkv2's first output, so the block's second contract input was
+        # taking the QKV projection instead of the post-FFN activation, in all eight blocks.
+        steps.append((CONTRACT2, ka_for(CONTRACT2, [(0x00, B288), (0x08, B268), (0x10, BIN_),
                                                     (0x18, L(4))],
                                         [(0x20, '<ii', (H5, W5)), (0x28, '<i', (4,))], g), g, 256))
 
@@ -491,26 +497,14 @@ if stop in ('full', 'all'):
     # fed the empty buffer.
     c512_stage(range(40, 48), c512_2, c512_2[0])
 
-    # mid -> dec is `k_repack, k_dec_upsample` in the driver's phase table, and it was missing.
-    # The C=512 stage ends at stage 4 (56x32, C=512) while the decoder starts at stage 3
-    # (112x64, C=256); without this transition block 48 reads stage-4 data as if it were stage-3
-    # and returns 100% NaN.
-    _dh, _dw = stage_hw(3)
-    _delem = 256 * (-(-_dh // 4)) * (-(-_dw // 4)) * 16
-    g_rp2 = grid_for(REPACK, dec_geom[0][3])
-    steps.append((REPACK, ka_for(REPACK, [(0x00, c512_2[0]), (0x08, dec_buf[0][0])],
-                                 [(0x10, '<iiii', (_dh, _dw, _delem // 1024, 0))], g_rp2), g_rp2, 256))
-    g_du = grid_for(DECUP, dec_geom[0][3])
-    steps.append((DECUP, ka_for(DECUP, [(0x00, dec_buf[0][0]), (0x08, off_b39),
-                                        (0x10, dec_buf[0][1]), (0x18, wt['block48'][0]),
-                                        (0x20, off_spare)], [], g_du), g_du, 256))
-
-    if os.environ.get('C512_TRACE') == '2' and os.environ.get('PROBE_DEC') == '1':
-        C512_PROBE.append(('mid->dec repack ', dec_buf[0][0], len(steps) - 1))
-        C512_PROBE.append(('mid->dec upsample', dec_buf[0][1], len(steps)))
+    # The mid->dec transition added earlier is withdrawn: the phase table has ONE k_repack
+    # and ONE k_dec_upsample there, and block 39 already is that dispatch. The decoder's
+    # odd first-block records are the upsample + skip concat, so the upsample happens
+    # inside block 48's own k_swin_var call, not in a separate kernel. The second
+    # k_dec_upsample was also running on block48's k_swin_var weight record.
+    stage_in = c512_2[0]
 
     # decoder blocks 48-69, the encoder mirrored
-    stage_in = dec_buf[0][1]
     for di, (key, blocks, C) in enumerate(DEC_STAGES):
         sym, lds = D.SYMS[key]
         lds = lds or D.group_size(sym)
@@ -520,7 +514,14 @@ if stop in ('full', 'all'):
         for i, blk in enumerate(blocks):
             ox, oy = ENC_MODES[i % 4]
             last = (i == len(blocks) - 1)
-            flags = (1 if i == 0 else 0) | (4 if last else 0)
+            # The decoder's flag convention is NOT the encoder's. The odd-sized record in each
+            # decoder stage is the FIRST block, not the last (block 66 = 22,784 B matches the
+            # f=8 extent, block 69 = 20,672 B the ordinary f=0/1/2 one), so first blocks take
+            # bit 3 and last blocks take no pool bit. With flags=4 the last block runs the
+            # fused pool and emits a C-doubled, H/W-halved tensor the next stage cannot use.
+            _dflags = int(os.environ.get('DEC_FLAGS', '1'))
+            flags = ((8 if i == 0 else 0) if _dflags else
+                     ((1 if i == 0 else 0) | (4 if last else 0)))
             grid = ((w - ox + 7) // 8, (h - oy + 7) // 8)
             src = stage_in if i == 0 else pp[(i + 1) % 2]
             steps.append((sym, enc_kernarg(h, w, oy, ox, flags, grid, src, pp[i % 2],
@@ -531,8 +532,9 @@ if stop in ('full', 'all'):
         # The pooled output feeds the NEXT stage. After the last decoder stage there is no next
         # stage, so the head must read the last block's own output, not a pool buffer that nothing
         # downsampled into. HEAD_SRC=pool restores the old wiring for comparison.
-        stage_in = pool if (di + 1 < len(DEC_STAGES) or
-                            os.environ.get('HEAD_SRC', 'last') == 'pool') else last_dst
+        # Without the pool bit nothing writes `pool`, so every decoder stage hands on its last
+        # block's own output - to the next stage and, at the end, to the head.
+        stage_in = pool if _dflags == 0 and di + 1 < len(DEC_STAGES) else last_dst
 
     # block 70: the real k_final_head
     # k_final_head was dispatched with grid (1,1) - one workgroup cannot cover 1707x960. Its output

@@ -2608,3 +2608,53 @@ This also puts the earlier decoder-stage verification in context: `net_encoder_s
 blocks 48-55, 56-61, 62-65 and 66-69 at 0 mismatches - but it dispatches them all as `k_swin_var`,
 i.e. it verifies the same wrong structure the frame runner uses. A chain runner can only verify the
 schedule it was told to run.
+
+## The decoder runs: its flag convention is not the encoder's
+
+A static audit of the frame runner against the verified runners produced four findings that hold up
+on hardware. The decisive one is the decoder's flags.
+
+**The decoder's odd-sized record is the FIRST block of each stage, not the last.** Block 66's record
+(22,784 B) matches the `f=8` extent, while block 69 (20,672 B) is the ordinary `f=0/1/2` size - the
+mirror of the encoder, where the *last* block carries the larger `f=4` record. So decoder first
+blocks take **bit 3**, and decoder last blocks take **no pool bit** at all:
+
+```
+flags = (1 if first) | (4 if last)     encoder convention, was used for the decoder too
+        block 48  distinct 1, 100% NaN
+
+flags = (8 if first) else 0            decoder convention
+        block 48  distinct 245, no NaN
+        block 55  distinct 239
+```
+
+With `flags=4` a decoder last block runs the fused pool and emits a C-doubled, H/W-halved tensor the
+next stage cannot consume; with `flags=1` a first block reads an `f=8` record through the `f=0/1`
+layout. Either is enough to produce all-NaN.
+
+Consequence: nothing writes the pool in the decoder, so each stage hands its **last block's own
+output** to the next stage and to the head.
+
+### Three further findings from the same audit
+
+* **ViT step 5 `+0x08` was `B270`, should be `B268`** (`net_vit.py:120`). The block's second contract
+  input was taking `k_qkv2`'s projection instead of the post-FFN activation, in all eight blocks.
+* **The ViT ran every kernel at grid (1,1)** at frame geometry. All five are 2-D kernels, so only one
+  workgroup's tile was written and the rest of each buffer kept block 30's output. The "253-254
+  distinct" health figure could not see this - most of it was passthrough.
+* **The `mid -> dec` transition added earlier is withdrawn.** The phase table has one `k_repack` and
+  one `k_dec_upsample` there and block 39 already is that dispatch; the decoder's odd first-block
+  records are the upsample plus skip concat, so the upsample happens inside block 48's own
+  `k_swin_var` call. The invented second dispatch was also running `k_dec_upsample` on block 48's
+  `k_swin_var` weight record.
+
+### Effect end to end
+
+```
+head input   0.00% nonzero, distinct 1      ->  11.66% nonzero, distinct 232
+head buffer  distinct 2                     ->  distinct 255
+```
+
+The head produces real varied output for the first time. `k_export`'s surface is still non-finite
+and the rendered image is still mostly black with structure only in the top band, so the output path
+is not finished - but everything from `k_import` through `k_final_head` now carries data.
