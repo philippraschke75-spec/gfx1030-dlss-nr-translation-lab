@@ -548,8 +548,10 @@ def c512_stage(blocks, work, src_in):
         # Step 3: k_conv_res2 (0x18003413e-0x1800341bd). +0x00 = ctx+0x230, +0x08 =
         # first?NULL:ctx+0x228, +0x10 = first?input:NULL, +0x18 = ctx+0x238, +0x20 = 0 (qword),
         # +0x28 = layer1, +0x30 = (H,W), +0x38 = T.
-        _p3 = [(0x00, work[1]), (0x18, work[2])]
-        _i3 = [(0x20, '<Q', (0,)), (0x28, '<i', (1,)), (0x30, '<ii', (H5, W5)), (0x38, '<i', (T,))]
+        # +0x28 is the weight POINTER 0x180031bc0(ctx, blk, 1) (0x180034193 -> 0x180034198), not the
+        # layer index: the kernel adds offsets to it (s_add_u32 s74, s50, 0x40000 in the .s).
+        _p3 = [(0x00, work[1]), (0x18, work[2]), (0x28, L(1))]
+        _i3 = [(0x20, '<Q', (0,)), (0x30, '<ii', (H5, W5)), (0x38, '<i', (T,))]
         if first:
             _p3.append((0x10, a))
             _i3.append((0x08, '<Q', (0,)))
@@ -566,7 +568,8 @@ def c512_stage(blocks, work, src_in):
         # needing a 3-D dispatch (net_run.cpp / ka_for both support gz now).
         ox, oy = ENC_MODES[bi % 4]
         _qgy = int(os.environ.get('QKV2_GY', str((H5 + 7 - oy) >> 3)))
-        gq2 = ((W5 + 7 - ox) >> 3, _qgy, 16)
+        _qgz = int(os.environ.get('QKV2_GZ', '16'))
+        gq2 = ((W5 + 7 - ox) >> 3, _qgy, _qgz)
         steps.append((ATTN2_C512, ka_for(ATTN2_C512, [(0x00, work[2]), (0x08, work[3]), (0x10, L(2))],
                                          [(0x18, '<ii', (H5, W5)), (0x20, '<ii', (ox, oy))], gq2),
                       gq2, 256))
@@ -587,8 +590,9 @@ def c512_stage(blocks, work, src_in):
                                         [(0x20, '<i', (0,)), (0x30, '<ii', (H5, W5)),
                                          (0x40, '<ii', (H6, W6))], gc), gc, 256))
         else:
-            _p5 = [(0x00, work[3]), (0x08, work[2]), (0x18, work[0])]
-            _i5 = [(0x10, '<Q', (0,)), (0x28, '<i', (3,)), (0x30, '<ii', (H5, W5)), (0x38, '<i', (T,))]
+            # +0x28 = weight pointer 0x180031bc0(ctx, blk, 3) (0x180033f51 -> 0x180033f56), as in step 3.
+            _p5 = [(0x00, work[3]), (0x08, work[2]), (0x18, work[0]), (0x28, L(3))]
+            _i5 = [(0x10, '<Q', (0,)), (0x30, '<ii', (H5, W5)), (0x38, '<i', (T,))]
             if first:
                 _p5.append((0x20, a))
             else:

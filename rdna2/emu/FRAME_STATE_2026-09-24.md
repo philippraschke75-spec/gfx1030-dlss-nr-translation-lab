@@ -478,3 +478,35 @@ translation handles z correctly or whether the runner is supplying the wrong VAL
 z-dependent (not the grid size, per the gy test above - possibly gz itself is wrong, worth
 sweeping GZ the same way GY was, or a kernarg field's semantics differ from what Update 11 assumed
 for the z-tiled case specifically).
+
+## Update 13: the k_qkv_attn2 NaN was k_conv_res2 reading its weights from address 1
+
+**Cause (confirmed):** in C512_HOST's steps 3 and 5, +0x28 was packed as the integer layer index,
+`(0x28, '<i', (1,))` and `(0x28, '<i', (3,))`. The host stores the return value of
+`0x180031bc0(ctx, blk, layer)` there, which is the layer's weight pointer (0x180034193 -> 0x180034198 and
+0x180033f51 -> 0x180033f56). The kernel uses it as an address: `_Z11k_conv_res211Conv2Params.s` loads +0x20..+0x3f
+into s[48:55], then `s_add_u32 s74, s50, 0x40000` and `v_add_co_u32 v52, vcc_lo, s50, v0`. So step 3 ran on
+garbage weights, and k_qkv_attn2 turned that input into 50% 0x7f. Fixed: +0x28 = `L(1)` / `L(3)`.
+
+Block 23 trace after the fix: qkv_attn2 -> w3 is 49.99% nonzero with **215 distinct values**, and no 0x7f spike.
+The ~50% zero fraction is shared by every step, ffwd2 through conv_res2_2, so it is not specific to qkv_attn2.
+
+**grid.z = 16 is a genuine hardware dimension (read, not swept).** The translated prologue maps the z id into
+s15 (`s_mov_b32 s15, s6`). The original uses s15 as a head index: `s_mul_i32 s37, s15, 0x60`,
+`s_lshl_b32 s3, s15, 2` added to the kernarg base, `s15 << 13` (8 KiB per head) and `s15 << 5` (32 channels per
+head). 16 x 32 = 512 = C. The kernel has no internal loop that stands in for z. The GZ sweep was not needed once
+the cause was found, so it was not run.
+
+**Score, same code, same frame, MID_HOST=1:**
+
+| | S_mid | S_fine | lag8 |
+|---|---|---|---|
+| C512_HOST=0 (VIT512_OLD kernels) | +0.5282 | +0.6288 | +0.97 |
+| C512_HOST=1 (host default kernels, fixed) | **+0.4770** | +0.5757 | +0.96 |
+
+The host-default path now runs clean end to end: 157 dispatches, guards intact. It scores lower, not higher.
+C512_HOST stays default 0. What remains unverified on this path:
+* `k_conv_res2` and `k_qkv_attn2` have never been difftested against the emulator at any grid.
+* The first-block (+0x08/+0x10/+0x20 input) wiring for stage 40-47 was not read from the host.
+* Every C512_HOST=1 dispatch should be diffed against its Update 11 citation one field at a time. This update
+  found one wrong field by reading; others of the same kind may remain.
