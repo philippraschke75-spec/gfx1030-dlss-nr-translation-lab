@@ -2417,3 +2417,42 @@ The full chain still runs - 170 dispatches, 364 ms, guards intact - and `k_expor
 rows. What remains is that the **encoder** saturates: block 0 hands it absmean 1.7 and stage 1 comes
 back at absmean 27 with values pinned to +/-448. Everything downstream is constant because of that,
 not because of anything in the C=512, ViT or decoder stages.
+
+### After the geometry fix: the encoder is healthy, and the NaN moved
+
+Probing every encoder block (`PROBE_ENC=1`) with the corrected padded geometry:
+
+```
+enc block 1   nonzero 100%  distinct 216
+enc block 2   nonzero 100%  distinct 253
+...
+enc block 10  nonzero 100%  distinct 253
+```
+
+**The encoder does not collapse.** The earlier reading that "stage 1 returns absmean 27 pinned to
++/-448" was measuring the *pool* buffer over its whole allocation - the pool feeds the next stage,
+which is half the size, so most of what was measured was unused space. Measure a buffer over the
+region the consumer actually reads, not over its allocation.
+
+`REPACK_DIMS` still defaulted to the literal `60,106` after the geometry moved that stage to `56x32`;
+it now derives from the stage table. That alone halved the saturation at the stage entry:
+
+```
+stale 60,106   ffwd_inpview  0x7e (=448) 4.31%   0xfe (=-448) 3.80%
+from table     ffwd_inpview  0x7e        1.76%   0xfe         1.55%
+```
+
+Current state of the C=512 stage, deterministic and with correct geometry:
+
+```
+0 before stage   nonzero 13.78%  distinct 243
+1 ffwd_inpview   distinct 254    saturation 1.76% / 1.55%, no NaN
+2 ffwd2          distinct 255    no NaN
+3 conv_res_1     distinct 255    0x7f = 1.79%     <- NaN starts here now
+4 qkv_attn       distinct 192    0x7f = 3.57%
+5 conv_res_2     distinct 243    0x7f = 3.57%
+```
+
+So the NaN source moved from `k_qkv_attn` to `k_conv_res_views`, which means the earlier attribution
+was a consequence of the wrong geometry rather than a property of either kernel. Both readings were
+taken on a deterministic chain; the difference is the geometry, not noise.
