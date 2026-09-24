@@ -112,6 +112,7 @@ ENC_STAGES = [('32_0', [1, 2, 3, 4], 32), ('64_0', [5, 6, 7, 8], 64),
 ENC_MODES = [(0, 0), (-4, -4), (-4, 0), (0, -4)]
 
 stage_geom, stage_buf = [], []
+enc_stage_out = {}   # si -> the buffer holding that encoder stage's output (the U-net skip)
 for si, (key, blocks, C) in enumerate(ENC_STAGES):
     h, w = stage_hw(si)
     n = act_bytes(C, h, w)
@@ -284,7 +285,14 @@ if stop != 'preblock':
             last = (i == len(blocks) - 1)
             flags = (1 if i == 0 else 0) | (4 if last else 0)
             grid = ((w - ox + 7) // 8, (h - oy + 7) // 8)
-            src = stage_in if i == 0 else pp[(i + 1) % 2]
+            # ctx+0x2a8[r9d] is passed to launcher A as its in_ptr, and the encoder indexes
+            # that array as [3-stage] while the decoder indexes it as [stage] - so decoder
+            # iteration di reads the ENCODER stage (3-di) buffer, matching channel width.
+            # The runner was reading the previous decoder stage's output and never touching
+            # the encoder buffers at all, i.e. no U-net skip connections.
+            skip = enc_stage_out.get(3 - di, stage_in)
+            _first = skip if os.environ.get('DEC_SKIP', '1') == '1' else stage_in
+            src = _first if i == 0 else pp[(i + 1) % 2]
             dst = pp[i % 2]
             wgt = enc_weight_off[blk][0]
             steps.append((sym, enc_kernarg(h, w, oy, ox, flags, grid, src, dst, wgt, pool),
@@ -293,6 +301,7 @@ if stop != 'preblock':
                 # Block 0 hands the encoder absmean 1.7 and stage 1 returns 27 pinned to +/-448.
                 # Probe every encoder block to see whether that is one step or an accumulation.
                 C512_PROBE.append(('enc block %-3d-> dst' % blk, dst, len(steps)))
+        enc_stage_out[si] = pp[(len(blocks) - 1) % 2]   # the skip buffer for the decoder
         stage_in = pool                             # the pooled output is the next stage's input
         DET_PTS.append(('enc stage %d pool' % (si + 1), pool, stage_geom[si][3], len(steps)))
 
