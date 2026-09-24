@@ -153,6 +153,17 @@ off_b39 = place('block39 out', N512)
 # ctx+0x250, the ViT's own buffer ('vit1d'). Its input ctx+0x228 ('vit512a') must survive the ViT: block 39 reads it
 # back at +0x08 as the skip around the ViT.
 off_vit = place('vit out (ctx+0x250)', N1024)
+# MID_HOST=1: the middle section as the host runs it (FRAME_STATE Update 4/5). The ViT works on the (C=1024, H/64, W/64)
+# stage of the host's table at ctx+0x1cc (0x18002de5c), i.e. 16x28 = 448 tokens, not at the C=512 geometry.
+MID_HOST = os.environ.get('MID_HOST', '0') == '1'
+H6, W6 = stage_hw(5)
+NTOK = -(-(H6 * W6) // 64) * 64                     # ctx+0x314: H*W rounded up to 64 (0x18002e468-0x18002e47f)
+HEAD_TILES = (-(-H6 // 4)) * (-(-W6 // 4))          # ctx+0x30c (0x18002e437-0x18002e461)
+C512_TILES = (-(-H5 // 4)) * (-(-W5 // 4))          # ctx+0x308 (0x18002e3ed-0x18002e430)
+off_pooled = place('pooled (ctx+0x248)', HEAD_TILES * 8192 * 2)
+off_headb = place('head (ctx+0x250)', HEAD_TILES * 16384 * 2)
+off_tok = [place('vit tok%d (ctx+0x%x)' % (i, a), NTOK * 1024 * 2) for i, a in enumerate((0x258, 0x290))]
+
 
 # decoder mirrors the encoder: 4 stages, channels halving as the size doubles back up
 DEC_STAGES = [('256_0', list(range(48, 56)), 256), ('128_0', list(range(56, 62)), 128),
@@ -192,6 +203,7 @@ def wplace(name):
 for _b in range(23, 31):
     for _l in range(4):
         wplace('block%d_layer%d' % (_b, _l))
+wplace('block30_layer4')   # k_final_head's weight 'block30.layer4.layer' (MID_HOST, 0x18002fb0a-0x18002fb50)
 for _b in range(31, 39):
     for _l in (0, 1, 2, 4):
         wplace('block%d_layer%d' % (_b, _l))
@@ -533,10 +545,14 @@ def c512_stage(blocks, work, src_in):
                                     else (0, 0))], gq), gq, 256))
         if os.environ.get('C512_TRACE') == '1' and bi == 0:
             C512_PROBE.append(('4 qkv_attn     -> w3', work[3], len(steps)))
+        # MID_HOST: block 30 is launched with the pooled pointer (launcher 0x180033660, 6th arg = ctx+0x248 at
+        # 0x18002f9c5-0x18002f9ca), which selects k_conv_res_views with +0x38 = pooled and +0x40 = the next
+        # stage's H,W (0x180034089-0x1800340a2).
+        _pool30 = MID_HOST and blk == 30
         steps.append((CONVV, ka_for(CONVV, [(0x00, work[3]), (0x10, work[2]), (0x18, work[0]),
-                                            (0x28, L(W5L[4]))],
+                                            (0x28, L(W5L[4]))] + ([(0x38, off_pooled)] if _pool30 else []),
                                     [(0x20, '<i', (0,)), (0x30, '<ii', (H5, W5)),
-                                     (0x40, '<ii', (H5, W5))], gc), gc, 256))
+                                     (0x40, '<ii', (H6, W6) if _pool30 else (H5, W5))], gc), gc, 256))
         if os.environ.get('C512_TRACE') == '1' and bi == 0:
             C512_PROBE.append(('5 conv_res_2   -> w0', work[0], len(steps)))
         if os.environ.get('C512_TRACE') == '2' and                 str(blk) in os.environ.get('PROBE_BLOCKS', '23,24,25,26').split(','):
@@ -577,52 +593,98 @@ if stop in ('full', 'all'):
         if os.environ.get('STOP_AFTER_REPACK') != '1':
             c512_stage(range(23, 31), c512_1, c512_1[0])
 
-    # ViT blocks 31-38: six contiguous buffers, 5 dispatches each (net_vit.py, verified bit-exact)
-    # The ViT kernels are all 2-D (workgroup_id_y enabled). At (1,1) only one workgroup's tile
-    # of each buffer is written and the rest keeps block 30's output, which is why the
-    # distinct-byte counts looked healthy - most of it was passthrough.
-    g = grid_for(CONTRACT2, N1024, (H5, W5))
-    # The host dumps ctx+0x228 as 'vit512a' (0x18002fa17-0x18002fa6a) and passes it to k_dec_upsample +0x08,
-    # with the ViT's output ctx+0x250 ('vit1d') at +0x00 (0x180030509-0x180030555). The runner ran the ViT in
-    # place on c512_1[0], destroying that skip, and gave +0x08 the never-written off_b39. VIT_SEP=0 restores that.
-    # Default off: with the ViT itself mis-launched (see FRAME_STATE Update 4) its output is all zero, so VIT_SEP=1
-    # feeds block 39 a zero +0x00. Neither wiring is right until the ViT section is rebuilt from the host.
-    VIT_SEP = os.environ.get('VIT_SEP', '0') == '1'
-    BIN_ = off_vit if VIT_SEP else c512_1[0]
-    B260, B268, B270, B278, B280, B288 = vit_buf
-    for blk in range(31, 39):
-        L = lambda n: wt['block%d_layer%d' % (blk, n)][0]
-        _vin = c512_1[0] if (VIT_SEP and blk == 31) else BIN_   # block 31 reads the C=512 output, writes BIN_
-        steps.append((EXPAND2, ka_for(EXPAND2, [(0x00, _vin), (0x08, B260), (0x10, L(0))],
-                                      [], g), g, 256))
-        steps.append((CONTRACT2, ka_for(CONTRACT2, [(0x00, B260), (0x08, _vin), (0x10, B268),
-                                                    (0x18, L(1))],
-                                        [(0x20, '<ii', (H5, W5)), (0x28, '<i', (4,))], g), g, 256))
-        steps.append((QKV2, ka_for(QKV2, [(0x00, B268), (0x08, B270), (0x10, B278), (0x18, B280),
-                                          (0x20, L(2))], [], g), g, 256))
-        steps.append((ATTN2, ka_for(ATTN2, [(0x00, B270), (0x08, B278), (0x10, B280), (0x18, B288)],
-                                    [(0x20, '<ii', (W5, H5))], g), g, 256))
-        # +0x08 is ctx+0x268, step 2's output - net_vit.py:120 passes B268 here and passes its
-        # difftest. B270 is k_qkv2's first output, so the block's second contract input was
-        # taking the QKV projection instead of the post-FFN activation, in all eight blocks.
-        steps.append((CONTRACT2, ka_for(CONTRACT2, [(0x00, B288), (0x08, B268), (0x10, BIN_),
-                                                    (0x18, L(4))],
-                                        [(0x20, '<ii', (H5, W5)), (0x28, '<i', (4,))], g), g, 256))
+    if MID_HOST:
+        # Host middle section, 0x18002fa17-0x1800305b8. Pointers named by their ctx slot.
+        B260, B268, B270, B278, B280, B288 = vit_buf
+        L30_4 = wt['block30_layer4'][0]
+        # k_final_head: ctx+0x248 'pooled' -> ctx+0x250 'head', weight 'block30.layer4.layer', grid (ctx[0x30c],1,1)
+        # (0x18002fa90-0x18002fbbf)
+        g_h = (HEAD_TILES, 1)
+        steps.append((HEAD, ka_for(HEAD, [(0x00, off_pooled), (0x08, off_headb), (0x10, L30_4)], [], g_h), g_h, 256))
+        # k_repack forward: ctx+0x250 -> ctx+0x258, +0x10 (H6,W6) from [rbp+0x4a4], +0x18 ctx[0x314], +0x1c 1,
+        # grid (256,1,1) (0x18002fc31-0x18002fcfe)
+        g_r = (256, 1)
+        steps.append((REPACK, ka_for(REPACK, [(0x00, off_headb), (0x08, off_tok[0])],
+                                     [(0x10, '<iiii', (H6, W6, NTOK, 1))], g_r), g_r, 256))
+        # ViT blocks 31-38 (0x18002fd47-0x1800303a0): in/out ping-pong ctx+0x258 / ctx+0x290, swapped at the loop head.
+        gy32, gy8 = (NTOK // 64, 32), (NTOK // 64, 8)
+        vin, vout = off_tok
+        for blk in range(31, 39):
+            L = lambda n: wt['block%d_layer%d' % (blk, n)][0]
+            # k_expand2 (0x18002fda7-0x18002fe68): in -> ctx+0x260, layer 0, grid (ntok/64, 32)
+            steps.append((EXPAND2, ka_for(EXPAND2, [(0x00, vin), (0x08, B260), (0x10, L(0))], [], gy32), gy32, 256))
+            # k_contract2 (0x18002fe85-0x18002ff83): ctx+0x260, in, -> ctx+0x268, layer 1, +0x20 (4096, 4096*1024),
+            # +0x28 4, grid (ntok/64, 8)
+            steps.append((CONTRACT2, ka_for(CONTRACT2, [(0x00, B260), (0x08, vin), (0x10, B268), (0x18, L(1))],
+                                            [(0x20, '<ii', (4096, 4096 * 1024)), (0x28, '<i', (4,))], gy8), gy8, 256))
+            # k_qkv2 (0x18002ffa0-0x180030070): ctx+0x268 -> 0x270/0x278/0x280, layer 2, grid (ntok/64, 32)
+            steps.append((QKV2, ka_for(QKV2, [(0x00, B268), (0x08, B270), (0x10, B278), (0x18, B280),
+                                              (0x20, L(2))], [], gy32), gy32, 256))
+            # k_attention2 (0x18003008d-0x18003015d): 0x270/0x278/0x280 -> 0x288, +0x20 = ctx+0x310 pshufd'd
+            # (ntok, H6*W6), grid (ntok/64, 32)
+            steps.append((ATTN2, ka_for(ATTN2, [(0x00, B270), (0x08, B278), (0x10, B280), (0x18, B288)],
+                                        [(0x20, '<ii', (NTOK, H6 * W6))], gy32), gy32, 256))
+            # k_contract2 (0x18003017a-0x180030278): ctx+0x288, ctx+0x268 -> out, layer 4, +0x20 (1024, 1024*1024),
+            # +0x28 4, grid (ntok/64, 8)
+            steps.append((CONTRACT2, ka_for(CONTRACT2, [(0x00, B288), (0x08, B268), (0x10, vout), (0x18, L(4))],
+                                            [(0x20, '<ii', (1024, 1024 * 1024)), (0x28, '<i', (4,))], gy8), gy8, 256))
+            vin, vout = vout, vin
+        # k_repack back: last output -> ctx+0x250, same dims, +0x1c 0, grid (256,1,1) (0x1800303a0-0x18003046a)
+        steps.append((REPACK, ka_for(REPACK, [(0x00, vin), (0x08, off_headb)],
+                                     [(0x10, '<iiii', (H6, W6, NTOK, 0))], g_r), g_r, 256))
+        # k_dec_upsample (0x180030509-0x1800305b8): +0x00 ctx+0x250, +0x08 ctx+0x228 (vit512a = C=512 output),
+        # +0x10 ctx+0x298, +0x18 block 39, +0x20 [rbp+0x544] = (H5,W5), grid (ctx[0x308],1,1)
+        g_du = (C512_TILES, 1)
+        steps.append((DECUP, ka_for(DECUP, [(0x00, off_headb), (0x08, c512_1[0]), (0x10, c512_2[0]),
+                                            (0x18, wt['block39'][0])],
+                                    [(0x20, '<ii', (H5, W5))], g_du), g_du, 256))
+    else:
+        # ViT blocks 31-38: six contiguous buffers, 5 dispatches each (net_vit.py, verified bit-exact)
+        # The ViT kernels are all 2-D (workgroup_id_y enabled). At (1,1) only one workgroup's tile
+        # of each buffer is written and the rest keeps block 30's output, which is why the
+        # distinct-byte counts looked healthy - most of it was passthrough.
+        g = grid_for(CONTRACT2, N1024, (H5, W5))
+        # The host dumps ctx+0x228 as 'vit512a' (0x18002fa17-0x18002fa6a) and passes it to k_dec_upsample +0x08,
+        # with the ViT's output ctx+0x250 ('vit1d') at +0x00 (0x180030509-0x180030555). The runner ran the ViT in
+        # place on c512_1[0], destroying that skip, and gave +0x08 the never-written off_b39. VIT_SEP=0 restores that.
+        # Default off: with the ViT itself mis-launched (see FRAME_STATE Update 4) its output is all zero, so VIT_SEP=1
+        # feeds block 39 a zero +0x00. Neither wiring is right until the ViT section is rebuilt from the host.
+        VIT_SEP = os.environ.get('VIT_SEP', '0') == '1'
+        BIN_ = off_vit if VIT_SEP else c512_1[0]
+        B260, B268, B270, B278, B280, B288 = vit_buf
+        for blk in range(31, 39):
+            L = lambda n: wt['block%d_layer%d' % (blk, n)][0]
+            _vin = c512_1[0] if (VIT_SEP and blk == 31) else BIN_   # block 31 reads the C=512 output, writes BIN_
+            steps.append((EXPAND2, ka_for(EXPAND2, [(0x00, _vin), (0x08, B260), (0x10, L(0))],
+                                          [], g), g, 256))
+            steps.append((CONTRACT2, ka_for(CONTRACT2, [(0x00, B260), (0x08, _vin), (0x10, B268),
+                                                        (0x18, L(1))],
+                                            [(0x20, '<ii', (H5, W5)), (0x28, '<i', (4,))], g), g, 256))
+            steps.append((QKV2, ka_for(QKV2, [(0x00, B268), (0x08, B270), (0x10, B278), (0x18, B280),
+                                              (0x20, L(2))], [], g), g, 256))
+            steps.append((ATTN2, ka_for(ATTN2, [(0x00, B270), (0x08, B278), (0x10, B280), (0x18, B288)],
+                                        [(0x20, '<ii', (W5, H5))], g), g, 256))
+            # +0x08 is ctx+0x268, step 2's output - net_vit.py:120 passes B268 here and passes its
+            # difftest. B270 is k_qkv2's first output, so the block's second contract input was
+            # taking the QKV projection instead of the post-FFN activation, in all eight blocks.
+            steps.append((CONTRACT2, ka_for(CONTRACT2, [(0x00, B288), (0x08, B268), (0x10, BIN_),
+                                                        (0x18, L(4))],
+                                            [(0x20, '<ii', (H5, W5)), (0x28, '<i', (4,))], g), g, 256))
 
-        if os.environ.get('C512_TRACE') == '2' and os.environ.get('PROBE_VIT') == '1':
-            C512_PROBE.append(('after ViT %-5d -> BIN' % blk, BIN_, len(steps)))
+            if os.environ.get('C512_TRACE') == '2' and os.environ.get('PROBE_VIT') == '1':
+                C512_PROBE.append(('after ViT %-5d -> BIN' % blk, BIN_, len(steps)))
 
-    # block 39: the real k_dec_upsample, not the k_ffwd_inpview stand-in net_full.py uses
-    # k_dec_upsample (disassembly): +0x00 read tile-wise, +0x08 read linearly (wg*8192), +0x10 WRITTEN (wg*8192,
-    # the only global store), +0x18 weights; +0x20 is TWO i32 (s2, s3; s4 = s3/4 = tiles per row), not a pointer.
-    # 1-D (workgroup_id_y disabled), 8192 B of output per workgroup.
-    _dd = [int(x) for x in os.environ.get('DECUP_DIMS', '%d,%d' % (H5, W5)).split(',')]
-    _skip39 = c512_1[0] if VIT_SEP else off_b39
-    _dout, _dskip = (_skip39, c512_2[0]) if os.environ.get('DECUP_SWAP') == '1' else (c512_2[0], _skip39)
-    g_du = (int(os.environ.get('DECUP_GRID', str(-(-N512 // 8192)))), 1)
-    steps.append((DECUP, ka_for(DECUP, [(0x00, BIN_), (0x08, _dskip), (0x10, _dout),
-                                        (0x18, wt['block39'][0])],
-                                [(0x20, '<ii', tuple(_dd))], g_du), g_du, 256))
+        # block 39: the real k_dec_upsample, not the k_ffwd_inpview stand-in net_full.py uses
+        # k_dec_upsample (disassembly): +0x00 read tile-wise, +0x08 read linearly (wg*8192), +0x10 WRITTEN (wg*8192,
+        # the only global store), +0x18 weights; +0x20 is TWO i32 (s2, s3; s4 = s3/4 = tiles per row), not a pointer.
+        # 1-D (workgroup_id_y disabled), 8192 B of output per workgroup.
+        _dd = [int(x) for x in os.environ.get('DECUP_DIMS', '%d,%d' % (H5, W5)).split(',')]
+        _skip39 = c512_1[0] if VIT_SEP else off_b39
+        _dout, _dskip = (_skip39, c512_2[0]) if os.environ.get('DECUP_SWAP') == '1' else (c512_2[0], _skip39)
+        g_du = (int(os.environ.get('DECUP_GRID', str(-(-N512 // 8192)))), 1)
+        steps.append((DECUP, ka_for(DECUP, [(0x00, BIN_), (0x08, _dskip), (0x10, _dout),
+                                            (0x18, wt['block39'][0])],
+                                    [(0x20, '<ii', tuple(_dd))], g_du), g_du, 256))
 
     if os.environ.get('C512_TRACE') == '2' and os.environ.get('PROBE_VIT') == '1':
         C512_PROBE.append(('after block39 -> b39', off_b39, len(steps)))
