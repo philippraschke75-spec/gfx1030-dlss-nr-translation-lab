@@ -2382,3 +2382,38 @@ NaN is real and stable:
 
 The hypotheses voided by the retraction - window tiling, `k_repack` dimensions, shifted-window
 origins - can now be re-tested and will mean something.
+
+## The geometry was wrong at every stage: the frame is PADDED to a multiple of 128
+
+This file has recorded since 2026-09-21 that the host pads the frame to a multiple of 128 in both
+dimensions (`((x+127)/128)*128`, `0x18002d3b0`) and then builds the stage table from the **padded**
+size, with stage k at `C = 32 * 2^k` and `(H, W)` halved **(k+1)** times. `net_frame_full.py`
+inferred `SRC >> k` instead - unpadded, and one halving short:
+
+| stage | C | inferred | correct |
+|---|---|---|---|
+| 0 | 32 | 1707x960 | **896x512** |
+| 1 | 64 | 853x480 | 448x256 |
+| 2 | 128 | 426x240 | 224x128 |
+| 3 | 256 | 213x120 | 112x64 |
+| 4 | 512 | 106x60 | **56x32** |
+| 5 | 1024 | 106x60 | 28x16 |
+
+Every stage ran at four times the pixel count. `ImportParams` even carries the two separately -
+`+0x10/+0x14` source, `+0x18/+0x1c` padded - and both were being given the source values.
+
+**Effect on the pre-block, immediately:**
+
+```
+before   block0 out   min -448   max 448   absmean 3.264     (pinned at the e4m3 limit)
+after    block0 out   min  -88   max  52   absmean 1.707     (no saturation at all)
+```
+
+That is the first time block 0's output has looked like activations rather than clipped noise. It
+also explains the buffer under-sizing found this morning: `act_bytes` was not wrong, it was being
+fed geometry four times too large, so the 2x multiplier was compensating for the wrong input.
+
+The full chain still runs - 170 dispatches, 364 ms, guards intact - and `k_export` writes all 960
+rows. What remains is that the **encoder** saturates: block 0 hands it absmean 1.7 and stage 1 comes
+back at absmean 27 with values pinned to +/-448. Everything downstream is constant because of that,
+not because of anything in the C=512, ViT or decoder stages.

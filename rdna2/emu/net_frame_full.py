@@ -54,6 +54,22 @@ def place(name, n, align=1 << 16):
 ELEM = int(__import__('os').environ.get('ACT_ELEM', '2'))     # activations are f16
 
 
+# The host pads the frame to a multiple of 128 in both dimensions (0x18002d3b0) and builds the
+# stage table from the padded size: stage k has C = 32 * 2^k and (H, W) halved (k+1) times with
+# truncating division. Stage 0 is therefore at PADDED/2, not at the capture resolution. Every
+# geometry here was previously inferred as SRC >> k, which is one halving short and uses the
+# unpadded size - four times the pixels at every stage.
+PAD_H, PAD_W = ((SRC_H + 127) // 128) * 128, ((SRC_W + 127) // 128) * 128
+
+
+def stage_hw(k):
+    h, w = PAD_H, PAD_W
+    for _ in range(k + 1):
+        h //= 2
+        w //= 2
+    return h, w
+
+
 def act_bytes(C, h, w):
     """C * ceil(H/4) * ceil(W/4) * 16, which counts ELEMENTS - 16 per 4x4 tile per channel.
 
@@ -65,10 +81,10 @@ def act_bytes(C, h, w):
 
 
 off_src = place('src RGBA16F', src.size)
-off_rgb = place('import RGB32F', SRC_H * SRC_W * 12)
+off_rgb = place('import RGB32F', PAD_H * PAD_W * 12)   # host allocates PADDED H*W*12
 
 # stage 1 is at render resolution; each later stage halves spatially and doubles channels
-S1 = act_bytes(32, SRC_H, SRC_W)
+S1 = act_bytes(32, *stage_hw(0))      # stage 0 is PADDED/2, not the capture size
 # act_bytes is the ACTIVATION size. +0x38, +0x48 and +0xa0 (scratch) are not activations and there
 # is no evidence they follow that formula; the verified difftest just gives every pointer field a
 # 1 MiB slot, which is ample at 64 workgroups and says nothing about 25,680. AUX_MULT scales them
@@ -97,7 +113,7 @@ ENC_MODES = [(0, 0), (-4, -4), (-4, 0), (0, -4)]
 
 stage_geom, stage_buf = [], []
 for si, (key, blocks, C) in enumerate(ENC_STAGES):
-    h, w = max(SRC_H >> si, 8), max(SRC_W >> si, 8)
+    h, w = stage_hw(si)
     n = act_bytes(C, h, w)
     stage_geom.append((h, w, C, n))
     stage_buf.append((place('enc s%d ping' % (si + 1), n), place('enc s%d pong' % (si + 1), n),
@@ -115,7 +131,7 @@ off_spare = place('spare (unused ptr fields)', S1)
 if os.environ.get('C512_HW'):
     H5, W5 = [int(x) for x in os.environ['C512_HW'].split(',')]
 else:
-    H5, W5 = max(SRC_H >> 4, 8), max(SRC_W >> 4, 8)
+    H5, W5 = stage_hw(4)               # the C=512 stage is stage 4
 N512, N1024 = act_bytes(512, H5, W5), act_bytes(1024, H5, W5)
 
 c512_1 = [place('c512_1 w%d' % i, N512) for i in range(4)]
@@ -128,13 +144,13 @@ DEC_STAGES = [('256_0', list(range(48, 56)), 256), ('128_0', list(range(56, 62))
               ('64_0', list(range(62, 66)), 64), ('32_0', list(range(66, 70)), 32)]
 dec_geom, dec_buf = [], []
 for di, (key, blocks, C) in enumerate(DEC_STAGES):
-    h, w = max(SRC_H >> (3 - di), 8), max(SRC_W >> (3 - di), 8)
+    h, w = stage_hw(3 - di)            # decoder walks the encoder's stages in reverse
     n = act_bytes(C, h, w)
     dec_geom.append((h, w, C, n))
     dec_buf.append((place('dec s%d ping' % (di + 1), n), place('dec s%d pong' % (di + 1), n),
                     place('dec s%d pool' % (di + 1), n)))
 
-off_head = place('head out', act_bytes(32, SRC_H, SRC_W))
+off_head = place('head out', act_bytes(32, *stage_hw(0)) * 4)
 off_dst = place('export dst RGBA16F', SRC_H * SRC_W * 8)
 
 wt = {}
@@ -191,13 +207,15 @@ steps = []
 # ---------------------------------------------------------------- k_import (verified at this size)
 ka = bytearray(0x130)
 struct.pack_into('<Q', ka, 0x00, BASE + off_src)
-struct.pack_into('<iiiiii', ka, 0x08, SRC_W * 8, 0, SRC_H, SRC_W, SRC_H, SRC_W)
+# +0x10/+0x14 are the source dimensions, +0x18/+0x1c the PADDED ones - they are separate
+# fields and were being given the same values.
+struct.pack_into('<iiiiii', ka, 0x08, SRC_W * 8, 0, SRC_H, SRC_W, PAD_H, PAD_W)
 struct.pack_into('<Q', ka, 0x20, BASE + off_rgb)
 # k_import's scale. The difftest feeds the pre-block RGB in [0,1); the captured frame is HDR and
 # reaches 65.12, and with the ctx exposure scalars unknown (we pass zeros) that saturates f16
 # downstream. IMPORT_SCALE exists to test whether that is what wrecks the chain.
 struct.pack_into('<if', ka, 0x28, 0, float(os.environ.get('IMPORT_SCALE', '1.0')))
-g_imp = ((SRC_W + 255) // 256, SRC_H)
+g_imp = ((PAD_W + 255) // 256, PAD_H)
 struct.pack_into('<III', ka, 0x30, g_imp[0], g_imp[1], 1)
 struct.pack_into('<HHH', ka, 0x3c, 256, 1, 1)
 steps.append((IMPORT_SYM, bytes(ka), g_imp, 256))
@@ -207,7 +225,8 @@ steps.append((IMPORT_SYM, bytes(ka), g_imp, 256))
 # null, float-RGB input at +0x40. Built by hand rather than via make_kernarg because that fills the
 # pointer fields with 1 MiB difftest slots, which are far too small at this resolution.
 PRE_SYM, PRE_LDS = D.SYMS['32_1']
-g_pre = ((SRC_W + 7) // 8, (SRC_H + 7) // 8)
+_ph, _pw = stage_hw(0)
+g_pre = ((_pw + 7) // 8, (_ph + 7) // 8)
 ka = bytearray(424)
 struct.pack_into('<Q', ka, 0x00, 0)
 struct.pack_into('<Q', ka, 0x08, BASE + off_a)              # output
@@ -216,7 +235,7 @@ struct.pack_into('<Q', ka, 0x30, 0)
 struct.pack_into('<Q', ka, 0x38, BASE + off_p38)
 struct.pack_into('<Q', ka, 0x40, BASE + off_rgb)            # float RGB from k_import
 struct.pack_into('<Q', ka, 0x48, BASE + off_p48)
-struct.pack_into('<iiii', ka, 0x18, SRC_H, SRC_W, 0, 0)
+struct.pack_into('<iiii', ka, 0x18, _ph, _pw, 0, 0)
 struct.pack_into('<I', ka, 0x28, 0x14)
 struct.pack_into('<f', ka, 0x50, 1.0)
 struct.pack_into('<Q', ka, 0xa0, BASE + off_scratch)
