@@ -574,3 +574,17 @@ difftest below.
 against the gfx1100 original in the emulator. Kernargs are packed exactly as C512_HOST=1 packs them. The
 emulator loop is 3-D, with ids in s14/s15 for ffwd2/conv_res2 and s13/s14/s15 for qkv_attn2, following each
 translated prologue. It also has STEPS/FIRST/MODE/OUT2 switches.
+
+**Difftest result (net_block512_2.py, BH=8 BW=16, block 23, first block, origin (0,0)):** every prefix has
+0 mismatches.
+
+| steps | wrote | mismatches |
+|---|---|---|
+| k_ffwd2 (grid 2,8,1) | 65,278 B | 0 |
+| + k_conv_res2 (2,4,1) | 130,580 B | 0 |
+| + k_qkv_attn2 (2,1,**16**) | 195,842 B | 0 |
+| + k_conv_res2 | 326,365 B | 0 |
+
+This run started before the +0x20 fix, so step 3's +0x20 pointed at the input slot. The optional second output
+(slot 4 in "wrote") was therefore exercised as well. **The host-default C=512 translations are bit-exact at grid > 1,
+including grid.z = 16.** Not run here: the real 32x56 size, MODE 1-3 (shifted origins) and FIRST=0.
