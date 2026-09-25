@@ -6,7 +6,7 @@ until their ABI is implemented. Assembly success is not numerical validation.
 import argparse, os as _os
 TX_DELAY=_os.environ.get('TX_DELAY','none')
 TX_WAITCNT=_os.environ.get('TX_WAITCNT','faithful')
-TX_WMMA=_os.environ.get('TX_WMMA','batched')
+TX_WMMA=_os.environ.get('TX_WMMA','dpp')
 import hashlib
 import json
 import math
@@ -170,7 +170,7 @@ def translate(name,lines,policy,md,ro,rofile,out,binpath,private_lds=False,helpe
     wide_offsets=any(t.startswith('global_') and (m:=re.search(r' offset:(-?\d+)',t)) and not -2048<=int(m[1])<=2047 for _,t,_ in lines)
     vgprs=scratch+(16 if wide_offsets else (14 if private else 12))
     # TX_WMMA=batched puts the 8 WMMA gather registers at scratch+16..+23, clear of every other scratch use.
-    wmma_batched=TX_WMMA=='batched' and any(t.startswith('v_wmma') for _,t,_ in lines)
+    wmma_batched=TX_WMMA in ('batched','dpp') and any(t.startswith('v_wmma') for _,t,_ in lines)
     if wmma_batched: vgprs=max(vgprs,scratch+24)
     if vgprs>256: raise ValueError('UNSUPPORTED: register budget exceeds 256 VGPRs')
     user_count=sum(users.values())+(2 if hw else 0)
@@ -181,6 +181,11 @@ def translate(name,lines,policy,md,ro,rofile,out,binpath,private_lds=False,helpe
     address_sgpr=(sgprs+1)//2*2
     saved_scc=address_sgpr+2
     if wide_offsets: sgprs=saved_scc+1
+    dpp_sgpr=None
+    if TX_WMMA=='dpp' and any(t.startswith('v_wmma') for _,t,_ in lines) and saved_scc+4<=106:
+        # permlanex16 selects + half-wave mask. A kernel without 3 spare SGPRs (k_conv_res2) keeps the batched
+        # LDS lowering, which is bit-identical too.
+        dpp_sgpr=saved_scc+1; sgprs=max(sgprs,dpp_sgpr+3)
     if sgprs>106: raise ValueError('UNSUPPORTED: SGPR allocation exceeds supported range')
     prefix=['.amdgcn_target "amdgcn-amd-amdhsa--gfx1030"',
             '.amdhsa_code_object_version 5','.text','.p2align 8','.Loriginal_rodata:',
@@ -204,7 +209,7 @@ def translate(name,lines,policy,md,ro,rofile,out,binpath,private_lds=False,helpe
         replacement=[text]
         if op.startswith('v_wmma'):
             if op!='v_wmma_f32_16x16x16_f16': raise ValueError('unsupported WMMA form '+op)
-            replacement=base.wmma(text,scratch,scratch+16 if wmma_batched else None)
+            replacement=base.wmma(text,scratch,scratch+16 if wmma_batched else None,dpp_sgpr)
         elif op=='s_getpc_b64': replacement=[text,f'.Lgetpc_{addr:x}:']
         elif op=='s_addc_u32' and i and lines[i-1][0] in helper_add_at:
             m=re.fullmatch(r's_addc_u32 (s\d+), (s\d+), (-1|0xffffffff)',text)
@@ -241,6 +246,7 @@ def translate(name,lines,policy,md,ro,rofile,out,binpath,private_lds=False,helpe
         # (0 deviations; WMMA expansions end in lgkmcnt(0), the prologue has no memory ops). 'safe'/'full' is
         # the old lowering (full drain + s_nop 7 per hint, full wait per s_waitcnt), kept for A/B runs.
         # Full frame: 561 -> 285-324 ms GPU with TX_WMMA=batched, bit-identical 1.4 GB arena (FRAME_STATE Update 23).
+        # TX_WMMA=dpp (default) replaces the LDS gathers with v_permlanex16 + DPP row_share (FRAME_STATE Update 24).
         elif op in ('s_delay_alu','s_waitcnt_depctr'):
             replacement={'safe':['s_waitcnt_depctr 0','s_nop 7'],'none':[],'nop0':['s_nop 0']}[TX_DELAY]
         elif op=='s_waitcnt':
