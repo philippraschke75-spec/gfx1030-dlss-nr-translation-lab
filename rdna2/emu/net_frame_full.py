@@ -1081,21 +1081,27 @@ for sym, k, grid, thr in steps[SKIP:]:
     lines.append(line)
 (OUT / 'manifest.txt').write_text('\n'.join(lines) + '\n')
 (OUT / 'kernargs.bin').write_bytes(blob)
-(OUT / 'arena.bin').write_bytes(arena.tobytes())
+# REUSE_ARENA=<file>: skip the GPU run and analyse a saved post-run arena instead (same env, so the same
+# buffer offsets). For iterating on the probes below without re-running the frame. Nothing is dispatched.
+_reuse = os.environ.get('REUSE_ARENA')
+if not _reuse:
+    (OUT / 'arena.bin').write_bytes(arena.tobytes())
 
-print('=== dispatches ===')
-for l in lines:
-    f = l.split('|')
-    print('  %-44s grid %sx%s' % (f[1], f[4], f[5]))
+    print('=== dispatches ===')
+    for l in lines:
+        f = l.split('|')
+        print('  %-44s grid %sx%s' % (f[1], f[4], f[5]))
 
-r = subprocess.run([str(RUN), str(OUT / 'manifest.txt'), str(OUT / 'kernargs.bin'),
-                    str(OUT / 'arena.bin'), '%x' % BASE], capture_output=True, text=True, timeout=1800)
-msg = ((r.stdout or '') + (r.stderr or '')).strip()
-print('\n' + msg)
-if r.returncode != 0:
-    raise SystemExit(1)
+    r = subprocess.run([str(RUN), str(OUT / 'manifest.txt'), str(OUT / 'kernargs.bin'),
+                        str(OUT / 'arena.bin'), '%x' % BASE], capture_output=True, text=True, timeout=1800)
+    msg = ((r.stdout or '') + (r.stderr or '')).strip()
+    print('\n' + msg)
+    if r.returncode != 0:
+        raise SystemExit(1)
+else:
+    print('REUSE_ARENA=%s: no dispatch, analysing a saved arena' % _reuse)
 
-res = np.fromfile(OUT / 'arena.bin', np.uint8)
+res = np.fromfile(_reuse or (OUT / 'arena.bin'), np.uint8)
 
 
 def e4m3(b):
@@ -1245,22 +1251,49 @@ if stop in ('full', 'all'):
             fy, fx = PAD_H // h, PAD_W // w
             return L[:h * fy, :w * fx].reshape(h, fy, w, fx).mean(axis=(1, 3)), fy
 
+        # Candidate byte layouts, each mapped to (C, h, w). NCHW16c is the one proven by the 16-impulse probe
+        # (FRAME_STATE, corrections). The tile layouts are candidates for buffers where NCHW16c reads ~0 while
+        # the pool computed from them reads ~1 (Update 3), and for the C=512 stage (one 4x4 tile x 512 ch
+        # = 8192 B per workgroup). STRUCT_LAYOUTS=all tries every one; the right layout is the one that
+        # sees the image, since a wrong layout scrambles pixels and destroys spatial correlation.
+        _LAYOUTS = {
+            'nchw16c':    lambda b, C, h, w: b.reshape(C // 16, h, w, 16).transpose(0, 3, 1, 2),
+            'cb_t4_c16':  lambda b, C, h, w: b.reshape(C // 16, h // 4, w // 4, 4, 4, 16).transpose(0, 5, 1, 3, 2, 4),
+            'tile_c_pix': lambda b, C, h, w: b.reshape(h // 4, w // 4, C, 4, 4).transpose(2, 0, 3, 1, 4),
+            'tile_pix_c': lambda b, C, h, w: b.reshape(h // 4, w // 4, 4, 4, C).transpose(4, 0, 2, 1, 3),
+            'tile_cb_pix_c16': lambda b, C, h, w: b.reshape(h // 4, w // 4, C // 16, 4, 4, 16).transpose(2, 5, 0, 3, 1, 4),
+        }
+        _lay_sel = os.environ.get('STRUCT_LAYOUTS', 'nchw16c')
+        _lay_sel = list(_LAYOUTS) if _lay_sel == 'all' else _lay_sel.split(',')
+        _maxch = int(os.environ.get('STRUCT_MAXCH', '64'))   # channels sampled per buffer (speed)
+
         def _probe(name, off, h, w, C):
             n = C * h * w
-            v = e4m3(res[off:off + n]).astype(np.float32)
-            v = np.nan_to_num(v).reshape(C // 16, h, w, 16).transpose(0, 3, 1, 2).reshape(C, h, w)
+            raw = np.nan_to_num(e4m3(res[off:off + n]).astype(np.float32))
             L, f = _lum_at(h, w)
             vy, vx = min(h, -(-SRC_H // f)), min(w, -(-SRC_W // f))   # valid (unpadded) region
             bl = _band(L)[:vy, :vx].ravel(); bl = (bl - bl.mean()) / max(bl.std(), 1e-12)
-            rs = []
-            for c in range(C):
-                bc = _band(v[c])[:vy, :vx].ravel()
-                s = bc.std()
-                rs.append(0.0 if s < 1e-12 else float(np.dot(bl, (bc - bc.mean()) / s) / bl.size))
-            rs = np.abs(np.array(rs))
-            print('  %-22s %4dx%-4d C=%-4d best|r|=%.3f (ch %3d)  ch>0.2: %5.1f%%  dead ch: %d'
-                  % (name, h, w, C, rs.max(), int(rs.argmax()), 100.0 * float((rs > 0.2).mean()),
-                     int(sum(1 for c in range(C) if v[c].std() < 1e-12))))
+            chs = np.unique(np.linspace(0, C - 1, min(C, _maxch)).astype(int))
+            for lay in _lay_sel:
+                try:
+                    v = _LAYOUTS[lay](raw, C, h, w).reshape(C, h, w)
+                except ValueError:
+                    print('  %-22s %-15s n/a for %dx%d' % (name, lay, h, w)); continue
+                rs, p8 = [], []
+                for c in chs:
+                    bc = _band(v[c])[:vy, :vx].ravel()
+                    s = bc.std()
+                    rs.append(0.0 if s < 1e-12 else float(np.dot(bl, (bc - bc.mean()) / s) / bl.size))
+                    # ph8: share of the column profile's variance that is periodic in x mod 8 (the output's
+                    # stripe period, in this buffer's own pixels). ~8/width for no periodicity, 1 for pure.
+                    m = v[c][:vy, :vx].mean(axis=0); m = m - m.mean(); tv = float((m * m).mean())
+                    if tv > 1e-20 and vx >= 16:
+                        ph = np.array([m[k::8].mean() for k in range(8)])
+                        p8.append(float((ph * ph).mean()) / tv)
+                rs = np.abs(np.array(rs))
+                print('  %-22s %-15s %4dx%-4d C=%-4d best|r|=%.3f (ch %3d)  ch>0.2: %5.1f%%  ph8(med)=%.3f'
+                      % (name, lay, h, w, C, rs.max(), int(chs[rs.argmax()]), 100.0 * float((rs > 0.2).mean()),
+                         float(np.median(p8)) if p8 else float('nan')))
 
         print('\n=== structure probe (band-passed corr with input luminance) ===')
         for si, (key, blocks, C) in enumerate(ENC_STAGES):
@@ -1271,6 +1304,12 @@ if stop in ('full', 'all'):
                            w if _nm != 'pool' else w // 2, C)
                 except Exception as e:
                     print('  enc s%d %s: %s' % (si + 1, _nm, e))
+        for _nm, _bufs in (('c512_1', c512_1), ('c512_2', c512_2)):
+            for i, _o in enumerate(_bufs):
+                try:
+                    _probe('%s w%d' % (_nm, i), _o, H5, W5, 512)
+                except Exception as e:
+                    print('  %s w%d: %s' % (_nm, i, e))
         for di, (_k, _b, C) in enumerate(DEC_STAGES):
             h, w, C, n = dec_geom[di]
             for _nm, _o in zip(('ping', 'pong'), dec_buf[di][:2]):
