@@ -620,7 +620,7 @@ and a real output pitch, so the packing net_frame_full.py actually uses is exerc
 
 **Result: PASS, 0 mismatches at every (mode, +0x28, hist) combination**, including `mode=0, +0x28=0, hist=0` -
 the exact fields `net_frame_full.py`'s default (`EXPORT_MODE=0`, `EXP_HIST=0`) packs. The only non-PASS rows are
-`+0x28=1` at modes 5/7/8 (RGBA16F path), which differ by up to 9 ULP in f32 words - `+0x28=1` takes the branch
+`+0x28=1` at modes 5/7/8 (f32 path, 16 B/pixel; only mode 0 is RGBA16F), which differ by up to 9 ULP in f32 words - `+0x28=1` takes the branch
 that runs `v_exp_f32` (hardware-approximate transcendental, ~1 ULP per the ISA; the emulator computes it exactly),
 consistent with the same tolerance already documented and accepted for other kernels in this project. Not a defect.
 
@@ -648,3 +648,36 @@ labels `.Lpc_1bd00`/`.Lpc_2bd00` elsewhere in the same file - looks like a 3x-du
 project's difftests exercised this computed-jump pattern, so this may be a genuine `gfx11emu.py` gap (addr2i not
 covering everything the loader should have decoded) rather than a translation defect - not yet determined.
 Handed to the terminal session for the disassembly-level dig.
+
+## Update 18: post_block and k_pre_block_1h_32_fp8 difftested - Update 17's "emulator gap" was the fixture
+
+Update 17's `KeyError: 48384` is not a gfx11emu.py gap and not a PC miscount. 0xbd00 is
+`_Z10swin_layerR7SwinLDSPKhRK10BlobLayouti`, the only non-kernel function in the image, which the pre and post
+blocks call through `s_getpc_b64 / s_add_u32 / s_swappc_b64` (pre: 0x2fc94-0x2fcd4). `.Lpc_bd00` names that
+original address. `kernelspec.emulate` loaded only the kernel's own symbol, so the target was not in `addr2i`.
+
+Two fixture fixes in `kernelspec.py`:
+1. Load `swin_layer` after the kernel (`prog[0]` is the entry, so the kernel must come first).
+2. Kernels whose descriptor has `.amdhsa_user_sgpr_dispatch_ptr 1` (pre and post block) get a modeled AQL
+   packet in s[0:1], with the kernarg in s[2:3]. Before, s[0:1] was the kernarg too, and these kernels read the
+   workgroup size from the packet right before the call (post: 0x30eac, pre: 0x2fc2c `s_load_b64 s[0:1], s[0:1], 0x4`).
+   The crash had hidden this. Kernels with dispatch_ptr 0 are unchanged (ffwd2 still PASS).
+
+`difftest_pre.py` had the same entry-point bug (it loaded swin_layer and kernel together, and swin_layer comes
+first in the file). It faulted at 0xbd08 on every run, including the committed version, so it had never
+produced a result. Also fixed there: hidden args at +0x50/+0x5c/+0x90 per the metadata (they were packed at
++0x58/+0x64 in a 0x100 B kernarg), and the host scalars net_frame_full.py packs (+0x20=0.0625, +0x48=(1,1),
++0x40=null) as defaults.
+
+| test (sandbox import-real-20260922) | result |
+|---|---|
+| difftest_pre 8x8 / 16x16 (seeds 1, 2) / 32x32 | PASS, 0 |
+| difftest_pre 16x16 with +0x40 = random slot / +0x20=0 / old guesses (1.0; 0,0) | PASS, 0 (each output differs) |
+| difftest_spec post_block_const | PASS, 0 |
+| difftest_spec post_block (random e4m3 inputs) | FAIL, 3072 B: emulator writes f32 qNaN, GPU writes 0 |
+| same, e4m3 NaN codes 0x7f/0xff removed from slots 0/1 | PASS, 0 |
+| difftest_spec ffwd2 (dispatch_ptr 0 control) | PASS, 0 |
+
+So the translations of both kernels are verified on finite inputs. The one divergence is how an e4m3 NaN input
+propagates. Whether the emulator or the gfx1030 translation matches real gfx1100 hardware there cannot be
+settled without that hardware. It only matters if the frame ever produces NaN activations.
