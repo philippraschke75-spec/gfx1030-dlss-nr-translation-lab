@@ -681,11 +681,14 @@ if stop in ('full', 'all'):
     # 16384 B/workgroup is the figure derived for k_final_head, not for k_repack. REPACK_WG
     # lets the real per-workgroup span be found by measurement.
     g_rp = grid_for(REPACK, N512, per_wg=int(os.environ.get('REPACK_WG', '16384')))
-    # NO_REPACK=1 drops the k_repack dispatch and feeds block 23 the encoder's own stage-4 pool
-    # directly (PLAN F7: C:230, C:865-867 - the launcher's 3rd argument is block 22's fused pool,
-    # not a repack output). The period-4 column artefact first appears at c512_1 w0, one dispatch
-    # after the clean enc s4 pool, so this is its sharpest test.
-    if os.environ.get('NO_REPACK') == '1':
+    # The host feeds block 23 the encoder's stage-4 pool directly: no k_repack here. The launcher's 3rd
+    # argument (r8, 0x18002f9f0 cmove for edi==0x17) is [rbp+0x630] = ctx+0x1f8[k] (0x18002f846/0x18002f84e),
+    # and between 0x18002f800 and the launcher call 0x18002fa0b no k_repack handle (0x1800663e0) is
+    # referenced. The only k_repack in the "enc -> mid" range is 0x18002fcfe, AFTER the C=512 stage and
+    # k_final_head - the pre-ViT repack MID_HOST already runs. The extra repack scrambled every
+    # pixel: impulse lift at c512_1 w0 1.26 -> 3.72, S_mid +0.7106 -> +0.8912 (FRAME_STATE Update 20).
+    # Default is now the host's. REPACK_ENC=1 restores the old extra repack; NO_REPACK=1 is kept as alias.
+    if os.environ.get('REPACK_ENC') != '1' or os.environ.get('NO_REPACK') == '1':
         REPACK_END = len(steps)
         c512_stage(range(23, 31), c512_1, stage_buf[3][2])
     else:
@@ -949,6 +952,11 @@ if stop in ('full', 'all'):
 # stage can be tested with an input that is identical in every run. FIX_IN_SAVE=<file> writes that input.
 SKIP = 0
 if os.environ.get('FIX_IN_LOAD') and stop in ('full', 'all'):
+    # Saved fixtures are k_repack outputs placed in c512_1[0]. Without the (non-host) encoder repack the
+    # stage reads the encoder pool instead, so loading one there would silently do nothing.
+    if os.environ.get('REPACK_ENC') != '1' or os.environ.get('NO_REPACK') == '1':
+        raise SystemExit('FIX_IN_LOAD needs REPACK_ENC=1: the fixtures are k_repack outputs, and the default '
+                         'no longer runs that repack (FRAME_STATE Update 20)')
     SKIP = REPACK_END
     _fx = np.fromfile(os.environ['FIX_IN_LOAD'], np.uint8)
     assert _fx.size == N512, (_fx.size, N512)
@@ -1262,12 +1270,48 @@ if stop in ('full', 'all'):
             'tile_c_pix': lambda b, C, h, w: b.reshape(h // 4, w // 4, C, 4, 4).transpose(2, 0, 3, 1, 4),
             'tile_pix_c': lambda b, C, h, w: b.reshape(h // 4, w // 4, 4, 4, C).transpose(4, 0, 2, 1, 3),
             'tile_cb_pix_c16': lambda b, C, h, w: b.reshape(h // 4, w // 4, C // 16, 4, 4, 16).transpose(2, 5, 0, 3, 1, 4),
+            # the same tile orders with tiles enumerated column-major (x outer), in case the grid walks x fastest
+            'tileT_c_pix': lambda b, C, h, w: b.reshape(w // 4, h // 4, C, 4, 4).transpose(2, 1, 3, 0, 4),
+            'tileT_pix_c': lambda b, C, h, w: b.reshape(w // 4, h // 4, 4, 4, C).transpose(4, 1, 2, 0, 3),
         }
+        # IMPULSE_BASE=<arena> (with REUSE_ARENA=<impulse arena>, IMPULSE_CELLS='y,x;y,x;...' in 32-px cells of
+        # the padded frame): instead of correlating with luminance, map |impulse - base| per pixel under each
+        # layout and report how much of that energy lands near the impulse centres ('in') against the area
+        # those neighbourhoods cover ('area'). lift = in/area: ~1 means scattered (wrong layout, or no spatial
+        # signal left), >>1 means the footprint sits where the impulses were.
+        _ib = os.environ.get('IMPULSE_BASE')
+        _base = np.fromfile(_ib, np.uint8) if _ib else None
+        _cells = [tuple(int(t) for t in c.split(',')) for c in os.environ.get('IMPULSE_CELLS', '').split(';') if c]
         _lay_sel = os.environ.get('STRUCT_LAYOUTS', 'nchw16c')
         _lay_sel = list(_LAYOUTS) if _lay_sel == 'all' else _lay_sel.split(',')
         _maxch = int(os.environ.get('STRUCT_MAXCH', '64'))   # channels sampled per buffer (speed)
 
+        def _impulse(name, off, h, w, C):
+            n = C * h * w
+            d = np.abs(np.nan_to_num(e4m3(res[off:off + n]).astype(np.float32))
+                       - np.nan_to_num(e4m3(_base[off:off + n]).astype(np.float32)))
+            f = PAD_H // h
+            yy, xx = np.mgrid[0:h, 0:w]
+            rad = max(1.5, 0.08 * w)                       # neighbourhood radius in this buffer's pixels
+            mask = np.zeros((h, w), bool)
+            for cy, cx in _cells:
+                mask |= (yy - (cy * 32 + 16) / f) ** 2 + (xx - (cx * 32 + 16) / f) ** 2 <= rad * rad
+            area = float(mask.mean())
+            for lay in _lay_sel:
+                try:
+                    E_ = _LAYOUTS[lay](d, C, h, w).reshape(C, h, w).sum(axis=0)
+                except ValueError:
+                    print('  %-22s %-15s n/a for %dx%d' % (name, lay, h, w)); continue
+                tot = float(E_.sum())
+                if tot <= 0:
+                    print('  %-22s %-15s no difference at all' % (name, lay)); continue
+                inn = float(E_[mask].sum()) / tot
+                print('  %-22s %-15s %4dx%-4d changed=%5.1f%%  in=%.3f area=%.3f lift=%5.2f'
+                      % (name, lay, h, w, 100.0 * float((d != 0).mean()), inn, area, inn / max(area, 1e-9)))
+
         def _probe(name, off, h, w, C):
+            if _base is not None:
+                return _impulse(name, off, h, w, C)
             n = C * h * w
             raw = np.nan_to_num(e4m3(res[off:off + n]).astype(np.float32))
             L, f = _lum_at(h, w)

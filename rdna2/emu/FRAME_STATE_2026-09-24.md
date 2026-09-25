@@ -693,3 +693,36 @@ it reports on. Both now default to 1; `C512_HOST=0`/`MID_HOST=0` still restore t
 No other env-var default in this file was found inconsistent with FRAME_STATE's "Fixed this session" table
 (`PRE_FULL`, `PRE_1H`, `DEC_LAST2`, `DEC_SKIP`, `DEC_PTRA`, `SKIP_PARITY`, `DEC_FLAGS` all already default to
 their documented-correct value).
+
+## Update 20: the encoder -> C=512 k_repack is not the host's - removing it lifts S_mid +0.711 -> +0.891
+
+**Localisation.** `STRUCT_PROBE` with `IMPULSE_BASE` (flat 0.2 grey vs the same frame with five 16x16 squares at 32-px
+cells (4,6) (4,40) (16,23) (26,10) (26,48)) maps |impulse - flat| per buffer under 7 candidate layouts and reports
+`lift` = share of the change within the impulse neighbourhoods / their area (1 = scattered). The layout that gives a
+compact footprint is the buffer's layout, and the first buffer where no layout does is where locality is lost.
+
+* Layouts, now settled by footprint: encoder pools and decoder pongs are `nchw16c` (as documented); encoder ping/pong
+  are 4x4-tile-major (`tile_c_pix`: [ty][tx][C][16 px]) - their old R^2 ~ 0 was the probe's layout, not lost signal;
+  the C=512 buffers are `tile_c_pix` too (one 4x4 tile x 512 ch = 8192 B per workgroup).
+* With the runner's default, lift is 5.7 -> 3.9 through the encoder (enc s4 pool 3.92) and **1.26 at c512_1 w0**, in
+  every layout: the pixels are scrambled one dispatch after the clean pool. That dispatch was the encoder `k_repack`.
+
+**Host read (`version.dll`).** Block 23's input is the launcher's 3rd argument, `r8 = [rbp+0x630]` only for
+edi == 0x17 (`0x18002f9ea mov r8d,0` / `0x18002f9f0 cmove r8,[rbp+0x630]`), and `[rbp+0x630] = ctx+0x1f8[rbx]`
+(`0x18002f846 mov rax,[r13+rbx*8+0x1f8]` / `0x18002f84e`) - the encoder's stage-4 pool. From 0x18002f800 to the
+launcher call at 0x18002fa0b the k_repack handle (0x1800663e0) is never referenced. The only k_repack in the
+"enc -> mid" phase is `0x18002fcfe`, after the C=512 stage and after k_final_head: the pre-ViT repack that MID_HOST
+already runs. The phase table's "enc -> mid: k_repack, k_final_head" (VARPARAMS 609/2018) was read as a repack
+before block 23; it is the one before the ViT.
+
+**Result**, same frame, only the encoder repack dropped (`NO_REPACK=1`, now the default; `REPACK_ENC=1` restores it):
+
+| | S_mid | S_fine | lag8 | c512_1 w0 lift |
+|---|---|---|---|---|
+| with encoder k_repack (before) | +0.7106 | +0.6844 | +0.98 | 1.26 |
+| host: pool fed directly | **+0.8912** | **+0.8853** | +0.98 | **3.72** |
+
+The rendered frame is now clearly the scene. Still wrong: dark square blocks roughly one C=512 cell (32 px) to two
+cells in size, a blue/magenta cast in places, and the 8-px column periodicity (lag8 unchanged at 0.98). After the
+ViT the footprint spreads (lift ~1.5 from c512_2 on), which global attention allows, so it does not by itself
+point at a defect. `FIX_IN_LOAD` fixtures are k_repack outputs and now require `REPACK_ENC=1`.
