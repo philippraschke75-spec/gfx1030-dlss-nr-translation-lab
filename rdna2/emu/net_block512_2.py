@@ -18,6 +18,10 @@ env: BH, BW   geometry (default 32, 56 = stage_hw(4) at 1707x960)
      MODE     shift-window mode 0..3 -> origin ENC_MODES[MODE] (default 0, block 23)
      BLOCK    weights to use (default 23)
 
+Exit status: 1 if this run failed, else coverage_guard's verdict over build/coverage/net_block512_2.json:
+0 only once all four origins have a PASS under the current code (full chain, 32x56, FIRST=1), 2 while any
+origin is missing or stale. Each run prints its own result and then the counted verdict.
+
 usage: net_block512_2.py
 """
 import sys, re, struct, subprocess, os
@@ -25,6 +29,7 @@ from pathlib import Path
 import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gfx11emu as E, run_emu as R, run_var as V, difftest_var as D, kernelspec as K
+import coverage_guard as CG
 
 BLOCK = int(os.environ.get('BLOCK', '23'))
 H = int(os.environ.get('BH', '32'))
@@ -170,4 +175,16 @@ for upto in range(1, len(STEPS) + 1):
              'PASS' if good else 'FAIL'))
     if not good:
         break
-raise SystemExit(0 if ok else 1)
+
+# Counted coverage: "the C=512 stage is bit-exact" needs the full chain at every shift-window origin,
+# at the frame's geometry. A run with fewer steps, another geometry or OUT2 records its own key and
+# never fills a required slot. The verdict below refuses PASS until all four origins have a current PASS.
+_combo = dict(MODE=int(os.environ.get('MODE', '0')), FIRST=int(FIRST), STEPS=','.join(map(str, STEPS)),
+              BH=H, BW=W, BLOCK=BLOCK, OUT2=os.environ.get('OUT2', '0'))
+cov = CG.Coverage('net_block512_2',
+                  required=[dict(MODE=m, FIRST=1, STEPS='0,1,2,3', BH=32, BW=56, BLOCK=23, OUT2='0') for m in range(4)],
+                  fingerprint_files=[__file__, E.__file__, R.DIS] + [MOD(s) for s in (FFWD2, CONV2, QKVA2)])
+cov.record(_combo, 'PASS' if ok else 'FAIL')
+print('this run: %s -> %s' % (_combo, 'PASS' if ok else 'FAIL'))
+_v = cov.verdict()
+raise SystemExit(1 if not ok else _v)
