@@ -527,8 +527,11 @@ def c512_stage(blocks, work, src_in):
     # in the per-block launcher (0x180033660) is gated on byte [0x18009b208] = atoi(getenv(
     # 'VIT512_OLD')), 0 when unset. This runner used to dispatch the VIT512_OLD=1 kernels
     # (k_ffwd_inpview/k_conv_res_views/k_qkv_attn) unconditionally - not the host's default.
-    # C512_HOST=0 restores that old (wrong-by-default) path for comparison.
-    if os.environ.get('C512_HOST', '0') != '1':
+    # C512_HOST=0 restores that old (wrong-by-default) path for comparison. Defaults to 1: the
+    # C=512 stage is now fully difftested (net_block512_2.py, all 4 shift-window origins, 0
+    # mismatches - FRAME_STATE Updates 15/16) and scores higher (S_mid +0.71 vs +0.53 for the
+    # old kernels).
+    if os.environ.get('C512_HOST', '1') != '1':
         _c512_stage_old(blocks, work, src_in)
         return
     T = (-(-H5 // 4)) * (-(-W5 // 4))              # ctx[0x308]
@@ -797,7 +800,7 @@ if stop in ('full', 'all'):
     # inside block 48's own k_swin_var call, not in a separate kernel. The second
     # k_dec_upsample was also running on block48's k_swin_var weight record.
     # C512_HOST: the decoder reads ctx+0x2a0 (0x180030849), block 47's second output, not ctx+0x228.
-    stage_in = off_2a0 if os.environ.get('C512_HOST', '0') == '1' else c512_2[0]
+    stage_in = off_2a0 if os.environ.get('C512_HOST', '1') == '1' else c512_2[0]
 
     # decoder blocks 48-69, the encoder mirrored
     for di, (key, blocks, C) in enumerate(DEC_STAGES):
