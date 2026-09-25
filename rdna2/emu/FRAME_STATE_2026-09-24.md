@@ -819,5 +819,9 @@ two monitors), so the comparison was run interleaved, old/new alternating, three
 
 Per kernel (one earlier run, unloaded): pre-block 115.7 -> 70.8 ms, post-block 116.2 -> 57.8 ms, k_swin_var C=256
 78.2 -> 37.3 ms, C=128/64/32 143.2 -> 64.3 ms, k_contract2 + k_qkv_attn2 50.8 -> 24.5 ms. The pre-block gained
-nothing from WMMA batching and is now the largest single kernel. An absolute figure at normal clocks is still to be
-measured.
+nothing from WMMA batching and is now the largest single kernel.
+
+**Clean absolute figure** (normal GPU clocks, Wallpaper Engine paused), interleaved, three rounds, hash identical in all
+six: old **461.2 / 461.2 / 461.7 ms**, new **244.3 / 244.1 / 244.6 ms** - **1.89x**, spread +-0.3 ms. Breakdown of
+the new 244.5 ms: pre-block 60.9 (25 %), post-block 49.6 (20 %), k_swin_var C=256 32.0, C=128 23.2, C=64 20.5, C=32
+11.7, k_qkv_attn2 12.3, k_contract2 8.9.
