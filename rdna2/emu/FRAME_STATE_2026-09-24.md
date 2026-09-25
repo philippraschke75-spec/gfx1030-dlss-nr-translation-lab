@@ -825,3 +825,24 @@ nothing from WMMA batching and is now the largest single kernel.
 six: old **461.2 / 461.2 / 461.7 ms**, new **244.3 / 244.1 / 244.6 ms** - **1.89x**, spread +-0.3 ms. Breakdown of
 the new 244.5 ms: pre-block 60.9 (25 %), post-block 49.6 (20 %), k_swin_var C=256 32.0, C=128 23.2, C=64 20.5, C=32
 11.7, k_qkv_attn2 12.3, k_contract2 8.9.
+
+## Update 24: WMMA emulation without LDS (v_permlanex16 + DPP row_share) - 244 -> 209 ms, bit-identical
+
+The batched WMMA lowering (Update 23) still gathered every A operand through `ds_bpermute_b32`. Its address
+`((lane>>4)<<2) + 8*j` reads lane `(lane>>4) + 2j`: lanes 0-15 take lane 2j, lanes 16-31 lane 2j+1. `TX_WMMA=dpp`
+(now the default) builds, per A register, a vector whose row 0 is A and whose row 1 lane i holds A's row-0 lane i+1
+(`v_permlanex16_b32` with selects `0x87654321`/`0xffedcba9`, merged by `v_cndmask` on mask `0xffff0000`), then each
+`v_dot2c_f32_f16_dpp ... row_share:2j` reads lane 2j of its own row. Same operands and accumulation order, no LDS,
+no waits: per WMMA 16 + 64 VALU instead of 64 LDS round-trips + 64 VALU. Needs 3 spare SGPRs; `k_conv_res2` has
+none (106 used) and keeps the batched form automatically.
+
+Verification: pre-block 8x8 and 16x16, post_block_const, ffwd2, k_swin_var C=32/64/128 (flags 0, 1, 4) and C=256
+(flags 0, 1) PASS with 0 mismatches against the emulator; the full-frame 1.4 GB arena hash stays `d54273b81de7cf88`
+in every run. The k_qkv_attn2 8x16 difftest and C=256 flag 4 were stopped for time; both kernels are covered at full
+size by the frame hash.
+
+Timing, interleaved, normal clocks: old 244.8 / 244.2 / 244.5 ms, new **208.9 / 209.2 / 210.4 ms** (-14 %).
+Pre-block alone ~61 -> ~56 ms.
+
+Also: the emulator is 1.25-1.7x faster (`0d9cf4b`: single-region memory fast path, table-lookup `v_perm_b32`,
+cached exec mask), output hash-identical on 6 kernels (`emu_selfcheck.py`).

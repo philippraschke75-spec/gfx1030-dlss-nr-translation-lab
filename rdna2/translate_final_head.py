@@ -58,9 +58,27 @@ def reg_range(s):
         raise ValueError('unexpected WMMA register shape: '+s)
     return int(m[1])
 
-def wmma(text, scratch=84, gather_base=None):
+def wmma(text, scratch=84, gather_base=None, dpp_sgpr=None):
     regs = [reg_range(x) for x in text.split(None,1)[1].split(',')]
     d,a,b,c=regs
+    if dpp_sgpr is not None:
+        # No LDS. The serial form's ds_bpermute address ((lane>>4)<<2) + 8*j reads lane (lane>>4) + 2*j: lanes 0-15
+        # take lane 2j, lanes 16-31 take lane 2j+1. Build, per A register k, a vector whose row 0 is A itself and
+        # whose row 1 lane i holds A's row-0 lane i+1 (v_permlanex16 with select nibbles min(i+1,15)); then
+        # v_dot2c with DPP row_share:2j reads lane 2j of its own row: row 0 -> A[2j], row 1 -> A[2j+1].
+        # Same operands, same k order per output register as the serial form, so bit-identical.
+        slo, shi, smask = dpp_sgpr, dpp_sgpr+1, dpp_sgpr+2
+        tmp = scratch+9
+        result=[f's_mov_b32 s{slo}, 0x87654321', f's_mov_b32 s{shi}, 0xffedcba9', f's_mov_b32 s{smask}, 0xffff0000']
+        for k in range(8):
+            result += [f'v_permlanex16_b32 v{tmp}, v{a+k}, s{slo}, s{shi}',
+                       f'v_cndmask_b32_e64 v{gather_base+k}, v{a+k}, v{tmp}, s{smask}']
+        for j in range(8):
+            result.append(f'v_mov_b32_e32 v{scratch+j}, v{c+j}')
+            result += [f'v_dot2c_f32_f16_dpp v{scratch+j}, v{gather_base+k}, v{b+k} row_share:{2*j} row_mask:0xf bank_mask:0xf'
+                       for k in range(8)]
+        result += [f'v_mov_b32_e32 v{d+j}, v{scratch+j}' for j in range(8)]
+        return result
     if gather_base is not None:
         # Batched: for each output register issue its 8 ds_bpermute into 8 distinct gather registers, wait
         # ONCE, then run the 8 v_dot2c in the same k order as the serial form - same accumulation order,
