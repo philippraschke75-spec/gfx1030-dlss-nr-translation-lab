@@ -15,9 +15,12 @@ HONEST STATUS, kept in the output so a passing run cannot imply more than it sho
     found it was a fixture bug (+0x68's high dword left uncleared, corrupting the RNG seed) and
     it now PASSES at 0 mismatches. Neither finding says anything about k_pre_block_1h_32_fp8,
     which is the kernel actually dispatched here and has its own, separate verification status.
-  * k_export is fed the network's own output at +0x00 (off_netout, ctx+0x100) and its kernarg
-    fields are documented in EXPORT_FINDINGS.md, but its own translation has never been
-    difftested against the emulator - only the wiring around it has been checked by observation.
+  * k_export is GPU-verified: net_export.py difftests it against the emulator across every
+    format/mode and history-flag combination at 0 mismatches, including the exact fields this
+    file packs by default (mode 0, +0x28=0, hist=0). See FRAME_STATE Update 16.
+  * post_block (writes ctx+0x100, the sole network-result buffer k_export reads) is still never
+    difftested - the first attempt hit a gfx11emu.py gap, not yet resolved. See FRAME_STATE
+    Update 17.
 
 usage: net_frame_full.py <color.bin> <src_w> <src_h> [--stop=<stage>]   (inside sandbox.py)
 """
