@@ -1197,13 +1197,15 @@ if stop in ('full', 'all'):
         for _nm, _o in zip(('ping', 'pong', 'pool'), dec_buf[_di]):
             _x = res[_o:_o + _n]
             print('dec s%d %-4s C=%-3d %10d B: nonzero=%6.2f%% distinct=%3d' % (_di + 1, _nm, _C, _n, 100.0 * float((_x != 0).mean()), len(np.unique(_x))))
-    hb = res[off_head:off_head + SRC_W * SRC_H * 16]
+    # off_head/HEAD (k_final_head, grid HEAD_GRID) is dead: the host's real tail is POST_BLOCK +
+    # k_swin_var (see the "block 70" comment above), which writes off_netout, not off_head. Nothing
+    # in the live pipeline writes off_head, so printing it here only produced a misleading always-
+    # empty "head buffer" line - removed. off_netout's content is covered by the k_export line below.
     _n8 = 1601
     _hi = res[stage_in:stage_in + _n8 * 8192].reshape(_n8, 8192)
     _nzc = (_hi != 0).any(axis=1)
     print('head input       : stage_in=%#x, %d chunks of 8192 B: %d nonzero chunks (last %s), %.2f%% bytes nonzero, distinct=%d'
           % (stage_in, _n8, int(_nzc.sum()), int(np.nonzero(_nzc)[0][-1]) if _nzc.any() else None, 100.0 * float((_hi != 0).mean()), len(np.unique(_hi))))
-    print('head buffer      : %d B, nonzero=%.3f%%, distinct bytes=%d' % (hb.size, 100.0 * float((hb != 0).mean()), len(np.unique(hb))))
     print()
     d16 = res[off_dst:off_dst + SRC_H * SRC_W * 8].view(np.float16).reshape(SRC_H, SRC_W, 4)
     rep = d16[:, :, :3].astype(np.float32)
