@@ -1221,7 +1221,7 @@ class Exec:
         raise NotImplementedError('valu ' + b)
 
 
-def run_workgroup(prog, gmem, lds_size, nthreads, init_sgprs, max_steps=200_000_000, trace=None, stop_at=None, snap=None, poison=False):
+def run_workgroup(prog, gmem, lds_size, nthreads, init_sgprs, max_steps=200_000_000, trace=None, stop_at=None, snap=None, poison=False, counts=None):
     ex = Exec(prog)
     lds = np.zeros(lds_size, np.uint8)
     waves = []
@@ -1257,6 +1257,8 @@ def run_workgroup(prog, gmem, lds_size, nthreads, init_sgprs, max_steps=200_000_
                 except (AssertionError, MemFault) as err:
                     a_, op_, args_, _ = ex.prog[w.pc]
                     raise type(err)('@%x wave%d %s %s :: %s' % (a_, w.wid, op_, args_, err)) from None
+                if counts is not None:                  # dynamic execution count per original address
+                    a_ = ex.prog[w.pc][0]; counts[a_] = counts.get(a_, 0) + 1
                 w.pc = w.next
                 steps += 1
                 w.n += 1
