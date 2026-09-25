@@ -1184,6 +1184,9 @@ if a16.size >= tiles_y * tiles_x * 8:
 if stop in ('full', 'all'):
     for _nm, _o, _n in ([('c512_1 w%d' % i, o, N512) for i, o in enumerate(c512_1)] + [('vit b%d' % i, o, N1024) for i, o in enumerate(vit_buf)]
                         + [('c512_2 w%d' % i, o, N512) for i, o in enumerate(c512_2)]
+                        # off_vit (ctx+0x250) is only written under VIT_SEP=1 - the default (0) runs the
+                        # ViT in place on c512_1[0] instead, which never touches off_vit.
+                        + ([('vit out (off_vit)', off_vit, N1024)] if os.environ.get('VIT_SEP') == '1' else [])
                         # off_b39 is only written with MID_HOST=0. With MID_HOST=1 block 39 writes c512_2[0]
                         # (+0x10), so reporting off_b39 there showed an unused, all-zero buffer as 'block39 out'.
                         + ([] if MID_HOST else [('block39 out', off_b39, N512)])):
