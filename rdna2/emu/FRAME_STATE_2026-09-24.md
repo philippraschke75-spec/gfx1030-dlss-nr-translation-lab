@@ -611,3 +611,40 @@ Update 14's "citation-accuracy fix" (the one about grid.y, lines above) misread 
 Score, MID_HOST=1 C512_HOST=1: S_mid **+0.7106**, S_fine +0.6844, lag8 +0.98. This is identical to gy=7: the extra
 workgroup rows gy=7 launched lie past H5 and write nothing that counts. So the literal was harmless at this size, but
 it was only right by accident.
+
+## Update 16: k_export difftested for the first time - PASS at every mode
+
+`net_export.py` (new) difftests `k_export` on the real GPU against the gfx1100 original in the emulator, sweeping
+`+0x18` (mode 0-8), `+0x28` and `+0x38` (hist), 32x56 geometry with a non-matching input row stride (`+0x08 != W`)
+and a real output pitch, so the packing net_frame_full.py actually uses is exercised, not a simplified stand-in.
+
+**Result: PASS, 0 mismatches at every (mode, +0x28, hist) combination**, including `mode=0, +0x28=0, hist=0` -
+the exact fields `net_frame_full.py`'s default (`EXPORT_MODE=0`, `EXP_HIST=0`) packs. The only non-PASS rows are
+`+0x28=1` at modes 5/7/8 (RGBA16F path), which differ by up to 9 ULP in f32 words - `+0x28=1` takes the branch
+that runs `v_exp_f32` (hardware-approximate transcendental, ~1 ULP per the ISA; the emulator computes it exactly),
+consistent with the same tolerance already documented and accepted for other kernels in this project. Not a defect.
+
+**`k_export`'s own translation is now verified**, closing the "never validated" item this file and
+`net_frame_full.py`'s docstring both flagged. Whatever remaining defect produces the frame's colour cast and
+tile pattern is not in `k_export`.
+
+Also this update: `net_block512_2.py`'s three untested shift-window origins (MODE=1,2,3, i.e. `ENC_MODES[1..3]`)
+now all PASS at 0 mismatches too, same as MODE=0 - all four origins of the C=512 stage are bit-exact.
+
+## Update 17: post_block (writes ctx+0x100, the sole network-result buffer) still never difftested - emulator gap found
+
+Ran `difftest_spec.py post_block` (existing Spec, never executed before). Crashes before producing a result:
+
+```
+File "gfx11emu.py", line 617, in swap
+    w.next = s.addr2i[tgt]
+KeyError: 48384   # = 0xbd00
+```
+
+The kernel's translated `.s` has a computed jump (`s_getpc_b64` + `s_add_u32 s4, s4, .Lpc_bd00-.Lgetpc_31538` +
+apparently `s_swappc_b64`/`s_setpc_b64` reading s4:s5) targeting a label `.Lpc_bd00`, with two more near-identical
+labels `.Lpc_1bd00`/`.Lpc_2bd00` elsewhere in the same file - looks like a 3x-duplicated code path. `s.addr2i`
+(built from the loaded kernel's own decoded instruction stream) does not contain 0xbd00. No prior kernel in this
+project's difftests exercised this computed-jump pattern, so this may be a genuine `gfx11emu.py` gap (addr2i not
+covering everything the loader should have decoded) rather than a translation defect - not yet determined.
+Handed to the terminal session for the disassembly-level dig.
