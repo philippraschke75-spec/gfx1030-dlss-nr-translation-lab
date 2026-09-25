@@ -164,9 +164,11 @@ off_2a0 = place('ctx+0x2a0 (decoder input, block 47 +0x20)', N512)
 # ctx+0x250, the ViT's own buffer ('vit1d'). Its input ctx+0x228 ('vit512a') must survive the ViT: block 39 reads it
 # back at +0x08 as the skip around the ViT.
 off_vit = place('vit out (ctx+0x250)', N1024)
-# MID_HOST=1: the middle section as the host runs it (FRAME_STATE Update 4/5). The ViT works on the (C=1024, H/64, W/64)
-# stage of the host's table at ctx+0x1cc (0x18002de5c), i.e. 16x28 = 448 tokens, not at the C=512 geometry.
-MID_HOST = os.environ.get('MID_HOST', '0') == '1'
+# MID_HOST=1 (default): the middle section as the host runs it (FRAME_STATE Update 4/5). The ViT works on the
+# (C=1024, H/64, W/64) stage of the host's table at ctx+0x1cc (0x18002de5c), i.e. 16x28 = 448 tokens, not at
+# the C=512 geometry. Every S_mid/S_fine score in FRAME_STATE was measured with MID_HOST=1 explicitly set, so
+# the default (previously 0) was inconsistent with what this file's own numbers describe.
+MID_HOST = os.environ.get('MID_HOST', '1') == '1'
 H6, W6 = stage_hw(5)
 NTOK = -(-(H6 * W6) // 64) * 64                     # ctx+0x314: H*W rounded up to 64 (0x18002e468-0x18002e47f)
 HEAD_TILES = (-(-H6 // 4)) * (-(-W6 // 4))          # ctx+0x30c (0x18002e437-0x18002e461)
