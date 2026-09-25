@@ -125,6 +125,8 @@ def emulate(seed, upto):
                     sgpr = {0: KA & 0xffffffff, 1: KA >> 32}
                     sgpr.update(zip(ids, (wx, wy, wz)))
                     E.run_workgroup(prog, g, lds, 256, sgpr, max_steps=60_000_000)
+                # ~2.2 s per workgroup at 32x56: without this the run looks hung for minutes
+                print('    emu %s wz=%d wy=%d/%d' % (sym[:16], wz, wy + 1, gy), flush=True)
         cur = g.regions[1].arr.copy()
     return base, cur
 
