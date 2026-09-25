@@ -726,3 +726,34 @@ The rendered frame is now clearly the scene. Still wrong: dark square blocks rou
 cells in size, a blue/magenta cast in places, and the 8-px column periodicity (lag8 unchanged at 0.98). After the
 ViT the footprint spreads (lift ~1.5 from c512_2 on), which global attention allows, so it does not by itself
 point at a defect. `FIX_IN_LOAD` fixtures are k_repack outputs and now require `REPACK_ENC=1`.
+
+## Update 21: k_import/k_export mode is the host's -1, not 0 - the dark blocks are gone, S_mid +0.891 -> +0.925
+
+**Trace.** The 26 dark 16-px blocks (edges on a 16-px grid) were traced with `DEFECT_MASK` (per buffer, in its
+Update 20 layout, statistics inside vs outside the blocks) and a per-encoder-block prefix trace
+(`C512_TRACE=2 PROBE_ENC=1 DEFECT_MASK=...`): |x| inside/outside is x0.74-x1.28 through blocks 1-8, then **x3.72 at
+block 9** (first block of stage 3, first saturated e4m3 codes) and **x9.43 at block 15** (first of stage 4). The input
+at those spots is ordinary content (max luminance 2.6; all 27 blocks with luminance > 8 are elsewhere).
+
+`ENC_EMU_CHECK=9` ran block 9's exact frame kernarg in the emulator on the GPU's pre-block-9 arena for the 6
+workgroups covering the blocks plus 2 controls: **0 mismatches in 195,641 bytes**. The translation computes exactly
+what the original does. Flags (1|4*last, 0x18002f717) and the weight records (last block of a stage carries the
+pooling weights) match the host. So the cause was the input.
+
+**Host read.** `k_import` +0x28 = `ebp` = the frame function's 9th argument (`[rsp+0x318]`, 0x18002d533 -> 0x18002d5ff);
++0x2c = `xmm7` = 1.0 (0x18006d2c8), overridden by a positive job value. At both first-frame call sites the 9th
+argument is the global dword 0x18009a488 (0x180015add, 0x18001a880); the history path passes a literal 0
+(0x18001a870). The constructor sets 0x18009a488 to **-1** (0x18001f26b) and no other direct write exists. In
+k_import any mode != 0 tonemaps: `max(0, scale*x)`, `x/(1+x)` clamped, then the sRGB OETF (0xaa498-0xaa518). Mode 0
+passes raw HDR (65.1 max here). The same `ebp` is k_export's +0x28, the v_exp (inverse) branch.
+
+| IMPORT_MODE / EXPORT_MODE | S_mid | S_fine | lag8 | dark 16-px blocks | output range |
+|---|---|---|---|---|---|
+| 0 / 0 (before) | +0.8912 | +0.8853 | +0.98 | 26 | 0..1 |
+| **-1 / -1 (host, new default)** | **+0.9247** | **+0.9258** | +0.98 | **0** | 0..47.9 (linear HDR) |
+| -1 / 0 | +0.9718 | +0.9753 | +0.98 | 0 | 0..1 |
+
+-1/0 scores higher only because its output stays in the tonemapped domain the PNG reference is compared in; -1/-1
+is what the host does. The rendered frame is now clean: no dark blocks, no blue/magenta cast. **Open:** lag8 stays
+at 0.98 in every variant, and whether an application ever overwrites 0x18009a488 before the first frame is not
+settled (no direct write found; a block copy cannot be excluded statically).
