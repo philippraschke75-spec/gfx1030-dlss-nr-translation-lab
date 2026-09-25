@@ -167,25 +167,39 @@ extern "C" __declspec(dllexport) HRESULT WINAPI RebuildCaptureFrame(IDXGISwapCha
     std::vector<unsigned char> pixels;
     hr=frame_copy->finish(pixels);
     const LONGLONG t_finish=qpc_now(); if(FAILED(hr)) { record("CAPTURE_PENDING_OR_FAILED GPU objects retained\r\n"); return hr; }
-    // Portable RGB preview; R10 packed channels are scaled without tone mapping.
+    auto footprint=frame_copy->layout.Footprint;
     HANDLE file=CreateFileW(path,GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
     if(file==INVALID_HANDLE_VALUE) return HRESULT_FROM_WIN32(GetLastError());
-    auto footprint=frame_copy->layout.Footprint;
-    std::vector<unsigned char> rgb(SIZE_T(footprint.Width)*footprint.Height*3);
-    for(SIZE_T i=0;i<SIZE_T(footprint.Width)*footprint.Height;++i) {
-        if(footprint.Format==DXGI_FORMAT_R10G10B10A2_UNORM) {
-            UINT packed; memcpy(&packed,pixels.data()+4*i,4);
-            for(UINT c=0;c<3;++c) rgb[3*i+c]=static_cast<unsigned char>(((packed>>(10*c))&1023)*255/1023);
-        } else {
-            bool bgra=footprint.Format==DXGI_FORMAT_B8G8R8A8_UNORM;
-            rgb[3*i]=pixels[4*i+(bgra?2:0)]; rgb[3*i+1]=pixels[4*i+1]; rgb[3*i+2]=pixels[4*i+(bgra?0:2)];
+    bool ok; LONGLONG t_convert;
+    if(footprint.Format==DXGI_FORMAT_R16G16B16A16_FLOAT) {
+        // HDR backbuffer (no upscaler dispatch to hook when the upscaler is off): write the raw
+        // 8 B/pixel RGBA16F plane, row pitch stripped, same layout as the F9 upscaler-input capture
+        // (upscaler_probe.h's .color_rgba16f.bin) and what net_frame_full.py's k_import expects -
+        // no PPM conversion, this is not a preview.
+        const SIZE_T row_bytes=SIZE_T(footprint.Width)*8;
+        std::vector<unsigned char> plane(row_bytes*footprint.Height);
+        for(UINT y=0;y<footprint.Height;++y) memcpy(plane.data()+SIZE_T(y)*row_bytes,pixels.data()+SIZE_T(y)*frame_copy->row_bytes,row_bytes);
+        t_convert=qpc_now();
+        DWORD written=0;
+        ok=WriteFile(file,plane.data(),DWORD(plane.size()),&written,nullptr) && written==plane.size();
+    } else {
+        // Portable RGB preview; R10 packed channels are scaled without tone mapping.
+        std::vector<unsigned char> rgb(SIZE_T(footprint.Width)*footprint.Height*3);
+        for(SIZE_T i=0;i<SIZE_T(footprint.Width)*footprint.Height;++i) {
+            if(footprint.Format==DXGI_FORMAT_R10G10B10A2_UNORM) {
+                UINT packed; memcpy(&packed,pixels.data()+4*i,4);
+                for(UINT c=0;c<3;++c) rgb[3*i+c]=static_cast<unsigned char>(((packed>>(10*c))&1023)*255/1023);
+            } else {
+                bool bgra=footprint.Format==DXGI_FORMAT_B8G8R8A8_UNORM;
+                rgb[3*i]=pixels[4*i+(bgra?2:0)]; rgb[3*i+1]=pixels[4*i+1]; rgb[3*i+2]=pixels[4*i+(bgra?0:2)];
+            }
         }
+        t_convert=qpc_now();
+        char header[80]; int length=std::snprintf(header,sizeof(header),"P6\n%u %u\n255\n",footprint.Width,footprint.Height);
+        DWORD written=0;
+        ok=WriteFile(file,header,length,&written,nullptr) && written==UINT(length);
+        if(ok) ok=WriteFile(file,rgb.data(),DWORD(rgb.size()),&written,nullptr) && written==rgb.size();
     }
-    const LONGLONG t_convert=qpc_now();
-    char header[80]; int length=std::snprintf(header,sizeof(header),"P6\n%u %u\n255\n",footprint.Width,footprint.Height);
-    DWORD written=0;
-    bool ok=WriteFile(file,header,length,&written,nullptr) && written==UINT(length);
-    if(ok) ok=WriteFile(file,rgb.data(),DWORD(rgb.size()),&written,nullptr) && written==rgb.size();
     CloseHandle(file);
     const LONGLONG t_end=qpc_now();
     {
