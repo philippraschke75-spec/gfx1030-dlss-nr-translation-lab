@@ -681,3 +681,15 @@ produced a result. Also fixed there: hidden args at +0x50/+0x5c/+0x90 per the me
 So the translations of both kernels are verified on finite inputs. The one divergence is how an e4m3 NaN input
 propagates. Whether the emulator or the gfx1030 translation matches real gfx1100 hardware there cannot be
 settled without that hardware. It only matters if the frame ever produces NaN activations.
+
+## Update 19: env-var defaults now match the configuration every score in this file used
+
+`C512_HOST` and `MID_HOST` both defaulted to 0 (the old, unverified paths) despite every S_mid/S_fine number in
+this file - including the +0.7106 result in Update 14 - being measured with both explicitly set to 1.
+`C512_HOST`'s own comment already claimed "=1 (default)" while the code said otherwise. A plain
+`net_frame_full.py` run with no env vars was silently exercising kernels this file argues against, not the ones
+it reports on. Both now default to 1; `C512_HOST=0`/`MID_HOST=0` still restore the old paths for comparison.
+
+No other env-var default in this file was found inconsistent with FRAME_STATE's "Fixed this session" table
+(`PRE_FULL`, `PRE_1H`, `DEC_LAST2`, `DEC_SKIP`, `DEC_PTRA`, `SKIP_PARITY`, `DEC_FLAGS` all already default to
+their documented-correct value).
