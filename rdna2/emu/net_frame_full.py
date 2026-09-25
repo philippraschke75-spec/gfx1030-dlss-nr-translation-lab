@@ -267,6 +267,8 @@ for _blk, (_o, _n) in enc_weight_off.items():
 
 steps = []
 C512_PROBE = []      # (label, buffer offset, dispatch count) probes, populated when C512_TRACE is set
+ENC_BLK_INFO = {}    # blk -> (dispatch index, h, w, C, ox, oy, grid, sym, lds) for ENC_EMU_CHECK
+ENC_PROBE_GEOM = {}  # label -> (h, w, C) for the encoder-block probes (DEFECT_MASK per-block trace)
 
 # ---------------------------------------------------------------- k_import (verified at this size)
 ka = bytearray(0x130)
@@ -275,10 +277,15 @@ struct.pack_into('<Q', ka, 0x00, BASE + off_src)
 # fields and were being given the same values.
 struct.pack_into('<iiiiii', ka, 0x08, SRC_W * 8, 0, SRC_H, SRC_W, PAD_H, PAD_W)
 struct.pack_into('<Q', ka, 0x20, BASE + off_rgb)
-# k_import's scale. The difftest feeds the pre-block RGB in [0,1); the captured frame is HDR and
-# reaches 65.12, and with the ctx exposure scalars unknown (we pass zeros) that saturates f16
-# downstream. IMPORT_SCALE exists to test whether that is what wrecks the chain.
-struct.pack_into('<if', ka, 0x28, 0, float(os.environ.get('IMPORT_SCALE', '1.0')))
+# +0x28 mode, +0x2c scale. The host packs +0x28 = ebp = the frame function's 9th argument ([rsp+0x318],
+# 0x18002d533 -> 0x18002d5ff), which on the first-frame paths is the global dword 0x18009a488
+# (0x180015add / 0x18001a880) - initialised to -1 by the ctx constructor (0x18001f26b) and never
+# written directly elsewhere. Any mode != 0 tonemaps in k_import: max(0, scale*x), x/(1+x) clamped,
+# then the sRGB OETF (0xaa494-0xaa518), so the network sees [0,1]. Mode 0 passed raw HDR (up to 65 here),
+# which blew activations up to the e4m3 limit from encoder block 9 on and printed as dark 16-px blocks.
+# The same ebp is k_export's +0x28 (the inverse path), so EXPORT_MODE defaults to -1 too.
+# +0x2c: 1.0 (0x18006d2c8), overridden by a positive job value (0x18002d432-0x18002d488).
+struct.pack_into('<if', ka, 0x28, int(os.environ.get('IMPORT_MODE', '-1')), float(os.environ.get('IMPORT_SCALE', '1.0')))
 g_imp = ((PAD_W + 255) // 256, PAD_H)
 struct.pack_into('<III', ka, 0x30, g_imp[0], g_imp[1], 1)
 struct.pack_into('<HHH', ka, 0x3c, 256, 1, 1)
@@ -432,10 +439,12 @@ if stop != 'preblock':
             wgt = enc_weight_off[blk][0]
             steps.append((sym, enc_kernarg(h, w, oy, ox, flags, grid, src, dst, wgt, pool),
                           grid, 256))
+            ENC_BLK_INFO[blk] = (len(steps) - 1, h, w, C, ox, oy, grid, sym, lds)
             if os.environ.get('C512_TRACE') == '2' and os.environ.get('PROBE_ENC') == '1':
                 # Block 0 hands the encoder absmean 1.7 and stage 1 returns 27 pinned to +/-448.
                 # Probe every encoder block to see whether that is one step or an accumulation.
                 C512_PROBE.append(('enc block %-3d-> dst' % blk, dst, len(steps)))
+                ENC_PROBE_GEOM['enc block %-3d-> dst' % blk] = (h, w, C)
         # The host never passes a skip pointer: encoder stage s ping-pongs between ctx+0x1d8[s]
         # and ctx+0x2a8[3-s] (0x18002f637/0x18002f64f, swapped at 0x18002f693..0x18002f6af),
         # and decoder stage d reads ctx+0x1d8[3-d]. The two are the same pair, aliased.
@@ -926,7 +935,7 @@ if stop in ('full', 'all'):
     # +0x28 is ebp in the launcher. It is NOT the output format - that is +0x18 (s7 from
     # s_load_b128 s[4:7], 0xc at 0xab20c, compared at 0xab2d4ff). The kernel reads +0x28 only when
     # +0x38 == 0 (0xab76c), where nonzero selects the v_exp_f32 branch. EXPORT_MODE keeps its name.
-    struct.pack_into('<i', ka, 0x28, int(os.environ.get('EXPORT_MODE', '0')))
+    struct.pack_into('<i', ka, 0x28, int(os.environ.get('EXPORT_MODE', '-1')))   # same ebp as k_import +0x28
     struct.pack_into('<i', ka, 0x08, PAD_W)   # input row stride: ctx+0x100 is PAD_W wide
     struct.pack_into('<Q', ka, 0x30, BASE + off_rgb)
     # +0x38/+0x3c come from xmm6/xmm7 in the frame function (0x18002d476-0x18002d488), which reads
@@ -981,6 +990,64 @@ def _run_prefix(nsteps):
         return None
     return np.fromfile(OUT / 'ta.bin', np.uint8)
 
+
+def e4m3_dec(b):
+    e = ((b >> 3) & 15).astype(np.float32); m = (b & 7).astype(np.float32)
+    v = np.where(e == 0, m / 8 * 2.0 ** -6, (1 + m / 8) * np.power(2.0, e - 7))
+    return np.where((e == 15) & (m == 7), np.nan, np.where(b & 128, -v, v))
+
+
+if os.environ.get('ENC_EMU_CHECK'):
+    # Check ONE encoder block against the gfx1100 original on the frame's real data, at chosen workgroups.
+    # The GPU runs the chain up to just before and just after the block; the emulator then runs the block's
+    # exact kernarg on the before-arena, for the workgroups covering DEFECT_MASK (plus ENC_EMU_CTRL controls),
+    # and every byte the emulator writes is compared with the GPU's after-arena.
+    import gfx11emu as E, run_emu as R, time as _time
+    _blk = int(os.environ['ENC_EMU_CHECK'])
+    _idx, _h, _w, _C, _ox, _oy, _grid, _sym, _lds = ENC_BLK_INFO[_blk]
+    _before, _after = _run_prefix(_idx), _run_prefix(_idx + 1)
+    assert _before is not None and _after is not None, 'GPU prefix run failed'
+    _f = PAD_H // _h
+    _dm = np.load(os.environ['DEFECT_MASK']); _bl = int(os.environ.get('DEFECT_BLOCK', '16'))
+    _full = np.zeros((PAD_H, PAD_W), bool)
+    _up = np.repeat(np.repeat(_dm, _bl, 0), _bl, 1); _full[:_up.shape[0], :_up.shape[1]] = _up
+    _wgs = []
+    for wy in range(_grid[1]):
+        for wx in range(_grid[0]):
+            y0, x0 = (wy * 8 + _oy) * _f, (wx * 8 + _ox) * _f      # the 8x8 window this workgroup owns
+            if _full[max(0, y0):max(0, y0 + 8 * _f), max(0, x0):max(0, x0 + 8 * _f)].any():
+                _wgs.append((wx, wy, 'defect'))
+    _nd = len(_wgs)
+    for c in os.environ.get('ENC_EMU_CTRL', '2,2;10,5').split(';'):
+        wx, wy = (int(t) for t in c.split(',')); _wgs.append((wx, wy, 'control'))
+    _wgs = _wgs[:int(os.environ.get('ENC_EMU_MAX', '12'))]
+    print('ENC_EMU_CHECK block %d (%s) %dx%d C=%d origin (%d,%d) grid %s: %d defect workgroups, running %d'
+          % (_blk, _sym, _h, _w, _C, _ox, _oy, _grid, _nd, len(_wgs)), flush=True)
+    _prog = E.load_program(R.DIS, {_sym})
+    _g = E.GMem()
+    _KA = 0x7000_0000_0000
+    _g.add('kernarg', _KA, np.frombuffer(steps[_idx][1], np.uint8).copy())
+    _g.add('arena', BASE, _before.copy())
+    sys.path.insert(0, str(D.ROOT))
+    import translate_final_head as _tb
+    _, _secs, _ = _tb.kd.parse_elf(str(_tb.INPUT))
+    _ro = next(x for x in _secs if x['name'] == '.rodata')
+    _g.add('rodata', _ro['addr'], np.frombuffer(bytearray((D.ROOT / 'build' / 'kernels-hw-scratch' / 'initialized-rodata.bin').read_bytes()), np.uint8).copy())
+    _arr = _g.regions[1].arr
+    for wx, wy, kind in _wgs:
+        _t0 = _time.time()
+        _st = E.run_workgroup(_prog, _g, _lds, 256, {0: _KA & 0xffffffff, 1: _KA >> 32, 14: wx, 15: wy},
+                              max_steps=60_000_000)['steps']
+        print('  wg (%3d,%3d) %-7s steps %9d  %5.0fs' % (wx, wy, kind, _st, _time.time() - _t0), flush=True)
+    _w_ = np.nonzero(_arr != _before)[0]
+    _mis = _w_[_after[_w_] != _arr[_w_]]
+    print('  emulator wrote %d B across these workgroups; mismatches vs GPU: %d' % (len(_w_), len(_mis)))
+    if len(_mis):
+        _ev = np.nan_to_num(e4m3_dec(_arr[_mis])); _gv = np.nan_to_num(e4m3_dec(_after[_mis]))
+        print('  first: ' + '  '.join('@%#x emu=%02x gpu=%02x' % (int(i), _arr[i], _after[i]) for i in _mis[:6]))
+        print('  mismatching values: emu |x| mean %.3g max %.3g   gpu |x| mean %.3g max %.3g'
+              % (np.abs(_ev).mean(), np.abs(_ev).max(), np.abs(_gv).mean(), np.abs(_gv).max()))
+    raise SystemExit(0)
 
 if os.environ.get('DET_TEST'):
     # Determinism probe: run the SAME prefix DET_TEST times and hash the buffer each dispatch produced. The first
@@ -1065,6 +1132,27 @@ if os.environ.get('C512_TRACE') in ('1', '2'):
         aa = _run_prefix(nst)
         if aa is None:
             print('  %s  GPU FAIL' % label); continue
+        if os.environ.get('DEFECT_MASK') and label in ENC_PROBE_GEOM:
+            # Per-block defect trace: mean |x| and saturated codes inside the DEFECT_MASK blocks vs outside,
+            # reading the encoder ping/pong in its footprint-settled layout (4x4-tile-major, FRAME_STATE Update 20).
+            _h, _w, _C = ENC_PROBE_GEOM[label]
+            _b = aa[buf:buf + _C * _h * _w]
+            _bl = int(os.environ.get('DEFECT_BLOCK', '16'))
+            _dm = np.load(os.environ['DEFECT_MASK'])
+            _full = np.zeros((PAD_H, PAD_W), bool)
+            _up = np.repeat(np.repeat(_dm, _bl, 0), _bl, 1); _full[:_up.shape[0], :_up.shape[1]] = _up
+            _f = PAD_H // _h
+            _m = _full[:_h * _f, :_w * _f].reshape(_h, _f, _w, _f).any(axis=(1, 3))
+            _val = np.zeros((_h, _w), bool); _val[:-(-SRC_H // _f), :-(-SRC_W // _f)] = True
+            _B = _b.reshape(_h // 4, _w // 4, _C, 4, 4).transpose(2, 0, 3, 1, 4).reshape(_C, _h, _w)
+            _e = ((_B >> 3) & 15).astype(np.float32); _mm = (_B & 7).astype(np.float32)
+            _V = np.where(_e == 0, _mm / 8 * 2.0 ** -6, (1 + _mm / 8) * np.power(2.0, _e - 7))
+            _ax = _V.mean(0); _sat = ((_B & 0x7f) == 0x7e).mean(0)
+            _in, _out = _m & _val, ~_m & _val
+            print('  %s  |x| in/out %7.3f / %7.3f (x%5.2f)   sat in/out %.2e / %.2e   max|x| in %.0f'
+                  % (label, float(_ax[_in].mean()), float(_ax[_out].mean()), float(_ax[_in].mean() / _ax[_out].mean()),
+                     float(_sat[_in].mean()), float(_sat[_out].mean()), float(_V[:, _in].max())), flush=True)
+            continue
         dd = aa[buf:buf + N512]
         _u, _c = np.unique(dd, return_counts=True); _o = np.argsort(-_c)[:3]
         print('  %s  nonzero=%6.2f%%  distinct=%3d  top: %s'
@@ -1309,7 +1397,41 @@ if stop in ('full', 'all'):
                 print('  %-22s %-15s %4dx%-4d changed=%5.1f%%  in=%.3f area=%.3f lift=%5.2f'
                       % (name, lay, h, w, 100.0 * float((d != 0).mean()), inn, area, inn / max(area, 1e-9)))
 
+        # DEFECT_MASK=<.npy>: a boolean map over the source frame in DEFECT_BLOCK-px blocks (default 16) marking
+        # a visible defect (e.g. the dark blocks). Per buffer and layout, compare per-pixel statistics inside the
+        # mask with outside: NaN codes (0x7f/0xff), saturated codes (|x| = 448, 0x7e/0xfe), zero bytes, mean |x|.
+        # The first buffer whose statistics differ inside the mask is where the defect enters.
+        _dm = os.environ.get('DEFECT_MASK')
+        _dmask = np.load(_dm) if _dm else None
+        _dblk = int(os.environ.get('DEFECT_BLOCK', '16'))
+
+        def _defect(name, off, h, w, C):
+            n = C * h * w
+            b = res[off:off + n]
+            full = np.zeros((PAD_H, PAD_W), bool)
+            up = np.repeat(np.repeat(_dmask, _dblk, 0), _dblk, 1)
+            full[:up.shape[0], :up.shape[1]] = up
+            f = PAD_H // h
+            m = full[:h * f, :w * f].reshape(h, f, w, f).any(axis=(1, 3))
+            valid = np.zeros((h, w), bool); valid[:-(-SRC_H // f), :-(-SRC_W // f)] = True
+            inside, outside = m & valid, ~m & valid
+            if not inside.any():
+                print('  %-22s mask empty at %dx%d' % (name, h, w)); return
+            v = np.nan_to_num(e4m3(b).astype(np.float32))
+            for lay in _lay_sel:
+                try:
+                    B_ = _LAYOUTS[lay](b, C, h, w).reshape(C, h, w)
+                    V_ = _LAYOUTS[lay](v, C, h, w).reshape(C, h, w)
+                except ValueError:
+                    print('  %-22s %-15s n/a for %dx%d' % (name, lay, h, w)); continue
+                feats = (('nan', ((B_ & 0x7f) == 0x7f).mean(0)), ('sat', ((B_ & 0x7f) == 0x7e).mean(0)),
+                         ('zero', (B_ == 0).mean(0)), ('|x|', np.abs(V_).mean(0)))
+                print('  %-22s %-15s %4dx%-4d in/out: %s' % (name, lay, h, w, '  '.join(
+                    '%s %.3g/%.3g' % (k, float(a[inside].mean()), float(a[outside].mean())) for k, a in feats)))
+
         def _probe(name, off, h, w, C):
+            if _dmask is not None:
+                return _defect(name, off, h, w, C)
             if _base is not None:
                 return _impulse(name, off, h, w, C)
             n = C * h * w
