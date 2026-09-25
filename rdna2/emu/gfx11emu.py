@@ -33,6 +33,10 @@ class Region:
         s.lo, s.hi, s.rd, s.wr = 1 << 62, 0, False, False
 
 
+_ARANGE = {n: np.arange(n) for n in range(1, 65)}
+_EM_CACHE = {}
+
+
 class GMem:
     def __init__(s):
         s.regions = []
@@ -42,8 +46,22 @@ class GMem:
         s.regions.append(r)
         return r
 
+    def _one(s, addr, n):
+        # Fast path: all addresses inside a single region. Same result as the per-region loop below.
+        if not len(addr): return None
+        lo, hi = int(addr.min()), int(addr.max())
+        for r in s.regions:
+            if lo >= r.base and hi + n <= r.base + len(r.arr):
+                return r, (addr - np.uint64(r.base)).astype(np.int64), lo - r.base, hi - r.base
+        return None
+
     def read(s, addr, n):
         addr = np.asarray(addr, np.uint64)
+        f = s._one(addr, n)
+        if f is not None:
+            r, off, olo, ohi = f
+            r.rd = True; r.lo = min(r.lo, olo); r.hi = max(r.hi, ohi + n)
+            return r.arr[off[:, None] + (_ARANGE.get(n) if n in _ARANGE else np.arange(n))]
         res = np.zeros((len(addr), n), np.uint8)
         got = np.zeros(len(addr), bool)
         for r in s.regions:
@@ -62,6 +80,12 @@ class GMem:
     def write(s, addr, data):
         addr = np.asarray(addr, np.uint64)
         n = data.shape[1]
+        f = s._one(addr, n)
+        if f is not None:
+            r, off, olo, ohi = f
+            r.arr[off[:, None] + (_ARANGE.get(n) if n in _ARANGE else np.arange(n))] = data
+            r.wr = True; r.lo = min(r.lo, olo); r.hi = max(r.hi, ohi + n)
+            return
         got = np.zeros(len(addr), bool)
         for r in s.regions:
             m = (addr >= r.base) & (addr + np.uint64(n) <= r.base + len(r.arr)) & ~got
@@ -176,7 +200,13 @@ class Wave:
 
     @property
     def em(s):
-        return ((np.uint64(s.S[EXEC]) >> AR) & ONE).astype(bool)
+        # Cached per exec value; read-only so any in-place use by a caller raises instead of corrupting the cache.
+        e = int(s.S[EXEC])
+        m = _EM_CACHE.get(e)
+        if m is None:
+            m = ((np.uint64(e) >> AR) & ONE).astype(bool); m.setflags(write=False)
+            if len(_EM_CACHE) < 4096: _EM_CACHE[e] = m
+        return m
 
     def lanes(s, mask):
         return ((np.uint64(mask) >> AR) & ONE).astype(bool)
@@ -963,18 +993,17 @@ class Exec:
             return mix
         if b == 'v_perm_b32':
             def perm(w):
+                # Table lookup, same semantics as the byte loop it replaces: selector 0-3 = bytes of src1, 4-7 =
+                # bytes of src0, 8-11 unsupported (sign-extend forms), 12 = 0x00, >= 13 = 0xff.
                 s0, s1, sel = w.r32(P[1]), w.r32(P[2]), w.r32(P[3])
-                out = np.zeros(32, np.uint32)
-                for k in range(4):
-                    sk = (sel >> np.uint32(8 * k)) & np.uint32(0xff)
-                    byte = np.zeros(32, np.uint32)
-                    for q in range(8):
-                        src = ((s1 if q < 4 else s0) >> np.uint32(8 * (q % 4))) & np.uint32(0xff)
-                        byte = np.where(sk == q, src, byte)
-                    byte = np.where(sk >= 13, np.uint32(0xff), byte)
-                    assert not ((sk >= 8) & (sk <= 11)).any(), 'perm sign-extend selector'
-                    out |= byte << np.uint32(8 * k)
-                w.wv(P[0], out)
+                sk = sel.astype('<u4').view(np.uint8).reshape(32, 4).astype(np.int64)
+                assert not ((sk >= 8) & (sk <= 11)).any(), 'perm sign-extend selector'
+                tab = np.zeros((32, 16), np.uint8)
+                tab[:, 0:4] = s1.astype('<u4').view(np.uint8).reshape(32, 4)
+                tab[:, 4:8] = s0.astype('<u4').view(np.uint8).reshape(32, 4)
+                tab[:, 13:16] = 0xff
+                byt = np.take_along_axis(tab, np.minimum(sk, 15), axis=1)
+                w.wv(P[0], np.ascontiguousarray(byt).view('<u4').reshape(32).astype(np.uint32))
             return perm
         if b == 'v_lshl_add_u32':
             return lambda w: w.wv(P[0], (w.r32(P[1]) << (w.r32(P[2]) & np.uint32(31))) + w.r32(P[3]))
