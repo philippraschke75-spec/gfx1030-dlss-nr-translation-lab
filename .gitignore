@@ -17,6 +17,8 @@ research/
 /mock-only.json.exceptions.log
 /mock_hip6.log
 /phase10_hip_bridge.log
+# third-party repack containing real NVIDIA DLLs (nvngx_dlssnr.dll etc) - never vendor these
+/unknow sources for rx 6000/
 # supplied research archive: publish reviewed source and notes only
 /gfx1032-dlss-nr-research-main/**
 !/gfx1032-dlss-nr-research-main/**/
