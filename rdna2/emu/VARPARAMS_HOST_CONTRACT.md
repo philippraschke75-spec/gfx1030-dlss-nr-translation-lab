@@ -2605,6 +2605,19 @@ dispatcher - the five-kernel recipe used by the C=512 blocks - so a decoder stag
 `k_swin_var` blocks in a row, which is exactly how the runner dispatches it. Blocks 48-69 are listed
 in the block table as "launcher A + launcher B", and that half of it has never been implemented.
 
+**RETRACTED (later re-read, not carried across to this section).** The "Correction + decode: the
+real attention/FFN block launcher is 0x180033660" section above (2026-09-22) already established
+that the "launcher B" call sites in the phase table are not a kernel dispatcher at all - they are a
+label-formatting/logging function (`0x180033600`, five lines, calls a printf-style tag formatter at
+`0x18003f194`). The real attention/FFN launcher (`0x180033660`) has exactly **two** call sites, both
+inside the two C=512 stages (blocks 23-30, 40-47) - never in the decoder loop. So the decoder was
+never supposed to run a five-kernel recipe, and net_frame_full.py's plain `k_swin_var`-only decoder
+dispatch is the structurally correct one. Block 48's all-NaN result (this section) had a different,
+real cause, fixed later: FRAME_STATE_2026-09-24.md's `DEC_LAST2`/`DEC_SKIP`/skip-parity fixes to the
+decoder's flag convention, confirmed by the column-stripe artifact dropping from phase-variance 0.99
+to 0.01. Do not re-open "the decoder needs launcher B" - that idea was already dead before this
+section was written.
+
 This also puts the earlier decoder-stage verification in context: `net_encoder_stage1.py` passes for
 blocks 48-55, 56-61, 62-65 and 66-69 at 0 mismatches - but it dispatches them all as `k_swin_var`,
 i.e. it verifies the same wrong structure the frame runner uses. A chain runner can only verify the
