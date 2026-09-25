@@ -843,34 +843,12 @@ if stop in ('full', 'all'):
         # block's own output - to the next stage and, at the end, to the head.
         stage_in = pool if _dflags == 0 and di + 1 < len(DEC_STAGES) else last_dst
 
-    # block 70: the real k_final_head
-    # k_final_head was dispatched with grid (1,1) - one workgroup cannot cover 1707x960. Its output
-    # is what k_export reads at 16 B/pixel, so an unwritten head buffer is exactly what makes the
-    # export surface non-finite. HEAD_GRID picks the convention: 'swin' = (ceil(W/8), ceil(H/8)),
-    # 'lin' = (ceil(W/256), H) as k_import and k_export use, 'one' = the old (1,1).
-    if os.environ.get('HEAD_SRC') == 'enc1':          # isolation test: a buffer known to vary, same size as the head input
+    # HEAD_SRC=enc1 is an isolation test: feed the post-block a buffer known to vary (same size as
+    # its real input) instead of the decoder's output, to tell a wiring bug from an upstream one.
+    if os.environ.get('HEAD_SRC') == 'enc1':
         stage_in = stage_buf[0][2]
-    _hg = os.environ.get('HEAD_GRID', 'x16k')
-    # The head writes ~7 x 16330 B at grid (7,960): the x workgroups land in distinct places and
-    # all 960 y rows overwrite each other, so its address does not depend on workgroup_id_y.
-    # HeadParams carries no dimensions, so a 1D grid that encodes the whole extent in x is the
-    # obvious alternative to a 2D one.
-    _npix = SRC_W * SRC_H
-    g_head = {'swin': ((SRC_W + 7) // 8, (SRC_H + 7) // 8),
-              'lin': ((SRC_W + 255) // 256, SRC_H),
-              'one': (1, 1),
-              'flat': (((SRC_W + 255) // 256) * SRC_H, 1),
-              'pix': ((_npix + 255) // 256, 1),
-              # The kernel does s_lshl_b64 s[12:13], {0, wg_id_y}, 13 and adds that to the
-              # input pointer: 8192 bytes of input per y-workgroup. So gy must cover the
-              # input buffer, not the image height.
-              'stride8k': (1, (act_bytes(32, SRC_H, SRC_W) + 8191) // 8192),
-              # output pointer += wg_id_y * 16384 (0xa42a4), workgroup_id_x is never read: gx must be 1
-              'out16k': (1, (SRC_W * SRC_H * 16 + 16383) // 16384),
-              # The TRANSLATED kernel enables workgroup_id_x only (system_sgpr_workgroup_id_y 0) and its prologue does
-              # s_mov_b32 s15, s2, so the original's workgroup_id_y arrives in the hardware X id: count in X.
-              'x16k': ((SRC_W * SRC_H * 16 + 16383) // 16384, 1)}[_hg]
-    # The host's tail is NOT k_final_head. The driver's epilogue runs the post-block (handle
+    # (k_final_head / HEAD_GRID dispatch removed here: dead code, never appended to steps. The
+    # host's tail is NOT k_final_head. The driver's epilogue runs the post-block (handle
     # 0x180066350) and then k_swin_var<32,true> with flags 0x20. Only the post-block writes
     # ctx+0x100, which k_export reads, so B is deferred until its flags are understood.
     # Layout from the stores at 0x180030e13..0x180030ea4, base rbp+0x280:
