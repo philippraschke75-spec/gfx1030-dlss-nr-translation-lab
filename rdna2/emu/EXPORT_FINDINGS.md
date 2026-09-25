@@ -37,7 +37,9 @@ not too small. (2) and (3) not needed for the row count.
 ## Output bytes per pixel by `+0x18` mode (sentinel-filled destination, row 0 window)
 
 * modes 1, 2, 3, 4, 6: 6828 bytes per row = **4 B/pixel** (packed)
-* modes 0, 5, 7, 8: 13656 = **8 B/pixel** (RGBA16F, what the buffer is sized for)
+* mode 0: 13656 = **8 B/pixel** (RGBA16F, what the buffer is sized for)
+* modes 5, 7, 8: **16 B/pixel** (f32 RGBA). Corrected by net_export.py (FRAME_STATE Update 16): the row-0 window
+  measured here was only `W*8` bytes wide, which capped the reading at 8.
 * 1707 (the old value): fell through to a **16 B/pixel** path
 
 ## Not solved

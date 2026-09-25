@@ -21,6 +21,12 @@ import numpy as np
 import gfx11emu as E, run_emu as R, run_var as V, difftest_var as D
 
 
+def uses_dispatch_ptr(sym):
+    """True if the kernel descriptor enables dispatch_ptr, i.e. s[0:1] = AQL packet and kernarg in s[2:3]."""
+    s = (D.ROOT / 'build' / 'kernels-hw-scratch' / (sym + '.s')).read_text(errors='replace')
+    return re.search(r'\.amdhsa_user_sgpr_dispatch_ptr (\d)', s.split('.amdhsa_kernel ' + sym, 1)[1])[1] == '1'
+
+
 def kernel_meta(sym):
     """Read explicit-struct size, total kernarg size and LDS bytes from the kernel's own .s file."""
     s = (D.ROOT / 'build' / 'kernels-hw-scratch' / (sym + '.s')).read_text(errors='replace')
@@ -104,19 +110,35 @@ class Spec:
         return a
 
 
+SWIN_LAYER = '_Z10swin_layerR7SwinLDSPKhRK10BlobLayouti'
+
+
 def emulate(spec, seed, max_steps=30_000_000):
     ka = spec.kernarg()
-    prog = E.load_program(R.DIS, {spec.sym})
+    # Kernel first (run_workgroup enters at prog[0]), then the one non-kernel function in the image,
+    # swin_layer at 0xbd00: the pre/post blocks call it via s_getpc/s_add/s_swappc, and without it the
+    # call target is missing from addr2i (KeyError 48384). Unreferenced code costs nothing.
+    prog = E.load_program(R.DIS, {spec.sym}) + E.load_program(R.DIS, {SWIN_LAYER})
     g, KA = V.build(seed, bytes(ka), spec.nslot)
     a = g.regions[1].arr
     a[:] = spec.arena(seed)[:len(a)]
     init = a.copy()
     steps = 0
     gx, gy = spec.grid
+    # s[0:1] is the dispatch_ptr: an AQL packet, not the kernarg. The pre/post blocks read the
+    # workgroup size from it (+0x4) right before calling swin_layer, so it must hold real values.
+    # Same packet as difftest_pre.py's model.
+    DP = 0x7100_0000_0000
+    pkt = bytearray(64)
+    struct.pack_into('<HHHHHH', pkt, 0, 0, 3, spec.threads, 1, 1, 0)
+    struct.pack_into('<III', pkt, 12, gx * spec.threads, gy, 1)
+    struct.pack_into('<II', pkt, 24, 64, spec.lds)
+    g.add('dispatch', DP, np.frombuffer(bytes(pkt), np.uint8).copy())
+    s01 = DP if uses_dispatch_ptr(spec.sym) else KA      # without dispatch_ptr, s[0:1] IS the kernarg
     for wy in range(gy):
         for wx in range(gx):
             steps += E.run_workgroup(prog, g, spec.lds, spec.threads,
-                                     {0: KA & 0xffffffff, 1: KA >> 32,
+                                     {0: s01 & 0xffffffff, 1: s01 >> 32,
                                       # These kernels declare dispatch_ptr first, so the kernarg
                                       # pointer lands in s[2:3], not s[0:1] (see the .s
                                       # .amdhsa_user_sgpr_* order and the s_load_b128 s[..], s[2:3]

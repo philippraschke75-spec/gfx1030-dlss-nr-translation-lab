@@ -18,9 +18,10 @@ HONEST STATUS, kept in the output so a passing run cannot imply more than it sho
   * k_export is GPU-verified: net_export.py difftests it against the emulator across every
     format/mode and history-flag combination at 0 mismatches, including the exact fields this
     file packs by default (mode 0, +0x28=0, hist=0). See FRAME_STATE Update 16.
-  * post_block (writes ctx+0x100, the sole network-result buffer k_export reads) is still never
-    difftested - the first attempt hit a gfx11emu.py gap, not yet resolved. See FRAME_STATE
-    Update 17.
+  * post_block (writes ctx+0x100, the sole network-result buffer k_export reads) PASSES its
+    difftest except on e4m3 NaN inputs (NaN propagation differs; see FRAME_STATE Update 18).
+  * k_pre_block_1h_32_fp8 (the block 0 dispatched here) PASSES difftest_pre.py at 8x8/16x16/32x32
+    with the host scalars this file packs (FRAME_STATE Update 18).
 
 usage: net_frame_full.py <color.bin> <src_w> <src_h> [--stop=<stage>]   (inside sandbox.py)
 """
@@ -914,8 +915,9 @@ if stop in ('full', 'all'):
     # +0x08 = input row stride in ELEMENTS, +0x14 = output row PITCH in BYTES, +0x18 = mode (see EXPORT_FINDINGS.md)
     struct.pack_into('<ii', ka, 0x14, SRC_W * 8, 0)
     struct.pack_into('<Q', ka, 0x20, BASE + off_dst)
-    # +0x28 is the export format/mode (ebp in the launcher) and +0x08 an i32 from xmm10; both
-    # were guessed as 0. Now that the network feeds real data in, coverage is a usable signal.
+    # +0x28 is ebp in the launcher. It is NOT the output format - that is +0x18 (s7 from
+    # s_load_b128 s[4:7], 0xc at 0xab20c, compared at 0xab2d4ff). The kernel reads +0x28 only when
+    # +0x38 == 0 (0xab76c), where nonzero selects the v_exp_f32 branch. EXPORT_MODE keeps its name.
     struct.pack_into('<i', ka, 0x28, int(os.environ.get('EXPORT_MODE', '0')))
     struct.pack_into('<i', ka, 0x08, PAD_W)   # input row stride: ctx+0x100 is PAD_W wide
     struct.pack_into('<Q', ka, 0x30, BASE + off_rgb)
