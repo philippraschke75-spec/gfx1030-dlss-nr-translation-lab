@@ -42,12 +42,19 @@ not too small. (2) and (3) not needed for the row count.
   measured here was only `W*8` bytes wide, which capped the reading at 8.
 * 1707 (the old value): fell through to a **16 B/pixel** path
 
-## Not solved
+## Not solved (SUPERSEDED - see below)
 
 The surface is still not finite (mode 0: min -65.1, max inf; modes 5/7/8: +-512, 70.8% nonzero). That is now
 about the *input* at `+0x00`: k_export expects 16 B/pixel float RGB(A), while `off_head` is sized
 `act_bytes(32,H,W)` and the format `k_final_head` writes there has **not been checked**. I did not test this.
 It is your item 2 and is the next thing to look at. Which 8 B mode is right is also untested.
+
+**Resolved, later.** `off_head`/`k_final_head` were never the real input - the host's tail is POST_BLOCK, not
+`k_final_head` (FRAME_STATE, "the tail is the post-block, not k_final_head"); `off_head`'s dispatch was dead
+code, removed. k_export's real input is `off_netout` (ctx+0x100), the post-block's output. With that wired,
+`net_frame_full.py`'s render shows `k_export surface: finite=True`, and `net_export.py` (FRAME_STATE Update 16)
+difftests k_export itself at 0 mismatches for every mode - both the "surface not finite" symptom and the
+"which mode is right" question are closed, mode 0 being the one net_frame_full.py actually uses.
 
 ## Changes (net_frame_full.py only)
 
