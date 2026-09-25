@@ -784,3 +784,40 @@ column-wise spectra show no peak at periods 16, 8 or 4: output/input energy ther
 frequencies within 5 %, before and after the fixes. **There is no 8-px stripe pattern**; lag8 cannot detect one and
 should not be read as a defect. Side observation: the output carries ~2.6x the input's fine-scale energy (4-6x
 before the fixes), a contrast/detail question, not periodicity.
+
+## Update 23: translator lowering was costing half the frame - GPU time 1.94x lower, output bit-identical
+
+Profiling (`net_run.cpp` phase timers, `NET_RUN_VERBOSE=1`) showed three lowering choices in `translate_kernels.py`
+dominating the ~560 ms of GPU time. Each is now a switch; the new values are the defaults.
+
+1. **`TX_DELAY`** (default `none`, was `safe`): every RDNA3 `s_delay_alu` / `s_waitcnt_depctr` was lowered to
+   `s_waitcnt_depctr 0` + `s_nop 7` - a full dependency drain plus 8 idle cycles, 6,225 times in the pre-block alone
+   (32 % of its emitted instructions). RDNA2 interlocks ordinary VALU dependencies in hardware; they are dropped.
+2. **`TX_WAITCNT`** (default `faithful`, was `full`): every `s_waitcnt` became a wait for all outstanding memory. The
+   original counters are now kept. This is sound only while each translated instruction issues exactly as many VMEM
+   and LGKM operations as its original: checked statically over all 19 frame kernels, **0 deviations** (the WMMA
+   expansion ends in `lgkmcnt(0)`; the translator-inserted prologue has no memory ops).
+3. **`TX_WMMA`** (default `batched`, was `serial`, in `translate_final_head.wmma`): each emulated
+   `v_wmma_f32_16x16x16_f16` issued 64 `ds_bpermute_b32`, each followed by its own `s_waitcnt lgkmcnt(0)`. Now the 8
+   permutes of one output register go to gather registers `scratch+16..+23`, one wait, then the 8 `v_dot2c_f32_f16` in
+   the unchanged k order - same accumulation order, so bit-identical. VGPRs 210 -> 220 for WMMA kernels (still 4
+   waves/SIMD; LDS already limits the pre/post block to one workgroup per CU).
+
+**Correctness.** The full-frame post-run arena (all 1.4 GB, every intermediate buffer) hashes to `d54273b81de7cf88`
+with the old kernels and with every variant, in 9 runs; S_mid/S_fine unchanged (+0.9247/+0.9258). Emulator
+difftests with the new kernels: pre-block 16x16 and 32x32 PASS, post_block_const PASS, ffwd2 PASS, the C=512 chain
+steps 0-3 at 8x16 MODE 1 PASS, k_export (8 combinations) unchanged. All 34 kernels rebuild; the 19 frame kernels
+are byte-identical to the verified variant build. Old kernels: `build/kernels-hw-scratch-safe`.
+
+**Timing.** Absolute numbers moved with the machine's state (the GPU was underclocked and driving Wallpaper Engine on
+two monitors), so the comparison was run interleaved, old/new alternating, three rounds:
+
+| kernels | round 1 | round 2 | round 3 | median |
+|---|---|---|---|---|
+| old (`safe`/`full`/`serial`) | 667 ms | 682 ms | 677 ms | 677 ms |
+| new (defaults) | 378 ms | 349 ms | 329 ms | **349 ms (1.94x faster)** |
+
+Per kernel (one earlier run, unloaded): pre-block 115.7 -> 70.8 ms, post-block 116.2 -> 57.8 ms, k_swin_var C=256
+78.2 -> 37.3 ms, C=128/64/32 143.2 -> 64.3 ms, k_contract2 + k_qkv_attn2 50.8 -> 24.5 ms. The pre-block gained
+nothing from WMMA batching and is now the largest single kernel. An absolute figure at normal clocks is still to be
+measured.

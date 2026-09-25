@@ -3,7 +3,10 @@
 Only the pinned source image is accepted. Scratch/call kernels are refused
 until their ABI is implemented. Assembly success is not numerical validation.
 """
-import argparse
+import argparse, os as _os
+TX_DELAY=_os.environ.get('TX_DELAY','none')
+TX_WAITCNT=_os.environ.get('TX_WAITCNT','faithful')
+TX_WMMA=_os.environ.get('TX_WMMA','batched')
 import hashlib
 import json
 import math
@@ -166,6 +169,9 @@ def translate(name,lines,policy,md,ro,rofile,out,binpath,private_lds=False,helpe
     scratch=(max(register_end(lines,'v'),value(md,'vgpr_count'))+3)//4*4
     wide_offsets=any(t.startswith('global_') and (m:=re.search(r' offset:(-?\d+)',t)) and not -2048<=int(m[1])<=2047 for _,t,_ in lines)
     vgprs=scratch+(16 if wide_offsets else (14 if private else 12))
+    # TX_WMMA=batched puts the 8 WMMA gather registers at scratch+16..+23, clear of every other scratch use.
+    wmma_batched=TX_WMMA=='batched' and any(t.startswith('v_wmma') for _,t,_ in lines)
+    if wmma_batched: vgprs=max(vgprs,scratch+24)
     if vgprs>256: raise ValueError('UNSUPPORTED: register budget exceeds 256 VGPRs')
     user_count=sum(users.values())+(2 if hw else 0)
     # Metadata count may include special registers; next_free_sgpr describes
@@ -198,7 +204,7 @@ def translate(name,lines,policy,md,ro,rofile,out,binpath,private_lds=False,helpe
         replacement=[text]
         if op.startswith('v_wmma'):
             if op!='v_wmma_f32_16x16x16_f16': raise ValueError('unsupported WMMA form '+op)
-            replacement=base.wmma(text,scratch)
+            replacement=base.wmma(text,scratch,scratch+16 if wmma_batched else None)
         elif op=='s_getpc_b64': replacement=[text,f'.Lgetpc_{addr:x}:']
         elif op=='s_addc_u32' and i and lines[i-1][0] in helper_add_at:
             m=re.fullmatch(r's_addc_u32 (s\d+), (s\d+), (-1|0xffffffff)',text)
@@ -228,8 +234,18 @@ def translate(name,lines,policy,md,ro,rofile,out,binpath,private_lds=False,helpe
             if target not in addresses: raise ValueError('branch target outside selected function')
             replacement=[f'{op} .Lpc_{target:x}']
         elif op in ('s_clause','s_set_inst_prefetch_distance'): replacement=[]
-        elif op in ('s_delay_alu','s_waitcnt_depctr'): replacement=['s_waitcnt_depctr 0','s_nop 7']
-        elif op=='s_waitcnt': replacement=['s_waitcnt vmcnt(0) lgkmcnt(0)','s_waitcnt_vscnt null, 0']
+        # TX_DELAY / TX_WAITCNT select the lowering of RDNA3 scheduling hints and memory waits. Defaults are
+        # 'none' (drop s_delay_alu/s_waitcnt_depctr: RDNA2 interlocks ordinary VALU dependencies in hardware)
+        # and 'faithful' (keep the original counters). 'faithful' is sound only while every translated
+        # instruction issues exactly as many VMEM and LGKM ops as its original - checked for all frame kernels
+        # (0 deviations; WMMA expansions end in lgkmcnt(0), the prologue has no memory ops). 'safe'/'full' is
+        # the old lowering (full drain + s_nop 7 per hint, full wait per s_waitcnt), kept for A/B runs.
+        # Full frame: 561 -> 285-324 ms GPU with TX_WMMA=batched, bit-identical 1.4 GB arena (FRAME_STATE Update 23).
+        elif op in ('s_delay_alu','s_waitcnt_depctr'):
+            replacement={'safe':['s_waitcnt_depctr 0','s_nop 7'],'none':[],'nop0':['s_nop 0']}[TX_DELAY]
+        elif op=='s_waitcnt':
+            replacement=([f's_waitcnt {args}'] if TX_WAITCNT=='faithful' and args else
+                         ['s_waitcnt vmcnt(0) lgkmcnt(0)','s_waitcnt_vscnt null, 0'])
         elif op.startswith('v_dual_'):
             parts=text.split(' :: '); replacement=[]; dests=[]
             if len(parts)!=2: raise ValueError('invalid dual operation')
