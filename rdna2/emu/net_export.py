@@ -29,6 +29,10 @@ env: BH, BW     geometry (default 32, 56)
                 the emulator's exact (gfx11emu.py, np.exp2 in f64), and 16 B/px modes store that f32 as is.
                 0 makes every mismatch a FAIL.
 
+Exit status: 1 if a combination in this run failed, else coverage_guard's verdict over
+build/coverage/net_export.json - 0 only when all 72 required combinations (9 modes x +0x28 x hist x
+SPECIAL, at 32x56) have a current PASS, 2 while any is missing or stale.
+
 usage: net_export.py
 """
 import sys, re, struct, subprocess, os
@@ -36,6 +40,7 @@ from pathlib import Path
 import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gfx11emu as E, run_emu as R, run_var as V, difftest_var as D, kernelspec as K
+import coverage_guard as CG
 
 H = int(os.environ.get('BH', '32'))
 W = int(os.environ.get('BW', '56'))
@@ -130,6 +135,15 @@ def row_bpp(buf):
     return 0 if len(w) == 0 else round((int(w[-1]) + 1) / W)
 
 
+# Counted coverage: the full claim is every (mode, +0x28, hist) at 32x56 with default stride/S1/tolerance,
+# for both plain and SPECIAL inputs - 72 combinations. Narrowing MODES/F28S/HISTS runs fewer, and the
+# verdict then says INCOMPLETE instead of PASS. Other geometry or tolerance records its own key.
+_CTX = dict(BH=H, BW=W, PADW=PADW, S1=S1, ULP_TOL=ULP_TOL, SPECIAL=os.environ.get('SPECIAL', '0'))
+cov = CG.Coverage('net_export',
+                  required=[dict(mode=m, f28=f, hist=h, BH=32, BW=56, PADW=64, S1=1.0, ULP_TOL=16, SPECIAL=sp)
+                            for m in range(9) for f in (0, 1) for h in (0, 1) for sp in ('0', '1')],
+                  fingerprint_files=[__file__, E.__file__, R.DIS, MOD])
+
 print('k_export difftest: H=%d W=%d padw=%d pitch=%d grid=%s kernarg=%d B S1=%g special=%s'
       % (H, W, PADW, PITCH, GRID, KSIZE, S1, os.environ.get('SPECIAL', '0')))
 print('%-5s %-5s %-5s %-6s %-10s %-10s %-8s %s' % ('mode', '+28', 'hist', 'B/px', 'written', 'mismatch', 'max ulp', ''))
@@ -153,4 +167,8 @@ for hist in HISTS:
             verdict = 'PASS' if len(d) == 0 and len(wrote) else ('ULP' if good else 'FAIL')
             print('%-5d %-5d %-5d %-6d %-10d %-10d %-8s %s' % (mode, f28, hist, row_bpp(ref), len(wrote), len(d),
                                                               '-' if mu is None else mu, verdict), flush=True)
-raise SystemExit(0 if ok else 1)
+            # 'ULP' rows are within the declared ULP_TOL, which is part of the key, so they count as passed
+            cov.record(dict(mode=mode, f28=f28, hist=hist, **_CTX), 'PASS' if good else 'FAIL',
+                       detail='%d mismatches, max ulp %s' % (len(d), mu))
+_v = cov.verdict()
+raise SystemExit(1 if not ok else _v)

@@ -3,6 +3,9 @@ shared scaffolding in kernelspec.py derives everything else (hidden-args offsets
 
 usage: difftest_spec.py <name> [seed]     (inside sandbox.py)
        difftest_spec.py --list
+
+Exit status: 1 if this entry failed, else coverage_guard's per-kernel verdict: 0 only once every
+registry entry for the same kernel symbol has a current PASS at seed 1, 2 while any is missing or stale.
 """
 import sys, json
 from pathlib import Path
@@ -162,6 +165,18 @@ if __name__ == '__main__':           # importable as a registry, e.g. by net_smo
         raise SystemExit(0)
     name = sys.argv[1]
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 1
-    row = K.run_difftest(SPECS[name](), seed, tag='%s_s%d' % (name, seed))
+    spec = SPECS[name]()
+    row = K.run_difftest(spec, seed, tag='%s_s%d' % (name, seed))
     print(json.dumps(row), flush=True)
-    raise SystemExit(0 if row['status'] == 'PASS' else 1)
+    # Counted coverage per kernel: a kernel is verified only when every registry entry for its symbol
+    # (e.g. post_block AND post_block_const) has a current PASS at seed 1. One entry passing prints its
+    # own row above, but the kernel verdict stays INCOMPLETE until the others have run too.
+    import coverage_guard as CG, gfx11emu as E, run_emu as R
+    siblings = sorted(n for n, f in SPECS.items() if f().sym == spec.sym)
+    cov = CG.Coverage('difftest_spec.' + spec.sym,
+                      required=[dict(spec=n, seed=1) for n in siblings],
+                      fingerprint_files=[__file__, K.__file__, E.__file__, R.DIS,
+                                         K.D.ROOT / 'build' / 'kernels-hw-scratch' / (spec.sym + '.co')])
+    cov.record(dict(spec=name, seed=seed), row['status'], detail='%s mismatches' % row.get('mismatches'))
+    _v = cov.verdict()
+    raise SystemExit(1 if row['status'] != 'PASS' else _v)
