@@ -1183,7 +1183,10 @@ if a16.size >= tiles_y * tiles_x * 8:
 
 if stop in ('full', 'all'):
     for _nm, _o, _n in ([('c512_1 w%d' % i, o, N512) for i, o in enumerate(c512_1)] + [('vit b%d' % i, o, N1024) for i, o in enumerate(vit_buf)]
-                        + [('c512_2 w%d' % i, o, N512) for i, o in enumerate(c512_2)] + [('block39 out', off_b39, N512)]):
+                        + [('c512_2 w%d' % i, o, N512) for i, o in enumerate(c512_2)]
+                        # off_b39 is only written with MID_HOST=0. With MID_HOST=1 block 39 writes c512_2[0]
+                        # (+0x10), so reporting off_b39 there showed an unused, all-zero buffer as 'block39 out'.
+                        + ([] if MID_HOST else [('block39 out', off_b39, N512)])):
         _x = res[_o:_o + _n]
         print('mid %-12s %9d B: nonzero=%6.2f%% distinct=%3d' % (_nm, _n, 100.0 * float((_x != 0).mean()), len(np.unique(_x))))
     for _di, (_k, _b, _C) in enumerate(DEC_STAGES):
