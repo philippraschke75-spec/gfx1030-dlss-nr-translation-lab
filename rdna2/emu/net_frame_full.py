@@ -277,15 +277,18 @@ struct.pack_into('<Q', ka, 0x00, BASE + off_src)
 # fields and were being given the same values.
 struct.pack_into('<iiiiii', ka, 0x08, SRC_W * 8, 0, SRC_H, SRC_W, PAD_H, PAD_W)
 struct.pack_into('<Q', ka, 0x20, BASE + off_rgb)
-# +0x28 mode, +0x2c scale. The host packs +0x28 = ebp = the frame function's 9th argument ([rsp+0x318],
-# 0x18002d533 -> 0x18002d5ff), which on the first-frame paths is the global dword 0x18009a488
-# (0x180015add / 0x18001a880) - initialised to -1 by the ctx constructor (0x18001f26b) and never
-# written directly elsewhere. Any mode != 0 tonemaps in k_import: max(0, scale*x), x/(1+x) clamped,
-# then the sRGB OETF (0xaa494-0xaa518), so the network sees [0,1]. Mode 0 passed raw HDR (up to 65 here),
-# which blew activations up to the e4m3 limit from encoder block 9 on and printed as dark 16-px blocks.
-# The same ebp is k_export's +0x28 (the inverse path), so EXPORT_MODE defaults to -1 too.
+# +0x28 mode, +0x2c scale. The frame function (0x18002d3b0) puts its 10th argument in ebp ([rsp+0x318],
+# 0x18002d533 -> +0x28 at 0x18002d5ff); +0x0c is its 4th (r9d -> ebx, 0x18002d400), the source-format code.
+# At every call site the 10th argument is the global 0x18009a850, written per frame at 0x180015028:
+#   mode = [rbp+0x240] (format jump table 0x180013ec7: 0 for RGBA16F), = 1 if (format & 3) == 0
+#   (0x180014ffe: format codes 0 RGBA16F and 4 R11G11B10F - the HDR float formats), = 1 if [rbp+0x244],
+#   and overridden by INI [DlssNrOnAmd] Tonemap (GetPrivateProfileIntA default -1 at 0x180007ff6 ->
+#   0x18009acf8) when that is >= 0. The capture's colour is DXGI 10 (RGBA16F), so the host passes mode 1.
+# Any mode != 0 tonemaps in k_import (only `== 0` is tested, 0xaa434/0xaa48c): max(0, scale*x), x/(1+x)
+# clamped, sRGB OETF. Mode 0 passed raw HDR (65 here) and blew activations up to the e4m3 limit from
+# encoder block 9 on (the dark 16-px blocks). The same ebp is k_export's +0x28 (inverse branch).
 # +0x2c: 1.0 (0x18006d2c8), overridden by a positive job value (0x18002d432-0x18002d488).
-struct.pack_into('<if', ka, 0x28, int(os.environ.get('IMPORT_MODE', '-1')), float(os.environ.get('IMPORT_SCALE', '1.0')))
+struct.pack_into('<if', ka, 0x28, int(os.environ.get('IMPORT_MODE', '1')), float(os.environ.get('IMPORT_SCALE', '1.0')))
 g_imp = ((PAD_W + 255) // 256, PAD_H)
 struct.pack_into('<III', ka, 0x30, g_imp[0], g_imp[1], 1)
 struct.pack_into('<HHH', ka, 0x3c, 256, 1, 1)
@@ -935,7 +938,7 @@ if stop in ('full', 'all'):
     # +0x28 is ebp in the launcher. It is NOT the output format - that is +0x18 (s7 from
     # s_load_b128 s[4:7], 0xc at 0xab20c, compared at 0xab2d4ff). The kernel reads +0x28 only when
     # +0x38 == 0 (0xab76c), where nonzero selects the v_exp_f32 branch. EXPORT_MODE keeps its name.
-    struct.pack_into('<i', ka, 0x28, int(os.environ.get('EXPORT_MODE', '-1')))   # same ebp as k_import +0x28
+    struct.pack_into('<i', ka, 0x28, int(os.environ.get('EXPORT_MODE', '1')))   # same ebp as k_import +0x28
     struct.pack_into('<i', ka, 0x08, PAD_W)   # input row stride: ctx+0x100 is PAD_W wide
     struct.pack_into('<Q', ka, 0x30, BASE + off_rgb)
     # +0x38/+0x3c come from xmm6/xmm7 in the frame function (0x18002d476-0x18002d488), which reads

@@ -757,3 +757,30 @@ passes raw HDR (65.1 max here). The same `ebp` is k_export's +0x28, the v_exp (i
 is what the host does. The rendered frame is now clean: no dark blocks, no blue/magenta cast. **Open:** lag8 stays
 at 0.98 in every variant, and whether an application ever overwrites 0x18009a488 before the first frame is not
 settled (no direct write found; a block copy cannot be excluded statically).
+
+## Update 22: the k_import mode is derived from the colour format (host value 1), and lag8 is not a stripe measure
+
+**Correction to Update 21's mechanism.** Update 21 counted the frame function's stack arguments one short. With 8
+pushes and `sub rsp,0x288`, `[rsp+0x318]` is the **10th** argument and `[rsp+0x320]` (the job) the 11th. So:
+
+* `k_import` +0x0c = the 4th argument (`ebx = r9d`, 0x18002d400) = global 0x18009a488, the **source-format code**,
+  written per frame at 0x180018ee4 from the colour texture's DXGI format (jump table at 0x180013ec7: RGBA16F 0,
+  UNORM8 1, sRGB8 2, 10:10:10:2 3, R11G11B10F 4, RGBA32F 5, RGB9E5 6). Its constructor value -1 never reaches a
+  frame. The runner's +0x0c = 0 was right.
+* `k_import`/`k_export` +0x28 = the 10th argument = global **0x18009a850**, written per frame at 0x180015028:
+  `mode = [rbp+0x240]` (0 for RGBA16F), `= 1 if (format & 3) == 0` (0x180014ffe: RGBA16F and R11G11B10F, the HDR
+  float formats), `= 1 if [rbp+0x244]`, then overridden by INI **`[DlssNrOnAmd] Tonemap`** (`GetPrivateProfileIntA`,
+  default -1, 0x180007ff6 -> 0x18009acf8) when >= 0.
+
+The capture's colour texture is DXGI 10 (RGBA16F, `INPUT_CONTRACT_CYBERPUNK_FSR3.md`), so the host passes
+**mode 1**. Both kernels only test the mode against 0 (k_import 0xaa434/0xaa48c, k_export 0xab778), so 1 and -1 are
+byte-identical and Update 21's scores stand. Defaults are now `IMPORT_MODE=1`, `EXPORT_MODE=1`. The "does an app
+overwrite -1" question is answered: the value is computed every frame from the texture format, plus the INI key.
+
+**lag8.** `smid.py`'s lag8 is the lag-8 autocorrelation of the column-mean profile. Any smooth profile scores
+near 1: the **input** itself is +0.98, the same as every output. After removing the smooth trend, the share of
+the column profile periodic in x mod 8 is 0.02-0.04 % in input and output alike (random control 0.01 %). Row- and
+column-wise spectra show no peak at periods 16, 8 or 4: output/input energy there equals the neighbouring
+frequencies within 5 %, before and after the fixes. **There is no 8-px stripe pattern**; lag8 cannot detect one and
+should not be read as a defect. Side observation: the output carries ~2.6x the input's fine-scale energy (4-6x
+before the fixes), a contrast/detail question, not periodicity.
