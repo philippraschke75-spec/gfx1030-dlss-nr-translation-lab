@@ -9,9 +9,15 @@ Buffers are allocated by the documented activation formula C * ceil(H/4) * ceil(
 
 HONEST STATUS, kept in the output so a passing run cannot imply more than it shows:
   * k_import (format 0) is GPU-verified at this exact resolution.
-  * block 0, the pre-block k_swin_var<32,true>, FAILS its own difftest by 28,825 bytes on valid
-    float input. It is the network's entry point, so anything downstream inherits that.
-  * k_export has never been validated - it needs the network's own tiled output at +0x00.
+  * block 0 is k_pre_block_1h_32_fp8 (PRE_1H=1), not k_swin_var<32,true> - see FRAME_STATE's
+    "k_pre_block_1h_32_fp8 as block 0" fix. k_swin_var<32,true>'s old difftest failure (28,825/
+    42,812 bytes) is retired: VARPARAMS_HOST_CONTRACT.md's "SOLVED: block 0 was never broken"
+    found it was a fixture bug (+0x68's high dword left uncleared, corrupting the RNG seed) and
+    it now PASSES at 0 mismatches. Neither finding says anything about k_pre_block_1h_32_fp8,
+    which is the kernel actually dispatched here and has its own, separate verification status.
+  * k_export is fed the network's own output at +0x00 (off_netout, ctx+0x100) and its kernarg
+    fields are documented in EXPORT_FINDINGS.md, but its own translation has never been
+    difftested against the emulator - only the wiring around it has been checked by observation.
 
 usage: net_frame_full.py <color.bin> <src_w> <src_h> [--stop=<stage>]   (inside sandbox.py)
 """
