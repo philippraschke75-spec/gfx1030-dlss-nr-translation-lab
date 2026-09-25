@@ -36,7 +36,8 @@ RUN = D.ROOT / 'build' / 'net_run.exe'
 # NET_FRAME_OUT gives a run its own scratch dir. Parallel runs sharing one dir overwrite each other's
 # tm.txt/tk.bin/ta.bin mid-flight, which produced inconsistent per-prefix results.
 OUT = D.ROOT / 'build' / os.environ.get('NET_FRAME_OUT', 'net_frame_full'); OUT.mkdir(parents=True, exist_ok=True)
-MOD = lambda s: D.ROOT / 'build' / 'kernels-hw-scratch' / (s + '.co')
+# KERNEL_DIR selects an alternative translation build (e.g. a lowering variant) under build/.
+MOD = lambda s: D.ROOT / 'build' / os.environ.get('KERNEL_DIR', 'kernels-hw-scratch') / (s + '.co')
 WEIGHTS = D.ROOT / 'build' / 'weights'
 
 color_path, SRC_W, SRC_H = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])

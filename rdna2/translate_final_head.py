@@ -58,9 +58,24 @@ def reg_range(s):
         raise ValueError('unexpected WMMA register shape: '+s)
     return int(m[1])
 
-def wmma(text, scratch=84):
+def wmma(text, scratch=84, gather_base=None):
     regs = [reg_range(x) for x in text.split(None,1)[1].split(',')]
     d,a,b,c=regs
+    if gather_base is not None:
+        # Batched: for each output register issue its 8 ds_bpermute into 8 distinct gather registers, wait
+        # ONCE, then run the 8 v_dot2c in the same k order as the serial form - same accumulation order,
+        # so bit-identical, but one LDS round-trip latency per output register instead of eight.
+        lane=scratch+8
+        result=[f'v_mbcnt_lo_u32_b32 v{lane}, -1, 0',
+                f'v_lshrrev_b32_e32 v{lane}, 4, v{lane}',
+                f'v_lshlrev_b32_e32 v{lane}, 2, v{lane}']
+        for j in range(8):
+            result.append(f'v_mov_b32_e32 v{scratch+j}, v{c+j}')
+            result += [f'ds_bpermute_b32 v{gather_base+k}, v{lane}, v{a+k} offset:{8*j}' for k in range(8)]
+            result.append('s_waitcnt lgkmcnt(0)')
+            result += [f'v_dot2c_f32_f16 v{scratch+j}, v{gather_base+k}, v{b+k}' for k in range(8)]
+        result += [f'v_mov_b32_e32 v{d+j}, v{scratch+j}' for j in range(8)]
+        return result
     # v84..v93 are disjoint from the original kernel's v0..v83.
     # All inputs are read before any original destination is changed.
     lane,gather=scratch+8,scratch+9
