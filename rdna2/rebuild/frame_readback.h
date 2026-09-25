@@ -30,7 +30,8 @@ struct FrameReadback {
         if(a.Get()!=b.Get()) return E_INVALIDARG;
         auto desc=buffer->GetDesc();
         if(desc.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.SampleDesc.Count!=1 || desc.DepthOrArraySize!=1 || desc.MipLevels!=1) return E_INVALIDARG;
-        if(desc.Format!=DXGI_FORMAT_R8G8B8A8_UNORM && desc.Format!=DXGI_FORMAT_B8G8R8A8_UNORM && desc.Format!=DXGI_FORMAT_R10G10B10A2_UNORM) return E_INVALIDARG;
+        if(desc.Format!=DXGI_FORMAT_R8G8B8A8_UNORM && desc.Format!=DXGI_FORMAT_B8G8R8A8_UNORM && desc.Format!=DXGI_FORMAT_R10G10B10A2_UNORM
+           && desc.Format!=DXGI_FORMAT_R16G16B16A16_FLOAT) return E_INVALIDARG;
         device->GetCopyableFootprints(&desc,0,1,0,&layout,&rows,&row_bytes,&total);
         if(!total || total>256ull*1024*1024) return E_INVALIDARG;
         D3D12_HEAP_PROPERTIES heap{}; heap.Type=D3D12_HEAP_TYPE_READBACK;
