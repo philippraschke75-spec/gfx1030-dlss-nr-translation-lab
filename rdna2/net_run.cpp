@@ -85,6 +85,13 @@ int main(int argc,char**argv){
   auto t_all=std::chrono::steady_clock::now();
   double total_ms=0;
 
+  // All dispatches go on the default stream, so the GPU already runs them in order without any
+  // host round-trip - the previous version blocked the CPU on a busy-wait after every single
+  // kernel (hipEventQuery in a spin loop) before launching the next one, which serialized launch
+  // overhead into the critical path across all ~160 dispatches. Now every kernel is queued back to
+  // back; only the LAST event is waited on (with the same timeout), once. Per-kernel timing (events
+  // recorded around each launch, read back after the single wait) is unchanged in what it reports.
+  std::vector<hipEvent_t> e0(steps.size()), e1(steps.size());
   for(size_t i=0;i<steps.size();i++){
     const Step& s=steps[i];
     std::string key=s.mod+"|"+s.sym;
@@ -100,20 +107,24 @@ int main(int argc,char**argv){
     }
     size_t sz=ka.size();
     void* cfg[]={HIP_LAUNCH_PARAM_BUFFER_POINTER,ka.data(),HIP_LAUNCH_PARAM_BUFFER_SIZE,&sz,HIP_LAUNCH_PARAM_END};
-    hipEvent_t e0,e1; hipEventCreate(&e0); hipEventCreate(&e1); hipEventRecord(e0);
+    hipEventCreate(&e0[i]); hipEventCreate(&e1[i]); hipEventRecord(e0[i]);
     CHECK(hipModuleLaunchKernel(fns[key],s.gx,s.gy,s.gz,s.thr,1,1,0,nullptr,nullptr,cfg));
-    hipEventRecord(e1);
+    hipEventRecord(e1[i]);
+  }
+  {
     auto t0=std::chrono::steady_clock::now();
-    while(hipEventQuery(e1)==hipErrorNotReady){
+    while(hipEventQuery(e1.back())==hipErrorNotReady){
       if(std::chrono::duration<double>(std::chrono::steady_clock::now()-t0).count()>tmo){
-        std::printf("TIMEOUT at step %zu (%s) after %.0f s\n",i,s.sym.c_str(),tmo);
+        std::printf("TIMEOUT waiting for the last dispatch after %.0f s\n",tmo);
         std::fflush(stdout); std::_Exit(5); }
     }
-    hipError_t e=hipEventQuery(e1);
-    if(e!=hipSuccess){ std::printf("step %zu (%s) failed: %s\n",i,s.sym.c_str(),hipGetErrorString(e)); return 6; }
-    float ms; hipEventElapsedTime(&ms,e0,e1); total_ms+=ms;
-    hipEventDestroy(e0); hipEventDestroy(e1);
-    if(getenv("NET_RUN_VERBOSE")) std::printf("  [%3zu] %-44s %.3f ms\n",i,s.sym.c_str(),ms);
+  }
+  for(size_t i=0;i<steps.size();i++){
+    hipError_t e=hipEventQuery(e1[i]);
+    if(e!=hipSuccess){ std::printf("step %zu (%s) failed: %s\n",i,steps[i].sym.c_str(),hipGetErrorString(e)); return 6; }
+    float ms; hipEventElapsedTime(&ms,e0[i],e1[i]); total_ms+=ms;
+    hipEventDestroy(e0[i]); hipEventDestroy(e1[i]);
+    if(getenv("NET_RUN_VERBOSE")) std::printf("  [%3zu] %-44s %.3f ms\n",i,steps[i].sym.c_str(),ms);
   }
 
   CHECK(hipMemcpy(host.data(),d,host.size(),hipMemcpyDeviceToHost));
