@@ -46,7 +46,13 @@ struct Step { std::string mod, sym; size_t off, len; unsigned gx, gy, thr, gz; }
 
 int main(int argc,char**argv){
   if(argc<5){ std::printf("usage: net_run manifest kernargs.bin arena.bin arena_base_hex\n"); return 1; }
+  // Phase timers: the wall figure below used to start after the upload and end after the write-back,
+  // so it mixed module loading, the 1.4 GB device->host copy and the file write into one number.
+  using clk=std::chrono::steady_clock;
+  auto secs=[](clk::time_point a,clk::time_point b){ return std::chrono::duration<double>(b-a).count(); };
+  auto t_start=clk::now();
   auto kab=rd(argv[2]); auto arena=rd(argv[3]);
+  double ph_read=secs(t_start,clk::now());
   uint64_t base=std::strtoull(argv[4],nullptr,16);
 
   std::vector<Step> steps;
@@ -70,14 +76,19 @@ int main(int argc,char**argv){
   }
   std::printf("net_run: %zu dispatches, arena %zu bytes\n",steps.size(),arena.size());
 
+  auto t_dev=clk::now();
   hipDeviceProp_t p{}; CHECK(hipGetDeviceProperties(&p,0));
   if(std::strcmp(p.gcnArchName,"gfx1030")){ std::printf("not gfx1030: %s\n",p.gcnArchName); return 3; }
 
+  double ph_devinit=secs(t_dev,clk::now());
+  auto t_up=clk::now();
   const size_t PAD=1<<16; uint8_t* d; CHECK(hipMalloc(&d,arena.size()+2*PAD));
   std::vector<uint8_t> host(arena.size()+2*PAD,0xA5);
   std::memcpy(host.data()+PAD,arena.data(),arena.size());
   CHECK(hipMemcpy(d,host.data(),host.size(),hipMemcpyHostToDevice));
   uint64_t dev=(uint64_t)(d+PAD);
+  double ph_upload=secs(t_up,clk::now());
+  double ph_modload=0; int n_mods=0, n_fns=0;
 
   std::map<std::string,hipFunction_t> fns;           // modules are reused across many blocks
   std::map<std::string,hipModule_t> mods;
@@ -96,8 +107,10 @@ int main(int argc,char**argv){
     const Step& s=steps[i];
     std::string key=s.mod+"|"+s.sym;
     if(!fns.count(key)){
-      if(!mods.count(s.mod)){ hipModule_t m; CHECK(hipModuleLoad(&m,s.mod.c_str())); mods[s.mod]=m; }
-      hipFunction_t f; CHECK(hipModuleGetFunction(&f,mods[s.mod],s.sym.c_str())); fns[key]=f;
+      auto tm=clk::now();
+      if(!mods.count(s.mod)){ hipModule_t m; CHECK(hipModuleLoad(&m,s.mod.c_str())); mods[s.mod]=m; n_mods++; }
+      hipFunction_t f; CHECK(hipModuleGetFunction(&f,mods[s.mod],s.sym.c_str())); fns[key]=f; n_fns++;
+      ph_modload+=secs(tm,clk::now());
     }
     if(s.off+s.len>kab.size()){ std::printf("step %zu kernarg out of range\n",i); return 1; }
     std::vector<uint8_t> ka(kab.begin()+s.off, kab.begin()+s.off+s.len);
@@ -111,6 +124,8 @@ int main(int argc,char**argv){
     CHECK(hipModuleLaunchKernel(fns[key],s.gx,s.gy,s.gz,s.thr,1,1,0,nullptr,nullptr,cfg));
     hipEventRecord(e1[i]);
   }
+  double ph_launch=secs(t_all,clk::now())-ph_modload;
+  auto t_wait=clk::now();
   {
     auto t0=std::chrono::steady_clock::now();
     while(hipEventQuery(e1.back())==hipErrorNotReady){
@@ -127,11 +142,22 @@ int main(int argc,char**argv){
     if(getenv("NET_RUN_VERBOSE")) std::printf("  [%3zu] %-44s %.3f ms\n",i,steps[i].sym.c_str(),ms);
   }
 
+  double ph_wait=secs(t_wait,clk::now());
+  auto t_down=clk::now();
   CHECK(hipMemcpy(host.data(),d,host.size(),hipMemcpyDeviceToHost));
+  double ph_download=secs(t_down,clk::now());
+  auto t_g=clk::now();
   bool guard=true;
   for(size_t i=0;i<PAD;i++) guard&=host[i]==0xA5;
   for(size_t i=PAD+arena.size();i<host.size();i++) guard&=host[i]==0xA5;
+  double ph_guard=secs(t_g,clk::now());
+  auto t_w=clk::now();
   FILE*fo=std::fopen(argv[3],"wb"); std::fwrite(host.data()+PAD,1,arena.size(),fo); std::fclose(fo);
+  double ph_write=secs(t_w,clk::now());
+  std::printf("net_run phases (s): read %.2f  device-init %.2f  upload %.2f  module-load %.2f (%d modules, %d functions)"
+              "  launch %.2f  gpu-wait %.2f  download %.2f  guard %.2f  write %.2f  | total %.2f\n",
+              ph_read,ph_devinit,ph_upload,ph_modload,n_mods,n_fns,ph_launch,ph_wait,ph_download,ph_guard,ph_write,
+              secs(t_start,clk::now()));
   double wall=std::chrono::duration<double>(std::chrono::steady_clock::now()-t_all).count();
   std::printf("net_run OK: %zu dispatches, %.3f ms GPU, %.2f s wall, arena_dev=0x%llx, guards %s\n",
               steps.size(),total_ms,wall,(unsigned long long)dev,guard?"intact":"CORRUPT");
