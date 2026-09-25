@@ -846,3 +846,28 @@ Pre-block alone ~61 -> ~56 ms.
 
 Also: the emulator is 1.25-1.7x faster (`0d9cf4b`: single-region memory fast path, table-lookup `v_perm_b32`,
 cached exec mask), output hash-identical on 6 kernels (`emu_selfcheck.py`).
+
+## Update 25: e4m3 encoder's power-of-two division becomes v_ldexp - 209.7 -> 206.6 ms, bit-identical
+
+The float -> e4m3 encoder (inlined 212 times in pre/post block's swin_layer path) computes `e = floor(log2 x)`, builds
+`2^e` with `v_ldexp_f32 vP, 1.0, e`, then divides `x / 2^e` with the full 10-instruction IEEE sequence
+(`v_div_scale` x2 ... `v_div_fmas`, `v_div_fixup`). 2,980 of the pre-block's 2,982 executed divisions are this. The
+encoder's guard makes the division exact: `v_cndmask vX, 0x43e00000, ...` clamps x <= 448, `v_cmpx_o` / `v_cmpx_neq 0`
+drop NaN and zero, `v_cmpx_ngt_f32 0x3c800000, vX` keeps only x >= 2^-6. So 2^e and x/2^e are normal floats and the
+quotient is exactly `ldexp(x, -e)`, in any denorm mode.
+
+`TX_DIVPOW2` (default on) replaces a site with `v_sub_nc_u32 t, 0, e` + `v_ldexp_f32 vD, vX, t` only when all hold:
+the divisor is `v_ldexp_f32 vP, 1.0, vE`; the division has exactly the IEEE shape; no branch target inside; the
+448-clamp and 2^-6 guard precede it with x, e, 2^e unchanged since; and a CFG liveness analysis in the compiler's own
+model (write kills, read uses, helper call/return modelled) shows every temporary the division wrote, vcc included,
+dead afterwards. 94 of 212 sites in the pre-block and 91 in the post-block qualify; the rest keep the division
+because some temporary is read later.
+
+Verification: pre-block 8x8 and 16x16 and post_block_const PASS against the emulator; full-frame arena hash unchanged
+(`d54273b81de7cf88`). Timing, interleaved, 3 rounds: 209.4 / 209.5 / 210.3 -> **206.5 / 206.6 / 206.7 ms** (-1.4 %).
+Pre-block 54.6 -> 53.3 ms.
+
+**Where this leaves the encoder:** its remaining cost is its own arithmetic (`v_log_f32`, floor, rounding, carry,
+clamp) and the exec-mask branching around it. Translation-level cleanup has now removed the waits, the LDS gathers
+and the redundant divisions; what is left is the original code's work, so further large gains need kernels rewritten
+for RDNA2 rather than translated.
