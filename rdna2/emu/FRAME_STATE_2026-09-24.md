@@ -588,3 +588,26 @@ translated prologue. It also has STEPS/FIRST/MODE/OUT2 switches.
 This run started before the +0x20 fix, so step 3's +0x20 pointed at the input slot. The optional second output
 (slot 4 in "wrote") was therefore exercised as well. **The host-default C=512 translations are bit-exact at grid > 1,
 including grid.z = 16.** Not run here: the real 32x56 size, MODE 1-3 (shifted origins) and FIRST=0.
+
+## Update 15: (7,7,0,0) at 0x18006d570 is the rounding addend, not grid.y - Update 14's grid.y "fix" reverted
+
+Read from the host (`version.dll`, capstone). The table is a `paddd` operand in `.rdata`, not a grid literal:
+
+```
+0x180033c26  movq  xmm0, [stage5+4]        ; (H, W)
+0x180033c32  movq  xmm6, [0x180066410+i*8] ; (ox, oy)
+0x180033c37  pshufd xmm0, xmm0, 0xe1       ; (W, H)
+0x180033c3c  paddd xmm0, [0x18006d570]     ; + (7,7,0,0)
+0x180033c44  psubd xmm0, xmm6              ; - (ox, oy)
+0x180033c48  psrad/psrld/paddd/psrad 3     ; signed /8
+0x180033c65  mov   dword [rsp+0x78], 0x10  ; gz = 16
+```
+
+So grid = ((W5+7-ox)>>3, (H5+7-oy)>>3, 16), which was the runner's original formula. At H5=32 that gives gy = 4 or 5,
+never 7. Both C=512 stages go through the same launcher 0x180033660, so the formula holds at every stage size.
+Update 14's "citation-accuracy fix" (the one about grid.y, lines above) misread the addend as the grid and is reverted.
+`QKV2_GY` now defaults to `(H5+7-oy)>>3` and can still be overridden.
+
+Score, MID_HOST=1 C512_HOST=1: S_mid **+0.7106**, S_fine +0.6844, lag8 +0.98. This is identical to gy=7: the extra
+workgroup rows gy=7 launched lie past H5 and write nothing that counts. So the literal was harmless at this size, but
+it was only right by accident.
