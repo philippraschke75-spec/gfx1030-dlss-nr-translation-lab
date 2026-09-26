@@ -871,3 +871,36 @@ Pre-block 54.6 -> 53.3 ms.
 clamp) and the exec-mask branching around it. Translation-level cleanup has now removed the waits, the LDS gathers
 and the redundant divisions; what is left is the original code's work, so further large gains need kernels rewritten
 for RDNA2 rather than translated.
+
+## Update 26: RDNA2-native e4m3 encoder spliced into pre_block/post_block - 206.6 -> 183.9 ms, bit-identical
+
+The cloud track (rdna-2-cloud-work) designed a branch-free 11-VALU f16->e4m3 encoder (11 instructions vs ~40
+VALU + 15 scalar/branch in the translated original) and verified it in isolation on the GPU: 0/65536 mismatches
+over every f16 bit pattern (`kernels/e4m3/encode_fast.s`, `ENCODER.md`).
+
+Splicing it into the real kernels turned out safer than first estimated. The old encoder is inlined 214 times
+each in `k_pre_block`/`k_post_block` (not the ~212/~418 first guessed), and the concern that instances might be
+interleaved by the scheduler was checked directly: only 1 of 213 gaps between consecutive instances is small
+enough to suggest interleaving (median gap 300 lines); the other 213 are cleanly isolated, each bounded by
+`v_cvt_f32_f16_e64 vTMP, |vIN|` through the matching `s_or_b32 exec_lo, exec_lo, sSAVE` that restores the
+EXEC mask the old branchy code saved right after entry, with the result converging into one destination
+register via two `v_or_b32` sites (normal-path and subnormal-path).
+
+`perf/splice_encoder.py` (new) finds every clean site, extracts vIN/vOUT/the save register, picks a temp
+register never referenced anywhere inside that site's span, and replaces the whole bounded region with the new
+11-instruction sequence writing into the same vOUT the old code used - nothing outside the spliced span changes.
+210 of 214 sites spliced in `k_pre_block`, 209 of 214 in `k_post_block` (the 1 interleaved pair, and a couple
+that didn't match the exact save/restore pattern, left on the old path - negligible weight).
+
+**Verification, in order:**
+* `k_pre_block` difftest at 8x8, 16x16 (seeds 1, 2): PASS, 0 mismatches each.
+* `k_post_block_const` difftest: PASS, 0 mismatches.
+* `k_post_block` difftest (random inputs, includes the pre-existing e4m3-NaN divergence): identical failure,
+  byte-for-byte, `out_sha256` byte-for-byte identical between the spliced and unspliced kernel - confirms the
+  splice changes nothing about that already-documented, unrelated issue.
+* Full frame (both spliced kernels installed): **arena hash `d54273b81de7cf88`** - byte-identical to the known-good
+  reference from Update 25. GPU time **206.6 -> 183.9 ms** (-11.0%).
+
+Not yet done: wiring the splice into the regular build pipeline (currently a manual post-process step on the
+translated `.s`/`.co` - a from-scratch `translate_kernels.py` run would need it reapplied). The `.s`/`.co` files
+themselves are gitignored build artifacts as always; `perf/splice_encoder.py` is the artifact that's committed.
