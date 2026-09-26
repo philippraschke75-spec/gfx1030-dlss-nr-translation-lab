@@ -931,3 +931,21 @@ Running total this session: 466 -> 244 -> 209 -> 206.6 -> 183.9 -> ~175.7 ms.
 
 Not yet spliced: the C=512 attention stage and ViT kernels (k_ffwd2, k_qkv_attn2, k_contract2,
 etc. - also contain the old encoder per earlier grep, ~21% of frame time combined).
+
+## Update 28: e4m3 splice extended to the C=512 stage kernels - ~175.7 -> ~174.0 ms, bit-identical
+
+Extended the splice to k_ffwd2, k_qkv_attn2 and k_conv_res2 (the C=512 attention stage). Verified
+with net_block512_2.py's coverage-guarded difftest at all 4 required shift-window origins:
+**VERDICT PASS - all 4 required combinations exercised and passed**, 0 mismatches each.
+
+Full frame with pre_block + post_block + all 5 swin_var variants + these 3 kernels spliced:
+**arena hash d54273b81de7cf88** (unchanged), GPU time three runs 174.2/174.0/173.8 ms - a small
+but real ~1.7 ms gain over Update 27's 175.7 ms. Smaller than the swin_var family's gain, as
+expected: these kernels are dispatched with much smaller grids than the full-resolution
+pre_block/post_block, so the same per-instance instruction-count saving contributes less to the
+total.
+
+Running total this session: 466 -> 244 -> 209 -> 206.6 -> 183.9 -> 175.7 -> ~174.0 ms.
+
+Not yet spliced: k_contract2 (1 site), k_expand2 (32 sites), k_qkv2 (24 sites), k_attention2
+(3 sites) - the ViT-stage kernels, smaller remaining share.
