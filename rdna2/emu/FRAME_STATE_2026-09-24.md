@@ -949,3 +949,31 @@ Running total this session: 466 -> 244 -> 209 -> 206.6 -> 183.9 -> 175.7 -> ~174
 
 Not yet spliced: k_contract2 (1 site), k_expand2 (32 sites), k_qkv2 (24 sites), k_attention2
 (3 sites) - the ViT-stage kernels, smaller remaining share.
+
+## Update 29: e4m3 splice extended to the ViT stage - ~174.0 -> ~172.9 ms, bit-identical (partial: 2 of 4 kernels)
+
+Extended the splice to the four remaining ViT-stage kernels:
+
+* **k_expand2**: 31 of 32 sites spliced (1 rejected - rotated control flow, its EXEC restore
+  sits outside the 400-line window). difftest_spec expand2: **PASS, 0 mismatches**.
+* **k_qkv2**: 23 of 24 sites spliced (1 rejected, same rotated-layout pattern). difftest_spec
+  qkv2: **PASS, 0 mismatches**.
+* **k_contract2**: 0 of 1 sites spliced - its single encoder block has the EXEC restore before
+  the start (reached via backwards branches to .Lpc_93ea0), which find_sites rejects. The
+  rebuilt .co is bit-identical to the shipped one (no change), difftest_spec contract2:
+  **PASS, 0 mismatches** (trivially - same binary).
+* **k_attention2**: 1 of 3 sites spliced. difftest_spec attention2: **FAIL, 156 mismatches**
+  (slot3, emu vs GPU). Immediately rolled back to the original .co per protocol; not shipped.
+  Root cause not yet diagnosed - the one spliced site was reported clean by find_sites
+  (line 3248-3431, vin=v11 vout=v9 vt=v131 ssave=s7, declared vgprs 132), so either pick_temp
+  hit something live in this kernel despite the vgpr bound, or the "clean" classification
+  missed a dependency. Needs its own investigation round.
+
+Full frame with expand2 + qkv2 spliced (attention2 rolled back, contract2 unchanged):
+**arena hash d54273b81de7cf88** (unchanged), GPU time three runs 176.4/172.9/172.7 ms
+(first run cold outlier) - ~1.1 ms gain over Update 28's 174.0 ms.
+
+Running total this session: 466 -> 244 -> 209 -> 206.6 -> 183.9 -> 175.7 -> 174.0 -> ~172.9 ms.
+
+Not yet spliced: k_contract2 (1 site, rotated layout), k_attention2 (3 sites, 1 spliced but
+FAILED difftest and was rolled back - 2 rejected as rotated layout).
