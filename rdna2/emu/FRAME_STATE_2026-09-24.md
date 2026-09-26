@@ -904,3 +904,30 @@ that didn't match the exact save/restore pattern, left on the old path - negligi
 Not yet done: wiring the splice into the regular build pipeline (currently a manual post-process step on the
 translated `.s`/`.co` - a from-scratch `translate_kernels.py` run would need it reapplied). The `.s`/`.co` files
 themselves are gitignored build artifacts as always; `perf/splice_encoder.py` is the artifact that's committed.
+
+## Update 27: e4m3 splice extended to all 5 k_swin_var variants - 183.9 -> ~175.7 ms, bit-identical
+
+Extended perf/splice_encoder.py to the encoder/decoder family (C=256/128/64/32, plus the
+32-channel <true> variant used by the old block-0 path). Building each through the regular
+pipeline (translate_kernels.py --hw-scratch) caught a real bug the pre/post_block splice hadn't
+exposed: pick_temp always searched down from a fixed v200, which happened to be valid register
+space for pre/post_block (220 declared VGPRs) but not for k_swin_var<256,false> (~160 declared) -
+v200 there is unallocated, and the result was all-NaN GPU output on the very first difftest that
+exercised it (net_encoder_stage1.py's 8-block chain, 344,064 mismatches). Fixed: pick_temp now
+reads the kernel's own `.amdhsa_next_free_vgpr` and never picks at or above it.
+
+Verified after the fix, all 5 variants:
+* k_swin_var<256,false>: single-block PASS 0 mismatches; full 8-block chain (blocks 15-22)
+  PASS 0 mismatches, structural stats (lag2/lag4/phase means/phase-var) byte-for-byte identical
+  to the unspliced baseline.
+* k_swin_var<128,false>, <64,false>, <32,false>: single-block chain PASS 0 mismatches each.
+* k_swin_var<32,true> (difftest_preblock.py, 8x8): PASS 0 mismatches.
+
+Full frame with pre_block + post_block + all 5 swin_var variants spliced: **arena hash
+d54273b81de7cf88** (unchanged), GPU time **183.9 -> ~175.7 ms** (three runs: 188.2/175.9/175.6 -
+the first is a cold-start outlier, the other two agree).
+
+Running total this session: 466 -> 244 -> 209 -> 206.6 -> 183.9 -> ~175.7 ms.
+
+Not yet spliced: the C=512 attention stage and ViT kernels (k_ffwd2, k_qkv_attn2, k_contract2,
+etc. - also contain the old encoder per earlier grep, ~21% of frame time combined).
