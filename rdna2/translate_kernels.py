@@ -3,11 +3,17 @@
 Only the pinned source image is accepted. Scratch/call kernels are refused
 until their ABI is implemented. Assembly success is not numerical validation.
 """
-import argparse, os as _os
+import argparse, os as _os, sys as _sys
 TX_DELAY=_os.environ.get('TX_DELAY','none')
 TX_WAITCNT=_os.environ.get('TX_WAITCNT','faithful')
 TX_WMMA=_os.environ.get('TX_WMMA','dpp')
 TX_DIVPOW2=_os.environ.get('TX_DIVPOW2','1')=='1'
+# TX_E4M3=fast (default) splices the RDNA2-native 11-VALU e4m3 encoder (perf/splice_encoder.py,
+# GPU-verified 0/65536 mismatches; splicing into k_pre_block/k_post_block verified bit-identical
+# full-frame arena hash, 206.6 -> 183.9 ms - FRAME_STATE Update 26) into every clean (non-
+# interleaved) inline encoder site, right after this file generates a kernel's assembly and before
+# it is built. TX_E4M3=off restores the plain translated encoder for comparison.
+TX_E4M3=_os.environ.get('TX_E4M3','fast')
 import hashlib
 import json
 import math
@@ -15,6 +21,8 @@ import re
 import struct
 import subprocess
 from pathlib import Path
+_sys.path.insert(0,str(Path(__file__).resolve().parent.parent/'perf'))
+import splice_encoder as e4m3
 import translate_final_head as base
 import p14d_dec as dec
 
@@ -483,6 +491,11 @@ def translate(name,lines,policy,md,ro,rofile,out,binpath,private_lds=False,helpe
     md=re.sub(r'\.private_segment_fixed_size:\s+\d+',f'.private_segment_fixed_size: {private if hw else 0}',md)
     code+=['.amdgpu_metadata','---','amdhsa.version: [1, 2]','amdhsa.kernels:',md,'...','.end_amdgpu_metadata']
     asm=out/(name+'.s');obj=out/(name+'.o');module=out/(name+'.co')
+    e4m3_sites=0
+    if TX_E4M3=='fast':
+        code,e4m3_sites,e4m3_report=e4m3.splice_lines(code,label=name)
+        if e4m3_sites:
+            (out/(name+'-e4m3-splice.txt')).write_text('\n'.join(e4m3_report),encoding='utf-8')
     asm.write_text('\n'.join(code)+'\n',encoding='utf-8')
     (out/(name+'-changes.json')).write_text(json.dumps(changes,indent=2),encoding='utf-8')
     run([binpath/'llvm-mc.exe','-triple=amdgcn-amd-amdhsa','-mcpu=gfx1030','-filetype=obj',asm,'-o',obj])
@@ -496,6 +509,7 @@ def translate(name,lines,policy,md,ro,rofile,out,binpath,private_lds=False,helpe
                 source_vgprs=scratch,vgprs=vgprs,lds=lds,private_lds_bytes=private_stride*value(md,'max_flat_workgroup_size'),hw_scratch_bytes=private if hw else 0,
                 launch_contract='one-dimensional blocks; local y=z=1' if private and not hw else 'original launch contract',
                 wmma_sites=sum(t.startswith('v_wmma') for _,t,_ in lines),
+                e4m3_sites_spliced=e4m3_sites,
                 changed_instructions=len(changes),physical_test='NOT_RUN')
 
 def main():
