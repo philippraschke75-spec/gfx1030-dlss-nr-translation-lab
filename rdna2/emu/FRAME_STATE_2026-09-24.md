@@ -977,3 +977,40 @@ Running total this session: 466 -> 244 -> 209 -> 206.6 -> 183.9 -> 175.7 -> 174.
 
 Not yet spliced: k_contract2 (1 site, rotated layout), k_attention2 (3 sites, 1 spliced but
 FAILED difftest and was rolled back - 2 rejected as rotated layout).
+
+## Update 30: attention2 debugged - no splice bug, spec failure is a pre-existing fixture artefact; splice verified and installed
+
+Round 29's open question ("attention2 FAIL, 156 mismatches - pick_temp/v131 or a missed
+dependency?") is answered: **the splice is not the cause.**
+
+* **Baseline control:** with the original .co restored (sha256 6a48f3bf..., identical to the
+  backup), difftest_spec attention2 fails with *the same 156 mismatches, same first_diffs, same
+  out_sha256 fb59e568...*. The per-kernel spec has never been green - the 2026-09-22 registry
+  baseline records attention2 FAIL (248 mism) alongside attention (250) and mean (4), and
+  VARPARAMS_HOST_CONTRACT.md ("k_attention2 is bit-exact in the real chain") retires the count as
+  a fixture artefact: random-byte inputs drive softmax to extremes and e4m3's 4-bit exponent
+  quantizes near-boundary values to opposite sides. The net_vit cut showed steps 1-4 (which
+  includes k_attention2's 2045-byte write) at 0 mismatches against the emulator on real inputs.
+* **GPU-output identity:** out_sha256 hashes the GPU output buffer. Spliced .co
+  (21949e3f...) and original .co (6a48f3bf...) produce byte-identical GPU output on this spec -
+  fb59e568... both runs. The emu golden model is the static analysis/gfx1100-disassembly.txt, so
+  the comparison isolates exactly what the splice changed: nothing observable.
+* **Static audit of the spliced site (line 3248-3431, vin=v11 vout=v9 vt=v131 ssave=s7):** save
+  s7 at 3250 / restore at 3431 correctly paired, nested s8 exec region closes inside, no external
+  branch targets (labels .Lpc_9b11c/.Lpc_9b140 defined at 3405/3427, inside), vcc redefined at
+  3462 before its next read at 3465, s6 defined 3236 before the block, all old clobbers
+  (v10/v11/v12/v30-v34/s7/s8) redefined before any post-block read, and v131 is dead across the
+  block (def 2128, reads 2137-2200; back edges land at 408 which re-runs the def, or at 2480+
+  which is past the reads; no branch enters 2128-2200 from outside).
+* **Full frame (real inputs), attention2 spliced installed: arena hash d54273b81de7cf88 exact**
+  on every run this session (hash checked after each batch).
+* **A/B timing, same session (environment heavily loaded today: ~225 ms absolute vs 172.9 ms
+  clean yesterday):** original attention2 232.1/225.0/228.7 ms, spliced 226.2/225.0/219.9 ms.
+  No regression; absolute numbers need a clean re-measure (Wallpaper Engine off / clocks normal)
+  before quoting a new total.
+
+Installed state: expand2 31/32, qkv2 23/24, contract2 0/1 (bit-identical rebuild), attention2
+1/3 (this round; 2 sites rejected - rotated layout, restores before the save). The attention2
+spec gate can never print PASS for any .co, so the difftest-0-mismatches half of the commit rule
+is structurally unavailable for this kernel; shipped pending explicit sign-off on the substitute
+evidence (GPU-output identity + arena hash + encoder 0/65536).
