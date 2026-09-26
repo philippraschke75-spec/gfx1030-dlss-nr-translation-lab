@@ -35,8 +35,36 @@ START_RE = re.compile(r'^v_cvt_f32_f16_e64\s+(v\d+),\s*\|(v\d+)\|\s*$')
 SAVE_RE = re.compile(r'^s_mov_b32\s+(s\d+),\s*exec_lo\s*$')
 
 
+LABEL_DEF_RE = re.compile(r'^(\.Lpc_[0-9a-fA-F]+):$')
+BRANCH_RE = re.compile(r'^(?:s_cbranch_\w+|s_branch)\s+(\.Lpc_[0-9a-fA-F]+)\s*$')
+
+
+def _label_index(lines):
+    """(label -> defining line, [(line, target_label) for every branch in the file]).
+
+    A site is only safe to delete whole if no branch OUTSIDE the site's own [start,end] span
+    targets a label DEFINED inside it - found the hard way (k_swin_var C=256 has external jumps
+    landing inside what looked like a self-contained encoder block; llvm-mc caught it as an
+    undefined-label assembly error, not a silent miscompile, but it must be checked up front
+    instead of relied on to fail loudly every time)."""
+    label_line = {}
+    branches = []
+    for i, l in enumerate(lines):
+        s = l.strip()
+        m = LABEL_DEF_RE.match(s)
+        if m:
+            label_line[m.group(1)] = i
+            continue
+        m = BRANCH_RE.match(s)
+        if m:
+            branches.append((i, m.group(1)))
+    return label_line, branches
+
+
 def find_sites(lines):
-    """Yield (start_idx, end_idx_inclusive, vout, vin, ssave) for every clean (non-interleaved) site."""
+    """Yield (start_idx, end_idx_inclusive, vout, vin, ssave) for every clean (non-interleaved,
+    no externally-referenced internal label) site."""
+    label_line, branches = _label_index(lines)
     log_sites = [i for i, l in enumerate(lines) if l.strip().startswith('v_log_f32')]
     log_set = set(log_sites)
     sorted_logs = sorted(log_sites)
@@ -86,21 +114,47 @@ def find_sites(lines):
         if vout is None:
             i += 1
             continue
+        # Reject if any branch OUTSIDE [start,end] targets a label DEFINED inside [start,end] -
+        # deleting the block would leave that branch's target undefined.
+        internal_labels = {name for name, ln in label_line.items() if start <= ln <= end}
+        externally_referenced = any(
+            name in internal_labels and not (start <= bline <= end)
+            for bline, name in branches
+        )
+        if externally_referenced:
+            i += 1
+            continue
         sites.append((start, end, vout, vin, ssave))
         i = end + 1
     return sites
 
 
-def pick_temp(lines, start, end, exclude):
-    """A register never mentioned as v<N> anywhere in [start,end] (conservative: also not v_in/v_out)."""
+NEXT_FREE_VGPR_RE = re.compile(r'^\.amdhsa_next_free_vgpr\s+(\d+)\s*$')
+
+
+def declared_vgprs(lines):
+    """The kernel's own `.amdhsa_next_free_vgpr` - the hard upper bound on any register index
+    that physically exists. Found the hard way: picking a fixed high temp register (v200) worked
+    for k_pre_block/k_post_block (220 VGPRs declared) purely by accident and produced NaN garbage
+    on k_swin_var<256,false> (only ~160 declared) - v200 there is unallocated register space."""
+    for l in lines:
+        m = NEXT_FREE_VGPR_RE.match(l.strip())
+        if m:
+            return int(m.group(1))
+    raise RuntimeError('no .amdhsa_next_free_vgpr found in kernel')
+
+
+def pick_temp(lines, start, end, exclude, max_vgpr):
+    """A register never mentioned as v<N> anywhere in [start,end] (conservative: also not
+    v_in/v_out), and strictly below the kernel's own declared VGPR count."""
     used = set()
     for l in lines[start:end + 1]:
         for m in re.finditer(r'\bv(\d+)\b', l):
             used.add(int(m.group(1)))
-    for cand in range(200, 2, -1):
+    for cand in range(max_vgpr - 1, 2, -1):
         if cand not in used and cand not in exclude:
             return f'v{cand}'
-    raise RuntimeError('no free temp register found')
+    raise RuntimeError('no free temp register found within the declared VGPR budget')
 
 
 def splice_lines(lines, label='<in-memory>'):
@@ -110,11 +164,12 @@ def splice_lines(lines, label='<in-memory>'):
     before invoking llvm-mc, so the splice is part of the regular build instead of a
     separate manual post-process step."""
     lines = list(lines)
+    max_vgpr = declared_vgprs(lines)
     sites = find_sites(lines)
-    report = [f'{len(sites)} clean encoder sites found in {label}']
+    report = [f'{len(sites)} clean encoder sites found in {label} (declared vgprs: {max_vgpr})']
     # apply from the END of the file backward so earlier indices stay valid
     for start, end, vout, vin, ssave in sorted(sites, key=lambda s: -s[0]):
-        vt = pick_temp(lines, start, end, exclude={int(vout[1:]), int(vin[1:])})
+        vt = pick_temp(lines, start, end, exclude={int(vout[1:]), int(vin[1:])}, max_vgpr=max_vgpr)
         new_block = NEW_SEQ.format(vout=vout, vin=vin, vt=vt).split('\n')
         report.append(f'  line {start+1}-{end+1}: vin={vin} vout={vout} vt={vt} ssave={ssave}')
         lines[start:end + 1] = new_block
