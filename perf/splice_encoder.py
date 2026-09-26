@@ -103,19 +103,30 @@ def pick_temp(lines, start, end, exclude):
     raise RuntimeError('no free temp register found')
 
 
-def splice(path_in, path_out, report_out):
-    lines = Path(path_in).read_text(encoding='utf-8', errors='replace').split('\n')
+def splice_lines(lines, label='<in-memory>'):
+    """Splice every clean encoder site in a list of .s source lines (no trailing newlines).
+    Returns (new_lines, count, report_lines). Used both by the CLI below and by
+    translate_kernels.py, which calls this right after generating a kernel's assembly and
+    before invoking llvm-mc, so the splice is part of the regular build instead of a
+    separate manual post-process step."""
+    lines = list(lines)
     sites = find_sites(lines)
-    report = [f'{len(sites)} clean encoder sites found in {path_in}']
+    report = [f'{len(sites)} clean encoder sites found in {label}']
     # apply from the END of the file backward so earlier indices stay valid
     for start, end, vout, vin, ssave in sorted(sites, key=lambda s: -s[0]):
         vt = pick_temp(lines, start, end, exclude={int(vout[1:]), int(vin[1:])})
         new_block = NEW_SEQ.format(vout=vout, vin=vin, vt=vt).split('\n')
         report.append(f'  line {start+1}-{end+1}: vin={vin} vout={vout} vt={vt} ssave={ssave}')
         lines[start:end + 1] = new_block
-    Path(path_out).write_text('\n'.join(lines), encoding='utf-8')
+    return lines, len(sites), report
+
+
+def splice(path_in, path_out, report_out):
+    lines = Path(path_in).read_text(encoding='utf-8', errors='replace').split('\n')
+    new_lines, n, report = splice_lines(lines, label=str(path_in))
+    Path(path_out).write_text('\n'.join(new_lines), encoding='utf-8')
     Path(report_out).write_text('\n'.join(report), encoding='utf-8')
-    return len(sites)
+    return n
 
 
 if __name__ == '__main__':
