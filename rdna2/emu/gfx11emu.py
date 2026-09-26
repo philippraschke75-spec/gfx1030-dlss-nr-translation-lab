@@ -1250,7 +1250,7 @@ class Exec:
         raise NotImplementedError('valu ' + b)
 
 
-def run_workgroup(prog, gmem, lds_size, nthreads, init_sgprs, max_steps=200_000_000, trace=None, stop_at=None, snap=None, poison=False, counts=None):
+def run_workgroup(prog, gmem, lds_size, nthreads, init_sgprs, max_steps=200_000_000, trace=None, stop_at=None, snap=None, poison=False, counts=None, stop_nth=None):
     ex = Exec(prog)
     lds = np.zeros(lds_size, np.uint8)
     waves = []
@@ -1269,14 +1269,22 @@ def run_workgroup(prog, gmem, lds_size, nthreads, init_sgprs, max_steps=200_000_
         waves.append(w)
     steps = 0
     trace_seen = set()
+    stop_hits = {}
     while any(w.state != 'done' for w in waves):
         moved = False
         for w in waves:
             while w.state == 'run':
                 if stop_at is not None and ex.prog[w.pc][0] == stop_at and w.wid not in snap:
-                    snap[w.wid] = (w.V.copy(), list(w.S), w.scc)
-                    w.state = 'done'
-                    break
+                    if stop_nth is not None:               # fire only on the Nth visit (per wave)
+                        stop_hits[w.wid] = stop_hits.get(w.wid, 0) + 1
+                        if stop_hits[w.wid] >= stop_nth:
+                            snap[w.wid] = (w.V.copy(), list(w.S), w.scc)
+                            w.state = 'done'
+                            break
+                    else:
+                        snap[w.wid] = (w.V.copy(), list(w.S), w.scc)
+                        w.state = 'done'
+                        break
                 w.next = w.pc + 1
                 if trace is not None and w.wid == 0 and w.pc not in trace_seen:
                     trace_seen.add(w.pc)
