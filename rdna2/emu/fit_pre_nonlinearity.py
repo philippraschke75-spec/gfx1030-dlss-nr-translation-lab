@@ -25,9 +25,16 @@ sys.argv, sys.stdout = _real_argv, _real_stdout
 
 AMPS = [-8, -6, -5, -4, -3, -2, -1.5, -1, -0.5, -0.25, 0.25, 0.5, 1, 1.5, 2, 3, 4, 5, 6, 8]
 
+# Independent single-channel axes: probe R, G, B separately (not the R=G=B
+# diagonal) so a genuinely 3-input linear function can be told apart from a
+# real nonlinearity instead of being mis-fit as "no clean 1D model exists".
+AXES = {'R': ('IMP_R', 'IMP_G', 'IMP_B'), 'G': ('IMP_G', 'IMP_R', 'IMP_B'), 'B': ('IMP_B', 'IMP_R', 'IMP_G')}
 
-def sweep(site=2, wave=6, pixel=(4, 4)):
-    """-> dict (reg, lane) -> list of (amp, delta) for every A-cell that ever changes."""
+
+def sweep_axis(site, wave, pixel, axis_env, other_envs):
+    """-> dict (reg,lane,half) -> list of (amp, delta) for one isolated colour channel."""
+    for e in other_envs:
+        os.environ[e] = '0'
     base, ranges, _, _ = T.run_stop(None, wmma_n=site)
     if wave not in base:
         raise SystemExit(f'wave {wave} not present')
@@ -35,7 +42,7 @@ def sweep(site=2, wave=6, pixel=(4, 4)):
     base_u = base[wave]
     hits = {}
     for amp in AMPS:
-        os.environ['IMP_AMP'] = str(amp)
+        os.environ[axis_env] = str(amp)
         imp, _, _, _ = T.run_stop(pixel, wmma_n=site)
         iu = imp[wave]
         for r in range(a0, a1 + 1):
@@ -51,7 +58,8 @@ def sweep(site=2, wave=6, pixel=(4, 4)):
                     hits.setdefault((r, lane, 'lo'), []).append((amp, float(ilo - blo)))
                 if bhi != ihi:
                     hits.setdefault((r, lane, 'hi'), []).append((amp, float(ihi - bhi)))
-    del os.environ['IMP_AMP']
+    for e in list(other_envs) + [axis_env]:
+        os.environ.pop(e, None)
     return hits
 
 
@@ -97,17 +105,33 @@ def fit_candidates(amps, deltas):
 
 def main():
     site = int(sys.argv[1]) - 1 if len(sys.argv) > 1 else 2
-    hits = sweep(site=site)
-    print(f'{len(hits)} (reg,lane,half) cells changed across {len(AMPS)} amplitudes')
-    for key, pts in sorted(hits.items()):
-        if len(pts) < 4:
-            continue
-        amps = [p[0] for p in pts]
-        deltas = [p[1] for p in pts]
-        fits = fit_candidates(amps, deltas)
-        print(f'--- reg={key[0]} lane={key[1]} half={key[2]} ({len(pts)} pts) ---')
-        for name, resid in fits[:3]:
-            print(f'    {name}: resid={resid:.5f}')
+    wave = int(sys.argv[2]) if len(sys.argv) > 2 else 6
+    pixel = (4, 4)
+    per_axis = {}
+    for name, (axis_env, o1, o2) in AXES.items():
+        print(f'=== axis {name} ({axis_env}, others held at 0) ===', file=sys.stderr)
+        per_axis[name] = sweep_axis(site, wave, pixel, axis_env, [o1, o2])
+
+    all_keys = set().union(*(h.keys() for h in per_axis.values()))
+    print(f'{len(all_keys)} (reg,lane,half) cells changed across any axis, {len(AMPS)} amps each')
+    for key in sorted(all_keys):
+        row = []
+        for name in ('R', 'G', 'B'):
+            pts = per_axis[name].get(key, [])
+            if len(pts) < 4:
+                row.append(f'{name}: (no data)')
+                continue
+            amps = [p[0] for p in pts]
+            deltas = [p[1] for p in pts]
+            k = float(np.sum(np.asarray(amps) * np.asarray(deltas)) / np.sum(np.asarray(amps) ** 2))
+            resid = float(np.sum((k * np.asarray(amps) - np.asarray(deltas)) ** 2))
+            # relative residual: bad linear fit if resid is comparable to the deltas' own spread
+            spread = float(np.sum(np.asarray(deltas) ** 2)) + 1e-9
+            quality = 'GOOD' if resid / spread < 0.05 else ('OK' if resid / spread < 0.2 else 'POOR')
+            row.append(f'{name}: k={k:+.4f} resid/spread={resid/spread:.3f} [{quality}] n={len(pts)}')
+        print(f'--- reg={key[0]} lane={key[1]} half={key[2]} ---')
+        for r in row:
+            print(f'    {r}')
 
 
 if __name__ == '__main__':
