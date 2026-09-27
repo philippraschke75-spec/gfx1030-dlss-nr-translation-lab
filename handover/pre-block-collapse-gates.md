@@ -91,3 +91,42 @@ for one fixed output channel, fit against candidate closed-form nonlinearities
 (tanh, GELU, softplus, leaky-relu-with-known-slope) instead of assuming
 linearity. This is a real, not-yet-closed gate; do not implement the linear
 collapse from the 2026-09-26 sketch without correcting for this.
+
+## Update 2026-09-27 (3): shape of the nonlinearity - clean linear on the positive side, saturating on the negative side
+
+Extended sweep, same pixel/channel as above (Site 3 A, wave 6, pixel (4,4)):
+
+| amp | delta | delta - amp (offset from slope-1 line) |
+|---|---|---|
+| 2 | 2.0 | 0.0 |
+| 4 | 4.0 | 0.0 |
+| 8 | 8.0 | 0.0 |
+| -1 | -1.5 | -0.5 |
+| -2 | -2.5 | -0.5 |
+| -4 | -4.5 | -0.5 |
+| -8 | -7.2188 | +0.78 (breaks the -0.5 pattern) |
+
+Positive side (amp 2/4/8): exactly slope 1, zero offset - clean linear, no
+saturation visible in this range. Negative side (amp -1/-2/-4): slope 1 but a
+CONSTANT -0.5 offset - still locally linear, just shifted. Negative side at
+amp -8: the constant-offset pattern breaks (would need -8.5, got -7.22) -
+the incremental contribution per unit amp shrank between -4 and -8, i.e. the
+derivative is decreasing there. That is the actual saturation point, not the
+smaller negative amplitudes. This whole shape (linear positive branch, locally
+linear-but-shifted moderate negative branch, saturating far-negative branch)
+is consistent with a smooth saturating activation (tanh/GELU/softplus family)
+evaluated at some nonzero baseline offset - NOT with a leaky-ReLU-style kink,
+since the moderate-negative branch is not simply a different fixed slope, it
+still increments by ~1 per unit amp (matching the positive slope) up to -4.
+
+This narrows the "next measurement" from the prior update: fit is now
+constrained to a smooth function whose local derivative is ~1 near the
+operating point and only drops off for large negative excursions (roughly
+|baseline + E.RGB| beyond ~4-8 in whatever units this activation operates in).
+Candidate: GELU/softplus, not tanh (tanh's derivative starts dropping much
+closer to 0 for typical normalized activations; the ~1 slope holding flat out
+to magnitude 4 suggests a wider linear region, more consistent with GELU or
+softplus's approx-identity region for x>0 extending into shallow negative x).
+Still not proven - needs a proper least-squares fit against multiple candidate
+closed forms using a finer amplitude grid, ideally in a separate script rather
+than manual point-by-point sweeps.
