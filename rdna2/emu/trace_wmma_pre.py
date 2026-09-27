@@ -63,7 +63,10 @@ def prepare(impulse, wx=0, wy=0):
     if impulse:
         off = (impulse[0] * W + impulse[1]) * 12
         amp = float(os.environ.get('IMP_AMP', '1'))   # linearity probe: 0.5 must halve the delta
-        a[off:off + 12] = np.full(3, amp, np.float32).view(np.uint8)
+        # IMP_R/IMP_G/IMP_B override individual channels for independent-axis probes
+        # (default: all three = IMP_AMP, the original R=G=B diagonal probe, unchanged).
+        rgb = [float(os.environ.get(k, amp)) for k in ('IMP_R', 'IMP_G', 'IMP_B')]
+        a[off:off + 12] = np.array(rgb, np.float32).view(np.uint8)
     lds = D.group_size(SYM)
     DP = 0x7100_0000_0000
     pkt = bytearray(64)

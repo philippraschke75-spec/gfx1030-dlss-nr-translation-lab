@@ -166,3 +166,39 @@ diagonal-only probe and misinterpret a bad fit as "no clean function exists".
 
 Status: gate 2 remains OPEN. rdna2/emu/fit_pre_nonlinearity.py is reusable
 infrastructure (no kernel/build files touched) for whoever continues this.
+
+## Update 2026-09-27 (5): independent R/G/B probe - reg 96 is cleanly linear, likely reverses Updates 2/3
+
+Built the corrected probe: IMP_R/IMP_G/IMP_B env vars in trace_wmma_pre.py's
+prepare() (default: all = IMP_AMP, so the old diagonal probe is unchanged and
+still works), rdna2/emu/fit_pre_nonlinearity.py extended to sweep each colour
+channel independently (other two held at exactly 0) and fit a separate linear
+slope per channel per (reg,lane,half) cell.
+
+For (reg=96, lane=0/16, half=hi) - the cleanest cell found: R: k=+0.1250
+(resid/spread 0.050, GOOD), G: k=+0.4617 (0.017, GOOD), B: k=+0.4197 (0.024,
+GOOD). All three are excellent linear fits over their own 11-18-point sweeps.
+Sum of the three slopes = 1.007 - matches Update 2/3's observed ~slope-1
+response on the R=G=B diagonal almost exactly. This strongly suggests the
+diagonal probe's apparent "saturating nonlinearity" (Updates 2/3) was a
+measurement artefact of summing three genuinely-different-but-individually-
+linear channel slopes along one 1D probe axis, not a real activation function.
+Updates 2/3's conclusion is likely WRONG for this cell; do not treat it as
+settled.
+
+Other cells (regs 97-103) show much noisier per-axis fits (many POOR,
+resid/spread up to 0.6-0.9) - these are plausibly cells that should not
+respond to a (4,4) impulse at all (register reuse/aliasing across loop
+iterations picking up unrelated data, not real coupling), not genuine
+additional nonlinear structure. Not yet confirmed either way - would need to
+check whether the POOR cells correspond to a different (wx,wy) region than
+the impulse pixel, which would explain the noise as illegitimate cross-talk
+rather than model failure.
+
+Net effect: gate 2 status is now UNCLEAR-BUT-MORE-OPTIMISTIC than Updates
+2/3 suggested. Next measurement: (a) confirm/refute more cells the same way
+reg 96 was confirmed, restricting to cells that legitimately belong to the
+impulse pixel; (b) if slopes are consistently clean per-axis, the original
+G_k = E^T.B_k affine collapse from the 2026-09-26 sketch may be closer to
+correct than Updates 2/3 implied - re-open that path rather than assuming it
+is dead.
