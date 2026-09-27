@@ -231,3 +231,33 @@ slopes directly (no separate quantization-mode question remains once the
 function is confirmed affine - the KNOWN e4m3 encoder from kernels/e4m3/
 already reproduces the quantization step bit-exactly, that part was solved by
 this project long before pre_block work started).
+
+## Update 2026-09-27 (7): sites 1/2 are overwhelmingly linear, sites 3/4 are not - affine collapse is real but only proven for sites 1/2
+
+Ran the independent R/G/B sweep (rdna2/emu/fit_pre_nonlinearity.py) across
+all four WMMA sites, same pixel (4,4)/wave 6, counting fit quality over every
+changed (reg,lane,half) cell:
+
+| site | GOOD | OK | POOR |
+|---|---|---|---|
+| 1 | 62 | 8 | 2 |
+| 2 | 46 | 18 | 4 |
+| 3 | ~4 (reg 96 only) | several | many |
+| 4 | 4 | 28 | 40 |
+
+Sites 1 and 2 (the v8:15 output pair) are overwhelmingly clean linear per
+colour channel across MANY registers, not just one lucky cell - this is
+strong, broad evidence the affine-collapse hypothesis holds for sites 1/2.
+Sites 3 and 4 (the v48:55 pair, which read "derived" e4m3 features per the
+2026-09-26 sketch, values up to 30) are much noisier - either they are
+genuinely more complex (a real nonlinearity or multi-stage dependency,
+consistent with reading something already processed rather than raw RGB), or
+the impulse pixel/wave choice that works for sites 1/2 is not the right probe
+point for sites 3/4's actual inputs. Not yet distinguished.
+
+Practical implication: a collapsed rewrite of sites 1/2 alone is now well
+supported and could proceed independently of resolving sites 3/4 - that is
+roughly half of pre_block's 14 WMMA sites (main iteration pair) and worth
+implementing even if 3/4 stay on the WMMA path for now. Proceeding to derive
+the actual numeric E matrix for sites 1/2 and validate it against real
+(non-unit-impulse) random RGB inputs next.
