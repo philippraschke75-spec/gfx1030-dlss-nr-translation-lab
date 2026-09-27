@@ -44,7 +44,7 @@ def main():
         imp, _, _, _ = T.run_stop(pixel, wmma_n=site)
         return imp[wave]
 
-    AMP = 2.0
+    AMP = float(os.environ.get('DERIVE_AMP', '2.0'))
     resp = {ax: probe(tuple(AMP if i == ax_i else 0 for i in range(3)))
             for ax_i, ax in enumerate(('R', 'G', 'B'))}
     for k in ('IMP_R', 'IMP_G', 'IMP_B'):
