@@ -333,3 +333,34 @@ further. Not implementing the lowering this round. Next measurement: larger
 amplitude and/or multi-point (not 2-point) linear regression per channel to
 resolve the near-zero-slope channels above quantization noise, then re-run
 this same out-of-sample validation before attempting any kernel change.
+
+## Update 2026-09-27 (10): larger amplitude improves but does not close the E-matrix validation gap
+
+Re-ran derive_e_matrix.py with DERIVE_AMP=8 (was 2) and DERIVE_AMP=16 for
+comparison. AMP=8: out-of-sample max errors 0.061-0.099 across 4 random RGB
+trials (down from 0.13-0.23 at AMP=2). AMP=16: 0.067-0.101, no further
+improvement - AMP=8 is roughly the practical floor for this simple two-point
+finite-difference method. handover/pre_block_site1_E_matrix.json now holds
+the AMP=8 derivation.
+
+Typical channel values in this measurement are in the range [-2, +3]; an
+error of ~0.10 is large enough to occasionally land on the wrong side of an
+e4m3 grid boundary (grid step ~0.0625-0.125 in this range), so this is still
+not tight enough to guarantee bit-exact output from a rewritten kernel - it
+would very likely pass a coarse "looks right" check and then fail
+difftest_pre.py's 0-mismatch bar on some fraction of pixels, which per this
+project's protocol is not acceptable to ship.
+
+The remaining error is not obviously quantization noise (AMP=8/16 agree with
+each other, ruling out under-resolved small slopes as the cause) - it is more
+likely either (a) genuine second-order structure per channel that a strict
+2-point linear fit cannot capture, or (b) a systematic error in how baseline
+is being read (e.g. baseline measured at a slightly different register state
+than what the random-RGB runs converge through). Not yet diagnosed.
+
+STATUS: gate 2 still open for implementation. This round's conclusion: do
+not implement the collapsed lowering from this E matrix - the residual error
+is real, not a measurement-resolution problem, and needs its own root-cause
+pass (proper multi-point linear regression per channel with more amplitude
+samples, or checking hypothesis (b) above) before it is safe to build a
+bit-exact replacement kernel from it.
