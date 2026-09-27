@@ -301,3 +301,35 @@ d54273b81de7cf88 unchanged) before any commit that touches kernel code. Not
 yet done in this session - the E-matrix derivation here was for 1 of 16
 output channels, all 16 need the same treatment before a full kernel rewrite
 is possible.
+
+## Update 2026-09-27 (9): full 16-channel E matrix derived for site 1, validation not yet tight enough for a bit-exact rewrite
+
+Added rdna2/emu/derive_e_matrix.py: derives baseline + (kR,kG,kB) for all 16
+A-operand channels (registers 80-87, lo/hi) via single two-point finite
+differences (amp=+2 per axis), writes handover/pre_block_site1_E_matrix.json,
+then validates against 4 random out-of-sample RGB triples across all 16
+channels at once.
+
+Result: max error per random trial ranged 0.13-0.23 - noticeably worse than
+the single best-channel validation in Update 8 (0.023). Several channels
+(reg 83 hi, part of 84 lo/85 lo/87 lo) show all-zero measured slopes at
+amp=2, i.e. their true slope is small enough that amp=2 doesn't cross an
+e4m3 grid boundary - the single-amplitude finite difference cannot resolve
+them, so their baseline+slope estimate for those channels is unreliable
+(quantization noise dominates the 2-point estimate, not real coupling
+measured).
+
+This means the current E-matrix estimate is NOT yet accurate enough across
+all 16 channels to drive a bit-exact kernel rewrite - only the previously
+validated single channel (reg 80, half hi) is trustworthy at the level Update
+8 achieved. Implementing the collapsed lowering NOW, on this data, would risk
+shipping something that fails difftest_pre.py or (worse) passes a narrow
+check but corrupts the full-frame hash - exactly the failure mode this
+project's protocol exists to prevent (c.f. splice_encoder.py's two prior
+real bugs).
+
+STATUS: gate 2 remains open for a full-kernel rewrite, though narrowed
+further. Not implementing the lowering this round. Next measurement: larger
+amplitude and/or multi-point (not 2-point) linear regression per channel to
+resolve the near-zero-slope channels above quantization noise, then re-run
+this same out-of-sample validation before attempting any kernel change.
