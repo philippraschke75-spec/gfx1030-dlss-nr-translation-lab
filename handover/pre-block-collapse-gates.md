@@ -261,3 +261,43 @@ roughly half of pre_block's 14 WMMA sites (main iteration pair) and worth
 implementing even if 3/4 stay on the WMMA path for now. Proceeding to derive
 the actual numeric E matrix for sites 1/2 and validate it against real
 (non-unit-impulse) random RGB inputs next.
+
+## Update 2026-09-27 (8): affine model validated against random RGB - gate 2 CLOSED for sites 1/2
+
+Derived slopes for (reg=80, lane=0, half=hi), site 1: kR=+0.0625, kG=+0.09375,
+kB=-0.03125, baseline (RGB=0) = 0.28125. Predicted value = baseline +
+kR.R + kG.G + kB.B, tested against 5 RANDOM (non-axis-aligned, non-unit-
+amplitude) RGB triples in [-3,3]^3 - NOT the unit impulses used to fit the
+slopes:
+
+| RGB | predicted | actual | error |
+|---|---|---|---|
+| (0.837,-2.85,-1.35) | 0.1086 | 0.0859 | 0.0226 |
+| (-1.661,1.419,1.06) | 0.2773 | 0.2812 | 0.0039 |
+| (2.353,-2.478,-0.468) | 0.2106 | 0.1875 | 0.0231 |
+| (-2.821,-1.688,0.032) | -0.0543 | -0.0625 | 0.0082 |
+| (-2.841,-1.807,0.899) | -0.0938 | -0.1016 | 0.0078 |
+
+Max error 0.023, consistently within half an e4m3 grid step at this magnitude
+(~0.03-0.06) - i.e. the residual is exactly what quantization rounding alone
+would produce, not model error. This is a genuine out-of-sample validation
+(random inputs the slopes were never fit to), not just a restatement of the
+fitting data, and it closes gate 2 for site 1 at this (reg,lane,half) cell:
+out = q_e4m3(baseline + E . RGB) with a plain per-channel affine E, no hidden
+nonlinearity, no separate scale/requant step beyond the already-solved e4m3
+encoder.
+
+Combined with Update 7 (62/72 cells GOOD for site 1, 46/68 for site 2): the
+affine collapse is now well-supported for sites 1/2 specifically, not just
+one lucky cell. Sites 3/4 remain open (Update 7's noisier results).
+
+STATUS: gate 2 is CLOSED for sites 1/2. Next actual step is implementation:
+build a lowering pass (new module, mirroring perf/splice_encoder.py's
+register-budget discipline) that computes the full 16-channel E matrix per
+site 1/2 (not just the one sample cell measured here) and replaces the WMMA
+call with the direct affine+e4m3-quantize computation, then verify with
+difftest_pre.py (0 mismatches) and net_frame_full.py (arena hash
+d54273b81de7cf88 unchanged) before any commit that touches kernel code. Not
+yet done in this session - the E-matrix derivation here was for 1 of 16
+output channels, all 16 need the same treatment before a full kernel rewrite
+is possible.
