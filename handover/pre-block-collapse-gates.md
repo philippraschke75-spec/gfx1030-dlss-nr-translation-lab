@@ -398,3 +398,41 @@ estimates specifically for regs 85/86/87 (half=hi) - try a proper multi-
 amplitude least-squares fit for just these three cells rather than the
 blanket 2-point method, before re-running full validation and considering
 implementation.
+
+## Update 2026-09-27 (12): reg 86 (hi) has a real nonlinear residual - not all 16 channels are cleanly affine
+
+Multi-point least-squares fit (12 amplitudes per axis, -16..16) for the three
+outlier channels from Update 11:
+
+| reg/half | base | kR (resid) | kG (resid) | kB (resid) |
+|---|---|---|---|---|
+| 86 hi | 2.5000 | 0.0861 (**0.0812**) | 0.0000 (0.0000) | 0.0000 (0.0000) |
+| 85 hi | 0.6875 | -0.0010 (0.0157) | -0.0233 (0.0349) | 0.0614 (0.0399) |
+| 87 hi | -1.1250 | 0.0812 (0.0453) | 0.0720 (0.0391) | 0.0034 (0.0403) |
+
+Reg 86 half=hi's own R-axis linear fit has a residual of 0.081 - a real
+deviation from any straight line through the 12 sampled points, not
+explainable by e4m3 quantization noise on the fit itself (the fit uses the
+raw decoded f16 deltas, quantization would show as scatter around a good
+line, not a systematic non-fit). This channel genuinely has curvature; it is
+NOT affine. Regs 85/87 (hi) show smaller but still nonzero residuals
+(0.016-0.045) - likely genuine, if milder, nonlinearity rather than pure
+noise (harder to say definitively without more samples).
+
+Note: reg 86's baseline (2.5000) is notably larger/rounder than the other 15
+channels' baselines (all in roughly [-1.5, 1.25]) - worth checking whether
+this register plays a structurally different role (e.g. an accumulator seed
+or constant/bias term) rather than being "one of 16 features" the same way
+the others are.
+
+CONCLUSION for this session: the affine-collapse hypothesis is confirmed for
+the large majority of channels (13/16, in line with pure e4m3 quantization
+noise) but definitively FALSIFIED for at least one channel (reg 86 hi) -
+a uniform 16-channel affine rewrite of sites 1/2 is not safe as currently
+scoped. Implementing it would need either (a) identifying and special-casing
+the non-affine channel(s) with their correct (possibly higher-order or
+structurally different) formula, or (b) reconsidering whether reg 86 is
+really "feature 6" or something else entirely that shouldn't be lumped into
+this model. Neither is done in this session. Gate 2 stays open; no kernel
+rewrite implemented. This is real, verified, negative-but-valuable progress -
+document rather than force a collapse that would risk correctness.
