@@ -364,3 +364,37 @@ is real, not a measurement-resolution problem, and needs its own root-cause
 pass (proper multi-point linear regression per channel with more amplitude
 samples, or checking hypothesis (b) above) before it is safe to build a
 bit-exact replacement kernel from it.
+
+## Update 2026-09-27 (11): both hypotheses (a) and (b) ruled out as the general cause - error is concentrated in 3 of 16 channels
+
+**Hypothesis (b) ruled out:** compared emulator step counts for the baseline
+(RGB=0) run vs. several random-RGB probe runs, same pixel/site, before the
+WMMA stop point - all identical (59608 steps every time). No branch
+divergence; baseline and probes take the exact same control-flow path.
+
+**Hypothesis (a) mostly ruled out via a direct additivity test:** for
+(reg=80, half=hi), measured single-axis deltas R=+0.125, G=+0.1875,
+B=-0.0625, then measured pairs: R+B together = 0.0625 (sum predicts 0.0625,
+diff 0), G+B together = 0.125 (sum predicts 0.125, diff 0) - exact matches,
+no interaction. R+G together = 0.28125 vs sum-predicted 0.3125 (diff
+-0.03125, exactly one e4m3 grid step at this magnitude) - consistent with
+ordinary quantize-after-sum rounding, not a real R*G interaction term. This
+channel is genuinely affine; its earlier out-of-sample error was
+quantization noise, nothing else.
+
+**What's actually going on:** broke the AMP=8 E-matrix's per-trial max error
+down by channel instead of taking the overall max. Result: 13 of 16 channels
+have max error <=0.052 (in line with ordinary e4m3 quantization noise for
+their magnitude); 3 channels are the real outliers - reg 86 half=hi (0.099),
+reg 85 half=hi (0.061), reg 87 half=hi (0.069). These three also had smaller/
+zero measured slopes on some axes (see Update 9/10) - i.e. their true signal
+is weaker relative to quantization step size at the amplitudes tried so far,
+so their 2-point slope estimates are the least reliable, not because the
+channels are non-affine.
+
+STATUS: the affine model itself looks sound (confirmed no interaction terms,
+no branch divergence). The remaining work is narrow: get better slope
+estimates specifically for regs 85/86/87 (half=hi) - try a proper multi-
+amplitude least-squares fit for just these three cells rather than the
+blanket 2-point method, before re-running full validation and considering
+implementation.
