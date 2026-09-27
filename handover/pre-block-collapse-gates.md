@@ -202,3 +202,32 @@ impulse pixel; (b) if slopes are consistently clean per-axis, the original
 G_k = E^T.B_k affine collapse from the 2026-09-26 sketch may be closer to
 correct than Updates 2/3 implied - re-open that path rather than assuming it
 is dead.
+
+## Update 2026-09-27 (6): only reg 96 is real signal - other cells are quantization-boundary noise, not coupling
+
+Filtered the independent-axis results to lane 0 (the impulse pixel's own
+lane) across all 8 A-registers (96-103, hi+lo = 16 cells). Only reg 96
+(hi and lo, which print identically - likely a duplicate-storage artefact of
+how f16 pairs are packed) shows clean GOOD fits on all three colour axes with
+substantial slopes (0.125/0.462/0.420). Every other register (97-103) shows
+small (0.01-0.1 magnitude, near the e4m3 quantization step size), inconsistent
+(mix of GOOD/OK/POOR, sign flips between hi/lo of the "same" register that
+should be duplicates if real) slopes - the signature of quantization-boundary
+noise (occasional e4m3 grid crossings unrelated to genuine coupling) rather
+than real signal.
+
+Synthesis: for pixel (4,4)/wave 6/site 3, there appears to be exactly ONE real
+linear response cell (reg 96), cleanly affine in R, G, B independently, and
+everything else is measurement noise. This is consistent with (and further
+supports reopening) the original 2026-09-26 sketch's collapse hypothesis -
+Updates 2/3's "nonlinearity" conclusion should be treated as superseded by
+Updates 5/6, not as the current understanding.
+
+Remaining work before gate 2 can be called CLOSED (not done in this session):
+repeat this clean-cell isolation for a few more (impulse pixel, output
+channel) combinations to confirm reg-96-like cleanliness is the general case,
+not a lucky single sample; then derive E per real channel from the R/G/B
+slopes directly (no separate quantization-mode question remains once the
+function is confirmed affine - the KNOWN e4m3 encoder from kernels/e4m3/
+already reproduces the quantization step bit-exactly, that part was solved by
+this project long before pre_block work started).
