@@ -130,3 +130,39 @@ softplus's approx-identity region for x>0 extending into shallow negative x).
 Still not proven - needs a proper least-squares fit against multiple candidate
 closed forms using a finer amplitude grid, ideally in a separate script rather
 than manual point-by-point sweeps.
+
+## Update 2026-09-27 (4): systematic multi-cell sweep - simple 1D models do not fit
+
+Built rdna2/emu/fit_pre_nonlinearity.py: sweeps a finer amplitude grid (20
+points) and tracks EVERY (register, lane, half) cell that changes, not just
+the one cell found by hand, then least-squares-fits linear / kinked-linear /
+tanh-saturating candidates per cell.
+
+Result: many more cells respond than the single one tracked manually (regs
+99-103, both lanes 0 and 16, both halves) - the impulse's effect is spread
+across a wider register/lane footprint than the earlier single-cell probes
+suggested. None of the three candidate closed forms fit well: best-residual
+fits still have residuals of the same order as the deltas themselves (e.g.
+reg 99 lane 16 lo: best fit residual 48 across 20 points of similar
+magnitude - a bad fit, not a real characterization).
+
+Likely cause: the probe sweeps amplitude along the R=G=B diagonal only (single
+scalar IMP_AMP sets all three color channels equal). If the true function
+combines R, G, B with different, independently-varying coefficients (which is
+the whole premise of the E matrix in the original collapse hypothesis), a
+1D diagonal sweep only samples one slice of a genuinely 3-input function and
+cannot be fit by any 1-input closed form, regardless of whether the underlying
+function is linear or not. This confounds "is it linear" with "is my probe
+axis representative" - the earlier single-cell nonlinearity finding (Updates
+2/3) may still be real, but this multi-cell sweep does not by itself add
+further evidence either way.
+
+Correct next step (not yet done): separate single-channel impulses (R alone,
+G alone, B alone, not R=G=B together) at several amplitudes each, per cell,
+then fit each cell as a function of the 3-vector (R,G,B) rather than a scalar
+amplitude. This is a bigger measurement (3x the runs) and was not completed
+in this session - documenting so the next session does not repeat the
+diagonal-only probe and misinterpret a bad fit as "no clean function exists".
+
+Status: gate 2 remains OPEN. rdna2/emu/fit_pre_nonlinearity.py is reusable
+infrastructure (no kernel/build files touched) for whoever continues this.
