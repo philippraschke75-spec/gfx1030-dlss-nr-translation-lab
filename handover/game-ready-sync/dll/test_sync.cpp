@@ -19,7 +19,7 @@
 #include "dlssnr_iface.h"
 #include "r11g10.h"
 #define CK(x) do { HRESULT _h = (x); if (FAILED(_h)) { printf("FAIL %s -> 0x%08lx (line %d)\n", #x, (unsigned long)_h, __LINE__); return 10; } } while (0)
-static UINT W = 1280, H = 720; static DXGI_FORMAT FMT = DXGI_FORMAT_R16G16B16A16_FLOAT; static UINT BPP = 8;
+static UINT W = 1280, H = 720, MW, MH, UP = 1; static DXGI_FORMAT FMT = DXGI_FORMAT_R16G16B16A16_FLOAT; static UINT BPP = 8;   // W,H frame; MW,MH model (NR_TEST_UP=2: frame = model upsampled 2x, tests the resampling path)
 static ID3D12Device* dev; static ID3D12CommandQueue* q; static ID3D12CommandAllocator* al; static ID3D12GraphicsCommandList* cl; static ID3D12Fence* fence; static UINT64 fv; static HANDLE ev;
 static double now() { LARGE_INTEGER f, c; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c); return c.QuadPart * 1000.0 / f.QuadPart; }
 static bool wait(DWORD ms) { q->Signal(fence, ++fv); if (fence->GetCompletedValue() >= fv) return true; fence->SetEventOnCompletion(fv, ev); return WaitForSingleObject(ev, ms) == WAIT_OBJECT_0; }
@@ -40,10 +40,11 @@ typedef void* (*P_create)(const char*, int, int, int, char*, int); typedef int (
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IONBF, 0);
     if (getenv("NR_TEST_W")) { W = atoi(getenv("NR_TEST_W")); H = atoi(getenv("NR_TEST_H")); }
+    MW = W; MH = H; if (getenv("NR_TEST_UP")) { UP = atoi(getenv("NR_TEST_UP")); W = MW * UP; H = MH * UP; }
     const bool r11 = getenv("NR_TEST_FMT") && !strcmp(getenv("NR_TEST_FMT"), "r11"); if (r11) { FMT = DXGI_FORMAT_R11G11B10_FLOAT; BPP = 4; }
     if (argc < 3) { puts("usage: test_sync color.bin dll_dir [frames]"); return 1; }
     const int frames = argc > 3 ? atoi(argv[3]) : 300; std::string dir = argv[2]; SetDllDirectoryA(dir.c_str());
-    std::vector<uint16_t> base((size_t)W * H * 4); { FILE* f = fopen(argv[1], "rb"); if (!f || fread(base.data(), 8, (size_t)W * H, f) != (size_t)W * H) { puts("cannot read color.bin"); return 1; } fclose(f); }
+    std::vector<uint16_t> base((size_t)MW * MH * 4); { FILE* f = fopen(argv[1], "rb"); if (!f || fread(base.data(), 8, (size_t)MW * MH, f) != (size_t)MW * MH) { puts("cannot read color.bin"); return 1; } fclose(f); }
     char dd[1024]; GetPrivateProfileStringA("nr", "data_dir", "", dd, sizeof dd, (dir + "\\nr_port.ini").c_str());
 
     IDXGIFactory4* fac; CK(CreateDXGIFactory1(IID_PPV_ARGS(&fac))); IDXGIAdapter1* ad = nullptr;
@@ -70,15 +71,15 @@ int main(int argc, char** argv) {
     al->Reset(); cl->Reset(al, nullptr); void* f = create(L"nvngx_dlssnr.dll", L"data", dev, cl, nullptr, W, H, 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1); cl->Close();
     { ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); } if (!wait(5000)) { puts("FAIL timeout"); return 2; }
     if (!f) { printf("FAIL create: %s\n", err()); return 3; }
-    char e2[512] = ""; void* ref = rcreate(dd, (int)W, (int)H, 1, e2, sizeof e2); if (!ref) { printf("FAIL reference nr_create: %s\n", e2); return 3; }
+    char e2[512] = ""; void* ref = rcreate(dd, (int)MW, (int)MH, 1, e2, sizeof e2); if (!ref) { printf("FAIL reference nr_create: %s\n", e2); return 3; }
     double t0 = now(); while (state(f) == 0 && now() - t0 < 90000) Sleep(50);
     printf("dll state %d after %.0f ms (5 = sync)\n", state(f), now() - t0); if (state(f) != 5) { printf("FAIL sync path not active: %s\n", err()); return 4; }
 
-    std::vector<uint16_t> in((size_t)W * H * 4), refo((size_t)W * H * 4);
+    std::vector<uint16_t> in((size_t)MW * MH * 4), refo((size_t)MW * MH * 4);
     auto makeFrame = [&](int k) {   // shifted base image -> texture format bytes in upload, and the exact half4 the network sees in `in`
-        int sh = (k * 13) % W;
+        int sh = (k * 13) % MW;
         for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) {
-            const uint16_t* s = &base[((size_t)y * W + (x + sh) % W) * 4]; uint16_t* d = &in[((size_t)y * W + x) * 4];
+            const uint16_t* s = &base[((size_t)(y / UP) * MW + (x / UP + sh) % MW) * 4]; uint16_t* d = &in[((size_t)(y / UP) * MW + x / UP) * 4];
             if (r11) { uint32_t v; pack_r11g11b10(s, &v); memcpy(upp + (size_t)y * pitch + x * 4, &v, 4); unpack_r11g11b10(v, d); }
             else { memcpy(d, s, 8); memcpy(upp + (size_t)y * pitch + x * 8, s, 8); } } };
     auto frame = [&](int k, bool exec, double* ms) -> int {   // one game frame; returns evaluate's result, -100 on GPU timeout
@@ -90,13 +91,19 @@ int main(int argc, char** argv) {
         bar(out, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); cl->Close();
         if (!exec) return r;                                  // the host dropped this list
         double a = now(); ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); if (!wait(5000)) return -100; *ms = now() - a; return r; };
+    double se_o = 0, se_i = 0; auto psnr = [&](double se) { return 10 * log10(3.0 * MW * MH / std::max(se, 1e-12)); };
     auto compare = [&](size_t* beyond, double* maxerr) {
-        *beyond = 0; *maxerr = 0;
-        for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) {
-            uint16_t o[4]; if (r11) unpack_r11g11b10(*(uint32_t*)(rbp + (size_t)y * pitch + x * 4), o); else memcpy(o, rbp + (size_t)y * pitch + x * 8, 8);
+        *beyond = 0; *maxerr = 0; se_o = se_i = 0;
+        for (UINT y = 0; y < MH; y++) for (UINT x = 0; x < MW; x++) {
+            double ov[3] = {0, 0, 0};   // UP > 1: mean of the UPxUP frame block (bilinear up + box down ~ identity)
+            for (UINT j = 0; j < UP * UP; j++) { size_t fy = y * UP + j / UP, fx = x * UP + j % UP; uint16_t o[4];
+                if (r11) unpack_r11g11b10(*(uint32_t*)(rbp + fy * pitch + fx * 4), o); else memcpy(o, rbp + fy * pitch + fx * 8, 8);
+                for (int c = 0; c < 3; c++) ov[c] += h2f(o[c]) / (UP * UP); }
             for (int c = 0; c < 3; c++) {
-                uint16_t b = refo[((size_t)y * W + x) * 4 + c]; double bv = (b & 0x7C00) == 0x7C00 ? 0 : std::max(0.0, h2f(b));
-                double e = fabs(h2f(o[c]) - bv); if (e > *maxerr) *maxerr = e; if (e > 0.004 + (r11 ? 0.035 : 0.004) * fabs(bv)) (*beyond)++; } } };   // r11: 5-6 bit mantissa
+                uint16_t b = refo[((size_t)y * MW + x) * 4 + c]; double bv = (b & 0x7C00) == 0x7C00 ? 0 : std::max(0.0, h2f(b));
+                double e = fabs(ov[c] - bv);
+                { double iv = h2f(in[((size_t)y * MW + x) * 4 + c]); se_o += std::min(e * e, 1.0); se_i += std::min((iv - bv) * (iv - bv), 1.0); }   // UP > 1 metric: PSNR (peak 1, clamped) of NR result vs reference, against doing nothing
+                if (e > *maxerr) *maxerr = e; if (e > 0.004 + (r11 ? 0.035 : 0.004) * fabs(bv)) (*beyond)++; } } };   // r11: 5-6 bit mantissa
 
     // baseline: the same list without evaluate
     std::vector<double> tb, ts_, tr; double ms = 0;
@@ -109,8 +116,9 @@ int main(int argc, char** argv) {
         if (r == -100) { printf("FAIL frame %d: GPU wait timed out (deadlock?)\n", k); return 7; }
         if (r != 1) { notRun++; printf("frame %d: evaluate returned %d\n", k, r); continue; }
         ts_.push_back(ms); size_t bad; double mx; compare(&bad, &mx);
-        bool ok = bad <= (size_t)W * H * 3 / 1000; failed += !ok;
+        bool ok = UP > 1 ? psnr(se_o) >= 30 : bad <= (size_t)MW * MH * 3 / 1000; failed += !ok;   // UP > 1 (resampled): compare quality, not values
         if (k < 3 || k % 50 == 0 || !ok) printf("frame %d: %.1f ms list (ref nr_run %.1f ms) | %zu rgb values beyond tol, max err %.4g %s\n", k, ms, tr.back(), bad, mx, ok ? "ok" : "MISMATCH");
+        if (UP > 1 && (k < 3 || !ok)) printf("  psnr vs reference: NR %.1f dB, no NR %.1f dB\n", psnr(se_o), psnr(se_i));
     }
     // robustness: the host records a frame but never executes it, then carries on
     makeFrame(frames); frame(frames, false, &ms); int after = 0, afterBad = 0; double afterMax = 0;
