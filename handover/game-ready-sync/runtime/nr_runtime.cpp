@@ -51,6 +51,9 @@ static bool rd(const std::string& p, std::vector<uint8_t>& v) {
 #endif
   v.resize((size_t)n); bool ok = !n || fread(v.data(), 1, (size_t)n, f) == (size_t)n; fclose(f); return ok;
 }
+static std::string rel(const std::string& dir, const std::string& p) {   // relative module paths resolve against the data dir
+  return p.size() > 1 && (p[1] == ':' || p[0] == '\\' || p[0] == '/') ? p : dir + "/" + p;
+}
 static bool upload_arena(nr_ctx* c) {   // pristine arena between two 0xA5 guard pads, exactly as net_run lays it out
   std::vector<uint8_t> a;
   if (!rd(c->dir + "/arena.bin", a)) {   // release packs ship arena.lzms (LZMS, Windows Compression API) instead
@@ -120,6 +123,7 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
     std::vector<std::string> t; size_t pos = 0;   // '|' separated: module paths contain spaces
     for (;;) { size_t q = s.find('|', pos); if (q == std::string::npos) { t.push_back(s.substr(pos)); break; } t.push_back(s.substr(pos, q - pos)); pos = q + 1; }
     if (t.size() != 7 && t.size() != 8) { fclose(f); FAIL("bad manifest line: %s", line); }
+    t[0] = rel(c->dir, t[0]);
     if (!mods.count(t[0])) { hipModule_t m; hipError_t e = hipModuleLoad(&m, t[0].c_str()); if (e != hipSuccess) { fclose(f); FAIL("hipModuleLoad %s: %s", t[0].c_str(), hipGetErrorString(e)); } mods[t[0]] = m; c->mods.push_back(m); }
     Step st; st.pre = t[1].find("k_pre_block") != std::string::npos; hipError_t e = hipModuleGetFunction(&st.fn, mods[t[0]], t[1].c_str()); if (e != hipSuccess) { fclose(f); FAIL("no symbol %s", t[1].c_str()); }
     size_t off = strtoull(t[2].c_str(), nullptr, 10), len = strtoull(t[3].c_str(), nullptr, 10);
@@ -132,7 +136,8 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
     st.gx = atoi(t[4].c_str()); st.gy = atoi(t[5].c_str()); st.thr = atoi(t[6].c_str()); st.gz = t.size() == 8 ? atoi(t[7].c_str()) : 1;
     auto ov = c->ovr.find(t[1]);
     if (ov != c->ovr.end()) {   // swap in the native kernel; its kernarg is rebuilt from the original one (also after strength patches)
-      const NrOverride& o = ov->second; st.ov = &o;
+      NrOverride& o = ov->second; st.ov = &o;
+      o.mod = rel(c->dir, o.mod);
       if (!mods.count(o.mod)) { hipModule_t m; hipError_t e = hipModuleLoad(&m, o.mod.c_str()); if (e != hipSuccess) { fclose(f); FAIL("hipModuleLoad %s: %s", o.mod.c_str(), hipGetErrorString(e)); } mods[o.mod] = m; c->mods.push_back(m); }
       if (hipModuleGetFunction(&st.fn, mods[o.mod], o.sym.c_str()) != hipSuccess) { fclose(f); FAIL("no symbol %s", o.sym.c_str()); }
       st.gx = nr_grid(o.g[0], st.gx); st.gy = nr_grid(o.g[1], st.gy); st.gz = nr_grid(o.g[2], st.gz); st.thr = nr_grid(o.g[3], st.thr);
