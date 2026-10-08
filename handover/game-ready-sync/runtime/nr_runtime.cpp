@@ -65,18 +65,31 @@ static bool upload_arena(nr_ctx* c) {   // pristine arena between two 0xA5 guard
 #endif
   }
   if (a.size() != c->arena) return false;
-  // weights.map: the release ships no vendor weights; copy them from the user's nvngx_dlssnr.dll (next to the data dir)
+  // weights.map: the release ships no vendor weights; copy them by record name from the WEIGHTS_HT resource of the
+  // user's nvngx_dlssnr.dll (next to the data dir), so any DLL build carrying the same weights works.
+  // Record: u64 name_len, name, u64, u64, u64 D, u32 1, data[D], 20-byte trailer (see rdna2/emu/weights_ht.py).
+#ifdef _WIN32
   if (FILE* m = fopen((c->dir + "/weights.map").c_str(), "r")) {
-    unsigned long long want = 0, h = 0xcbf29ce484222325ull, ao, fo, n; int cnt = 0;
-    FILE* d = fopen((c->dir + "/../nvngx_dlssnr.dll").c_str(), "rb");
-    bool ok = d && fscanf(m, "fnv %llu %d", &want, &cnt) == 2;
+    std::map<std::string, std::pair<const uint8_t*, uint64_t>> rec;
+    HMODULE dll = LoadLibraryExA((c->dir + "/../nvngx_dlssnr.dll").c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    HRSRC r = dll ? FindResourceA(dll, "WEIGHTS_HT", MAKEINTRESOURCEA(10)) : nullptr;
+    const uint8_t* b = r ? (const uint8_t*)LockResource(LoadResource(dll, r)) : nullptr; uint64_t sz = r ? SizeofResource(dll, r) : 0, o = 8;
+    while (b && o + 8 <= sz) {
+      uint64_t L, D; memcpy(&L, b + o, 8); if (o + 8 + L + 28 > sz) break;
+      std::string nm((const char*)b + o + 8, L); memcpy(&D, b + o + 8 + L + 16, 8);
+      o += 8 + L + 28; if (o + D + 20 > sz) break; rec[nm] = {b + o, D}; o += D + 20;
+    }
+    unsigned long long want = 0, h = 0xcbf29ce484222325ull, ao, n; int cnt = 0; char nm[256];
+    bool ok = !rec.empty() && fscanf(m, "fnv %llu %d", &want, &cnt) == 2;
     for (int i = 0; ok && i < cnt; i++) {
-      ok = fscanf(m, "%llu %llu %llu", &ao, &fo, &n) == 3 && ao + n <= a.size() && !_fseeki64(d, (long long)fo, SEEK_SET) && fread(a.data() + ao, 1, n, d) == n;
+      ok = fscanf(m, "%llu %255s %llu", &ao, nm, &n) == 3 && rec.count(nm) && rec[nm].second == n && ao + n <= a.size();
+      if (ok) memcpy(a.data() + ao, rec[nm].first, n);
       for (unsigned long long k = 0; ok && k < n; k++) h = (h ^ a[ao + k]) * 0x100000001b3ull;
     }
-    fclose(m); if (d) fclose(d);
-    if (!ok || h != want) return false;   // missing or different nvngx_dlssnr.dll version
+    fclose(m); if (dll) FreeLibrary(dll);
+    if (!ok || h != want) return false;   // missing nvngx_dlssnr.dll or one with different weights
   }
+#endif
   std::vector<uint8_t> host(a.size() + 2 * PAD, 0xA5); memcpy(host.data() + PAD, a.data(), a.size());
   return hipMemcpy(c->d, host.data(), host.size(), hipMemcpyHostToDevice) == hipSuccess;
 }
