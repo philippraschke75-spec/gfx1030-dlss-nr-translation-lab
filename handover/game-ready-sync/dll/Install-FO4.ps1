@@ -2,9 +2,9 @@
 # Backs up every file it overwrites to E:\dlss 5-backups\fallout4-<timestamp>\ and writes Uninstall-FO4.ps1 there.
 param(
   [string]$Game = "C:\Program Files (x86)\Steam\steamapps\common\Fallout 4",
-  [string]$Build = "$PSScriptRoot\out",
-  [string]$Runtime = "E:\dlss 5\handover\game-ready\package\nr_runtime.dll",
-  [string]$DataDir = "E:\dlss-runtime\fo4_1280x720"
+  [string]$Build = "E:\dlss-runtime\build_sync",
+  [string]$Runtime = "E:\dlss-runtime\build_sync\nr_runtime.dll",
+  [string]$DataDir = "E:\dlss-runtime\fo4_1280x720_native"
 )
 $ErrorActionPreference = "Stop"
 if (Get-Process Fallout4 -ErrorAction SilentlyContinue) { throw "Fallout 4 is running - close it first." }
