@@ -148,18 +148,34 @@ static const char* kSyncHlsl =
 "RWTexture2D<float4> outp : register(u0);\n"
 "globallycoherent RWByteAddressBuffer io : register(u1);\n"
 "globallycoherent RWByteAddressBuffer st : register(u2);\n"
-"cbuffer C : register(b0) { uint W; uint H; uint seq; uint maxIt; uint outOff; uint flagOff; float gain; uint pad; };\n"
+"cbuffer C : register(b0) { uint W; uint H; uint seq; uint maxIt; uint outOff; uint flagOff; float gain; uint FWH; };\n"   // W,H model; FWH = frame W | H << 16
 "float san(float v) { return (v != v || v < -65504.0) ? 0.0 : min(v, 65504.0); }\n"   // NaN/-Inf -> 0, +Inf -> 65504 (as the CPU path)
 "uint pk(float a, float b) { return f32tof16(san(a)) | (f32tof16(san(b)) << 16); }\n"
+"float4 bil(float2 p, uint off) {\n"   // bilinear fetch of a half4 model-size image in io at model coords p (pixel centres at .5)
+"  p = clamp(p - 0.5, 0.0, float2(W - 1, H - 1)); uint2 a = (uint2)p; uint2 b = min(a + 1, uint2(W - 1, H - 1)); float2 t = p - a;\n"
+"  uint2 q[4] = { io.Load2(off + (a.y * W + a.x) * 8), io.Load2(off + (a.y * W + b.x) * 8), io.Load2(off + (b.y * W + a.x) * 8), io.Load2(off + (b.y * W + b.x) * 8) };\n"
+"  float4 v[4]; for (int i = 0; i < 4; i++) v[i] = float4(f16tof32(q[i].x & 0xFFFF), f16tof32(q[i].x >> 16), f16tof32(q[i].y & 0xFFFF), f16tof32(q[i].y >> 16));\n"
+"  return lerp(lerp(v[0], v[1], t.x), lerp(v[2], v[3], t.x), t.y); }\n"
+"float4 sn(float4 v) { return float4(san(v.x), san(v.y), san(v.z), san(v.w)); }\n"
+"float4 colAt(float2 p) {\n"           // frame colour averaged over the model pixel footprint (4 bilinear taps), p = frame coords of the centre
+"  uint FW = FWH & 0xFFFF, FH = FWH >> 16; float2 s = float2(FW, FH) / float2(W, H) * 0.25; float4 r = 0;\n"
+"  for (int j = 0; j < 4; j++) { float2 q = clamp(p + s * float2((j & 1) ? 1 : -1, (j & 2) ? 1 : -1) - 0.5, 0.0, float2(FW - 1, FH - 1));\n"
+"    uint2 a = (uint2)q; uint2 b = min(a + 1, uint2(FW - 1, FH - 1)); float2 t = q - a;\n"
+"    r += lerp(lerp(sn(col[a]), sn(col[uint2(b.x, a.y)]), t.x), lerp(sn(col[uint2(a.x, b.y)]), sn(col[b]), t.x), t.y); }\n"
+"  return r * 0.25; }\n"
 "[numthreads(8,8,1)] void imp(uint3 id : SV_DispatchThreadID) {\n"
-"  if (id.x >= W || id.y >= H) return; float4 c = col[id.xy];\n"
+"  if (id.x >= W || id.y >= H) return; uint FW = FWH & 0xFFFF, FH = FWH >> 16;\n"
+"  float4 c = (FW == W && FH == H) ? col[id.xy] : colAt((id.xy + 0.5) * float2(FW, FH) / float2(W, H));\n"
 "  io.Store2((id.y * W + id.x) * 8, uint2(pk(c.r, c.g), pk(c.b, c.a))); }\n"
 "[numthreads(1,1,1)] void spin() {\n"
 "  uint v = 0; for (uint i = 0; i < maxIt; i++) { io.InterlockedOr(flagOff, 0, v); if ((int)(v - seq) >= 0) break; }\n"
 "  st.Store(0, (int)(v - seq) >= 0 ? 1u : 0u); }\n"
 "[numthreads(8,8,1)] void exp(uint3 id : SV_DispatchThreadID) {\n"
-"  if (id.x >= W || id.y >= H) return; float4 c = col[id.xy];\n"
-"  if (st.Load(0) == 0) { outp[id.xy] = c; return; }\n"                       // timeout: native frame
+"  uint FW = FWH & 0xFFFF, FH = FWH >> 16; if (id.x >= FW || id.y >= FH) return; float4 c = col[id.xy];\n"
+"  if (st.Load(0) == 0) { outp[id.xy] = c; return; }\n"
+"  if (FW != W || FH != H) {\n"     // resampled: carry the model's change (out - in, model size) up to the frame
+"    float2 p = (id.xy + 0.5) * float2(W, H) / float2(FW, FH); float4 d = sn(bil(p, outOff) - bil(p, 0));\n"
+"    outp[id.xy] = float4(max(c.rgb + gain * d.rgb, 0.0), c.a); return; }\n"                       // timeout: native frame
 "  uint2 r = io.Load2(outOff + (id.y * W + id.x) * 8);\n"
 "  float3 e = float3(san(f16tof32(r.x & 0xFFFF)), san(f16tof32(r.x >> 16)), san(f16tof32(r.y & 0xFFFF)));\n"
 "  float3 o = gain == 1.0 ? e : c.rgb + gain * (e - c.rgb);\n"
@@ -367,6 +383,7 @@ __declspec(dllexport) void* dlssnr_call_create(const wchar_t* snippet, const wch
         if (!dev) { seterr("create: no D3D12 device"); return nullptr; }
         unsigned mw = 0, mh = 0;
         if (!readMeta(&mw, &mh)) { seterr("create: no meta.txt in data_dir '%s' (run gen_runtime_data.py, see INSTALL.md)", g_dataDir.c_str()); return nullptr; }
+        if ((mw != w || mh != h) && g_sync) { logf("create: frame %ux%u, model %ux%u - sync path resamples (universal for any resolution / upscaler mode)", w, h, mw, mh); w = mw; h = mh; }
         if (mw != w || mh != h) { seterr("create: model size %ux%u but data dir '%s' is for %ux%u - generate data for this size", w, h, g_dataDir.c_str(), mw, mh); return nullptr; }
         auto* F = new Feature; F->W = w; F->H = h; F->pitch = align256(w * 8);
         F->tin.resize((size_t)w * h * 8); F->tout.resize((size_t)w * h * 8);
@@ -394,7 +411,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
         auto* F = (Feature*)f; int n = ++g_evalCalls;
         if (!F || !cmd || !color || !out) return 0;
         if (F->state == S_FAILED) return 0;
-        if (w != F->W || h != F->H) { if (!F->warnedSize) { F->warnedSize = true; logf("evaluate: size %ux%u != feature %ux%u, not running", w, h, F->W, F->H); } return 0; }
+        if ((w != F->W || h != F->H) && F->state != S_SYNC) { if (!F->warnedSize) { F->warnedSize = true; logf("evaluate: size %ux%u != feature %ux%u, not running", w, h, F->W, F->H); } return 0; }
         D3D12_RESOURCE_DESC cd = color->GetDesc(), od = out->GetDesc();
         if (!fmtOk(cd.Format) || !fmtOk(od.Format) || cd.Width < w || cd.Height < h || od.Width < w || od.Height < h) {
             if (!F->warnedFmt) { F->warnedFmt = true; logf("evaluate: unsupported color/output format %d/%d (%llux%u / %llux%u) - only RGBA16F / R11G11B10_FLOAT / RGBA8_UNORM", (int)cd.Format, (int)od.Format, cd.Width, cd.Height, od.Width, od.Height); } return 0; }
@@ -415,12 +432,12 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             D3D12_SHADER_RESOURCE_VIEW_DESC sv = {}; sv.Format = cd.Format; sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D; sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sv.Texture2D.MipLevels = 1;
             F->dev->CreateShaderResourceView(color, &sv, c0);
             D3D12_UNORDERED_ACCESS_VIEW_DESC uv = {}; uv.Format = od.Format; uv.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D; F->dev->CreateUnorderedAccessView(out, nullptr, &uv, c1);
-            UINT cb[8] = { w, h, seq, (UINT)g_spinMs * 6000u /* ~0.16 us per poll on a 6900 XT */, (UINT)s->outOff, (UINT)s->flagOff, 0, 0 }; float gain = g_gain; memcpy(&cb[6], &gain, 4);
+            UINT cb[8] = { F->W, F->H, seq, (UINT)g_spinMs * 6000u /* ~0.16 us per poll on a 6900 XT */, (UINT)s->outOff, (UINT)s->flagOff, 0, w | (h << 16) }; float gain = g_gain; memcpy(&cb[6], &gain, 4);
             ID3D12DescriptorHeap* hp[] = { s->heap }; cmd->SetDescriptorHeaps(1, hp); cmd->SetComputeRootSignature(s->rs);
             cmd->SetComputeRootDescriptorTable(0, gpu); cmd->SetComputeRootUnorderedAccessView(1, s->io->GetGPUVirtualAddress()); cmd->SetComputeRootUnorderedAccessView(2, s->st->GetGPUVirtualAddress());
             cmd->SetComputeRoot32BitConstants(3, 8, cb, 0);
             D3D12_RESOURCE_BARRIER uav = {}; uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;   // null resource = all UAV writes
-            cmd->SetPipelineState(s->imp); cmd->Dispatch((w + 7) / 8, (h + 7) / 8, 1); cmd->ResourceBarrier(1, &uav);
+            cmd->SetPipelineState(s->imp); cmd->Dispatch((F->W + 7) / 8, (F->H + 7) / 8, 1); cmd->ResourceBarrier(1, &uav);
             auto tr = [&](D3D12_RESOURCE_STATES a, D3D12_RESOURCE_STATES b) { D3D12_RESOURCE_BARRIER t = {}; t.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION; t.Transition.pResource = s->sig; t.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES; t.Transition.StateBefore = a; t.Transition.StateAfter = b; cmd->ResourceBarrier(1, &t); };
             tr(D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
             D3D12_WRITEBUFFERIMMEDIATE_PARAMETER wp = { s->sig->GetGPUVirtualAddress(), seq }; D3D12_WRITEBUFFERIMMEDIATE_MODE wm = D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
