@@ -65,6 +65,18 @@ static bool upload_arena(nr_ctx* c) {   // pristine arena between two 0xA5 guard
 #endif
   }
   if (a.size() != c->arena) return false;
+  // weights.map: the release ships no vendor weights; copy them from the user's nvngx_dlssnr.dll (next to the data dir)
+  if (FILE* m = fopen((c->dir + "/weights.map").c_str(), "r")) {
+    unsigned long long want = 0, h = 0xcbf29ce484222325ull, ao, fo, n; int cnt = 0;
+    FILE* d = fopen((c->dir + "/../nvngx_dlssnr.dll").c_str(), "rb");
+    bool ok = d && fscanf(m, "fnv %llu %d", &want, &cnt) == 2;
+    for (int i = 0; ok && i < cnt; i++) {
+      ok = fscanf(m, "%llu %llu %llu", &ao, &fo, &n) == 3 && ao + n <= a.size() && !_fseeki64(d, (long long)fo, SEEK_SET) && fread(a.data() + ao, 1, n, d) == n;
+      for (unsigned long long k = 0; ok && k < n; k++) h = (h ^ a[ao + k]) * 0x100000001b3ull;
+    }
+    fclose(m); if (d) fclose(d);
+    if (!ok || h != want) return false;   // missing or different nvngx_dlssnr.dll version
+  }
   std::vector<uint8_t> host(a.size() + 2 * PAD, 0xA5); memcpy(host.data() + PAD, a.data(), a.size());
   return hipMemcpy(c->d, host.data(), host.size(), hipMemcpyHostToDevice) == hipSuccess;
 }
@@ -83,7 +95,7 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
   hipDeviceProp_t p{}; HK(hipGetDeviceProperties(&p, 0));
   if (strcmp(p.gcnArchName, "gfx1030")) FAIL("not gfx1030: %s", p.gcnArchName);
   HK(hipMalloc(&c->d, c->arena + 2 * PAD)); c->dev = (uint64_t)(c->d + PAD);
-  if (!upload_arena(c)) FAIL("arena.bin missing, wrong size or upload failed");
+  if (!upload_arena(c)) FAIL("arena data missing/wrong size, nvngx_dlssnr.dll missing or wrong version next to %s, or upload failed", data_dir);
 
   std::vector<uint8_t> kab; if (!rd(c->dir + "/kernargs.bin", kab)) FAIL("no kernargs.bin");
   FILE* f = fopen((c->dir + "/manifest.txt").c_str(), "r"); if (!f) FAIL("no manifest.txt");
