@@ -17,6 +17,7 @@
 #include <atomic>
 #ifdef _WIN32
 #include <windows.h>
+#include <compressapi.h>
 #endif
 #include "nr_override.h"
 
@@ -51,7 +52,19 @@ static bool rd(const std::string& p, std::vector<uint8_t>& v) {
   v.resize((size_t)n); bool ok = !n || fread(v.data(), 1, (size_t)n, f) == (size_t)n; fclose(f); return ok;
 }
 static bool upload_arena(nr_ctx* c) {   // pristine arena between two 0xA5 guard pads, exactly as net_run lays it out
-  std::vector<uint8_t> a; if (!rd(c->dir + "/arena.bin", a) || a.size() != c->arena) return false;
+  std::vector<uint8_t> a;
+  if (!rd(c->dir + "/arena.bin", a)) {   // release packs ship arena.lzms (LZMS, Windows Compression API) instead
+#ifdef _WIN32
+    std::vector<uint8_t> z; if (!rd(c->dir + "/arena.lzms", z)) return false;
+    COMPRESSOR_HANDLE h; SIZE_T n = 0; a.resize(c->arena);
+    if (!CreateDecompressor(COMPRESS_ALGORITHM_LZMS, nullptr, &h)) return false;
+    BOOL ok = Decompress(h, z.data(), z.size(), a.data(), a.size(), &n); CloseDecompressor(h);
+    if (!ok || n != c->arena) return false;
+#else
+    return false;
+#endif
+  }
+  if (a.size() != c->arena) return false;
   std::vector<uint8_t> host(a.size() + 2 * PAD, 0xA5); memcpy(host.data() + PAD, a.data(), a.size());
   return hipMemcpy(c->d, host.data(), host.size(), hipMemcpyHostToDevice) == hipSuccess;
 }
