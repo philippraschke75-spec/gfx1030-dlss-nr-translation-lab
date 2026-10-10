@@ -21,3 +21,15 @@ Untested ideas, which need the GPU:
 - C256: split the MLP head loop across 2 workgroups and sum the partials in head order.
 
 No new candidate is CPU-verified. Nothing should be installed beyond the astra attention candidate.
+
+## perf-swin2 (2026-10-10): split MLP, CPU-verified, GPU timing pending
+- Idea 1 (two windows per workgroup) does not remove the tail by itself: LDS (60 KB at C256) allows one workgroup per CU,
+  so 63 double workgroups take as long as 2 rounds of 126. The tail only goes away with smaller work units (idea 2).
+- `k_swin_c256s` / `k_swin_c128s` (launch with grid z = 2): workgroup z computes expand+mid (Ms) of half the heads into the
+  module global `g_ms`. An agent-scope atomic counter picks the second arriver, which runs the contract over heads 0..NH-1
+  in the original order (the same accc chain) and then attention as before. Nothing waits, so co-residency cannot deadlock.
+  Counters reset themselves. The unsplit kernels' ISA is identical to before (diffed .s). Split: 254/233 VGPRs, no scratch.
+- CPU: `cpu_split_check.py <step>` emulates the MLP on recorded g_A operands. Split == ref bit for bit on steps 10, 16, 20, 133;
+  adding two partial chains instead differs (1-22 values), so the check detects order changes.
+- GPU (not run): `sh gpu_split.sh`. Needs ALL EXACT plus a C256/C128 speedup. If it wins, deploy with an override line
+  that points `_Z10k_swin_varILi256ELb0EEv9VarParams` at `k_swin_c256s` with gz = 2.
