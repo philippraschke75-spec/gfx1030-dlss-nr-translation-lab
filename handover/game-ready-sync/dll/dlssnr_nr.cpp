@@ -458,6 +458,22 @@ __declspec(dllexport) void* dlssnr_call_create(const wchar_t* snippet, const wch
     } catch (...) { seterr("create: exception"); return nullptr; }
 }
 
+// Pass-through: copy the live colour into the output (host contract: colour NON_PIXEL_SHADER_RESOURCE, output UNORDERED_ACCESS)
+// and report success. Returns 0 only when the formats differ (no plain copy possible).
+static int passThrough(ID3D12GraphicsCommandList* cmd, ID3D12Resource* color, ID3D12Resource* out, unsigned w, unsigned h) {
+    D3D12_RESOURCE_DESC cd = color->GetDesc(), od = out->GetDesc();
+    if (cd.Format != od.Format || cd.Width < w || cd.Height < h || od.Width < w || od.Height < h) return 0;
+    D3D12_RESOURCE_BARRIER b[2] = {}; for (auto& x : b) { x.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION; x.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES; }
+    b[0].Transition.pResource = color; b[0].Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE; b[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    b[1].Transition.pResource = out; b[1].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS; b[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+    cmd->ResourceBarrier(2, b);
+    D3D12_TEXTURE_COPY_LOCATION dl = {}, sl = {}; dl.pResource = out; dl.Type = sl.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; sl.pResource = color;
+    D3D12_BOX bx = {0, 0, 0, w, h, 1}; cmd->CopyTextureRegion(&dl, 0, 0, 0, &sl, &bx);
+    for (auto& x : b) std::swap(x.Transition.StateBefore, x.Transition.StateAfter);
+    cmd->ResourceBarrier(2, b);
+    return 1;
+}
+
 __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd, void* f, void*, ID3D12Resource* color, ID3D12Resource*,
         ID3D12Resource*, ID3D12Resource* out, unsigned w, unsigned h, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned,
         int, int reset, float, int, float, float, float, int, float, float) {
@@ -465,7 +481,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
         auto* F = (Feature*)f; int n = ++g_evalCalls;
         if (!F || !cmd || !color || !out) return 0;
         if (F->state == S_FAILED) return 0;
-        if ((w != F->W || h != F->H) && F->state != S_SYNC) { if (!F->warnedSize) { F->warnedSize = true; logf("evaluate: frame %ux%u, model %ux%u - native frame until the runtime has loaded", w, h, F->W, F->H); } return 0; }
+        if ((w != F->W || h != F->H) && F->state != S_SYNC) { if (!F->warnedSize) { F->warnedSize = true; logf("evaluate: frame %ux%u, model %ux%u - native frame until the runtime has loaded", w, h, F->W, F->H); } return passThrough(cmd, color, out, w, h); }
         D3D12_RESOURCE_DESC cd = color->GetDesc(), od = out->GetDesc();
         // R9G9B9E5 output (RE Engine): sync path only, packed in a shader and copied in. Only when the host created the texture
         // with ALLOW_UNORDERED_ACCESS: then it is in the UAV state (OptiScaler-DLSSNR contract) and our UAV<->COPY_DEST barriers
@@ -481,13 +497,13 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
 
         if (F->state == S_SYNC) {                                   // same-frame path: everything below runs on the GPU in the host's list order
             Sync* s = F->sy; ID3D12GraphicsCommandList2* c2 = nullptr;
-            if (FAILED(cmd->QueryInterface(IID_PPV_ARGS(&c2)))) { if (!s->busy++) logf("sync: host list has no WriteBufferImmediate (ID3D12GraphicsCommandList2) - native frame"); return 0; }
+            if (FAILED(cmd->QueryInterface(IID_PPV_ARGS(&c2)))) { if (!s->busy++) logf("sync: host list has no WriteBufferImmediate (ID3D12GraphicsCommandList2) - native frame"); return passThrough(cmd, color, out, w, h); }
             c2->Release();                                          // the host holds the list; we only need the interface for this call
             if (reset == 1) s->minSeq = s->seq + 1;                 // fg: no edit from before a camera cut is reused
             const unsigned seq = s->seq + 1; ++s->frm;
             int q = p_extEnqueue(F->ctx, seq, g_maxInflight);       // HIP: wait flag_in >= seq, run, flag_out = seq (queued now, runs when the list below executes)
             if (q < 0) { seterr("nr_ext_enqueue failed (%d)", q); F->state = S_FAILED; return 0; }
-            if (q != 0 && !g_fg) { if (s->busy++ < 5 || s->busy % 100 == 0) logf("sync: frame not queued (HIP still busy with older frames, %u so far) - native frame", s->busy); return 0; }
+            if (q != 0 && !g_fg) { if (s->busy++ < 5 || s->busy % 100 == 0) logf("sync: frame not queued (HIP still busy with older frames, %u so far) - native frame", s->busy); return passThrough(cmd, color, out, w, h); }
             if (q == 0) { s->seq = seq; s->frmOf[seq % 16] = s->frm; if (++s->ran <= 3 || s->ran % 1000 == 0) logf("sync: NR frame %u queued (frame %ux%u, %u native, %u reused so far)", s->ran, w, h, s->busy, s->reused); }
             else s->reused++;                                       // fg: HIP busy -> live frame + last NR edit, the queue does not wait
             UINT k = (++s->rec % kSyncRing) * 2; auto cpu = s->heap->GetCPUDescriptorHandleForHeapStart(); auto gpu = s->heap->GetGPUDescriptorHandleForHeapStart();
@@ -527,7 +543,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
                     D3D12_RESOURCE_DESC bd = {}; bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = (UINT64)pitch * h; bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
                     bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; bd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
                     HRESULT hr = F->dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&s->ob));
-                    if (FAILED(hr)) { s->ob = nullptr; logf("sync: R9G9B9E5 staging buffer failed (0x%08lx) - native frame", (unsigned long)hr); return 0; }
+                    if (FAILED(hr)) { s->ob = nullptr; logf("sync: R9G9B9E5 staging buffer failed (0x%08lx) - native frame", (unsigned long)hr); return passThrough(cmd, color, out, w, h); }
                     s->obW = w; s->obH = h; logf("sync: output is R9G9B9E5 - packed in a shader and copied (%ux%u)", w, h);
                 }
                 cmd->SetComputeRootUnorderedAccessView(4, s->ob->GetGPUVirtualAddress());
@@ -565,7 +581,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             F->jobGen = F->resetGen; F->jobStart = GetTickCount(); F->state = S_WAIT_COPY;
         }
         int slot = F->published; if (slot >= 0) F->slotEval[slot] = (unsigned)n;
-        if (slot < 0 && !F->delta) return 0;   // copy mode: no answer yet, host keeps the native frame (delta mode passes the live frame through instead)
+        if (slot < 0 && !F->delta) return passThrough(cmd, color, out, w, h);   // copy mode: no answer yet, host keeps the native frame (delta mode passes the live frame through instead)
         if (F->delta) {                                             // out = current colour + stale NR edit, computed on the GPU in the host's list
             UINT k = (UINT)(n % kRing) * kDesc; auto cpu = F->heap->GetCPUDescriptorHandleForHeapStart(); auto gpu = F->heap->GetGPUDescriptorHandleForHeapStart();
             auto at = [&](UINT i) { D3D12_CPU_DESCRIPTOR_HANDLE h = cpu; h.ptr += (SIZE_T)(k + i) * F->incr; return h; };
