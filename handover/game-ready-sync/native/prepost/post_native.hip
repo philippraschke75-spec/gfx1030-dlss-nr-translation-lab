@@ -1,0 +1,290 @@
+// Native fused k_post_block_1h_32_fp8 for gfx1030: blend (2x up of e4m3 decoder x + e4m3 skip, gains) ->
+// C=32 Swin body (native-swin32) -> 32->4 projection -> compose to RGBA f32. Same PostParams kernarg as the
+// original; launch 64 threads per 8x8 window, grid W/8 x H/8. Weights are baked in (post_weights.h, block70).
+// Build: build.bat (-ffp-contract=off).
+#include <hip/hip_runtime.h>
+#include <stdint.h>
+
+typedef _Float16 h2 __attribute__((ext_vector_type(2)));
+
+// weight blob (f16): expand[128][32], contract[32][128], qkv[96][32], out[32][32]
+#define W_EXP 0
+#define W_CON (128 * 32)
+#define W_QKV (W_CON + 32 * 128)
+#define W_OUT (W_QKV + 96 * 32)
+#define W_HALFS (W_OUT + 32 * 32)
+// f32 blob: exp_bias[64][64], mlp_scale[32], attn_scale[32], head_scale
+#define F_BIAS 0
+#define F_MS 4096
+#define F_AS (4096 + 32)
+#define F_HS (4096 + 64)
+#define F_FLOATS (4096 + 65)
+#include "post_weights.h"
+
+struct PostParams {
+  const uint8_t* x; const uint8_t* skip; float* out; const void* wrec;   // wrec unused (weights baked)
+  int H, W, col0, row0; float scale; int denorm; const float* frame; const float* aux; float gate;
+};
+
+// nearest e4m3 (ties even), saturating at 448; branchless. Normal range: round the f32 mantissa to 3 bits;
+// below 2^-6 the fixed 2^-9 step: adding 2^-9 * 1.5 * 2^23 (= 24576, ulp 2^-9) rounds to that step exactly.
+__device__ __forceinline__ float q8(float x) {
+#if KO_Q8
+  return x;
+#elif Q8F
+  // same rounding, 7 VALU: magic-number add/sub with K = 2^(exp+20) (2^14 below 2^-6) rounds RNE to 2^(exp-3)
+  float a = fminf(fabsf(x), 448.f);
+  float e = __uint_as_float(__float_as_uint(a) & 0xFF800000u);
+  float K = __fmul_rn(fmaxf(e, 0.015625f), 1048576.f);
+  return copysignf(__fsub_rn(__fadd_rn(a, K), K), x);
+#else
+  float a = fminf(fabsf(x), 448.f);
+  uint32_t b = __float_as_uint(a);
+  float rn = __uint_as_float((b + 0x7FFFFu + ((b >> 20) & 1u)) & 0xFFF00000u);
+  float rs = __fsub_rn(__fadd_rn(a, 24576.f), 24576.f);
+  return copysignf(a < 0.015625f ? rs : rn, x);
+#endif
+}
+__device__ __forceinline__ float f16r(float x) { return (float)(_Float16)x; }
+__device__ __forceinline__ float dot2(h2 a, h2 b, float c) { return __builtin_amdgcn_fdot2(a, b, c, false); }
+__device__ __forceinline__ h2 pk(float a, float b) { h2 r; r.x = (_Float16)a; r.y = (_Float16)b; return r; }
+// q8 of two f16 values at once (packed f16 math): K = max(2^exp, 2^-6) * 2^7 gives f16 ulp 2^(exp-3) (2^-9 below 2^-6),
+// so (a + K) - K is the same RNE as q8 (ties: both K have even mantissas). Only for inputs already on the f16 grid.
+__device__ __forceinline__ h2 q8h(h2 x) {
+#if (!defined(PKQ8) || PKQ8) && !KO_Q8
+  uint32_t xb = __builtin_bit_cast(uint32_t, x);
+  // |x| clamped at 448 and 2^exp floored at 2^-6 as unsigned 16-bit compares (same order as f16 for non-negative
+  // values; NaN/inf sort above 448 like fminf), which avoids the canonicalising v_pk_max the f16 min/max emit
+  typedef unsigned short u2 __attribute__((ext_vector_type(2)));
+  u2 ab = __builtin_elementwise_min(__builtin_bit_cast(u2, xb & 0x7FFF7FFFu), (u2){0x5F00, 0x5F00});
+  u2 eb = __builtin_elementwise_max(ab & (u2){0x7C00, 0x7C00}, (u2){0x2400, 0x2400});
+  h2 a = __builtin_bit_cast(h2, ab);
+  h2 K = __builtin_bit_cast(h2, eb) * (h2){(_Float16)128.f, (_Float16)128.f};
+  h2 r = (a + K) - K;
+  return __builtin_bit_cast(h2, (__builtin_bit_cast(uint32_t, r) & 0x7FFF7FFFu) | (xb & 0x80008000u));
+#else
+  return pk(q8((float)x.x), q8((float)x.y));
+#endif
+}
+__device__ __forceinline__ h2 q8p(float a, float b) { return q8h(pk(a, b)); }   // q8(f16(a)), q8(f16(b)) packed
+#if KO_W
+#define WI(i) ((i) & 0x7FF)
+#else
+#define WI(i) (i)
+#endif
+
+// reciprocal L2 norm with the reference's chain/half summation order (d = 16 frag + 8 group + 2 chain + half)
+__device__ __forceinline__ float norm_scale(const float* v) {
+  float t[4][2] = {};
+#pragma unroll
+  for (int g = 0; g < 2; g++)
+#pragma unroll
+    for (int f = 0; f < 2; f++)
+#pragma unroll
+      for (int c = 0; c < 4; c++)
+#pragma unroll
+        for (int h = 0; h < 2; h++) { float x = v[16 * f + 8 * g + 2 * c + h]; t[c][h] = fmaf(x, x, t[c][h]); }
+  _Float16 h0 = (_Float16)((t[0][0] + t[1][0]) + (t[2][0] + t[3][0]));
+  _Float16 h1 = (_Float16)((t[0][1] + t[1][1]) + (t[2][1] + t[3][1]));
+  _Float16 s = h0 + h1;
+  const _Float16 floor_ = (_Float16)0.000062f;
+  if (s < floor_) s = floor_;
+  float r = (float)sqrt((double)(float)s);
+  return __fdiv_rn(1.f, r);
+}
+
+// e4m3 byte -> float (exact): place in f16 bits and scale by 2^8
+__device__ __forceinline__ float e4(uint32_t b) {
+  uint16_t h = (uint16_t)(((b & 0x80u) << 8) | ((b & 0x7Fu) << 7));
+  return (float)__builtin_bit_cast(_Float16, h) * 256.f;
+}
+// memory channel c holds reference channel PI(c)
+__device__ constexpr int PI(int c) { return (c & 1) | ((c >> 2) & 1) << 1 | ((c >> 3) & 1) << 2 | ((c >> 1) & 1) << 3 | (c & 16); }
+
+// compose kept out of line: inlined, the uniform branches made the scheduler spill the whole body
+__device__ __noinline__ void compose(const PostParams& P, size_t pix, float r0, float r1, float r2, float r3) {
+  const float r[4] = {r0, r1, r2, r3};
+  float f[3] = {0.f, 0.f, 0.f};
+  if (P.frame) { f[0] = P.frame[pix * 3]; f[1] = P.frame[pix * 3 + 1]; f[2] = P.frame[pix * 3 + 2]; }
+  float res[3];
+#pragma unroll
+  for (int k = 0; k < 3; k++) res[k] = 0.125f * f[k] - 0.0625f + P.scale * r[k];
+  float alpha = 0.f;
+  if (P.denorm) {
+    alpha = 1.f;
+#pragma unroll
+    for (int k = 0; k < 3; k++) res[k] = fminf(fmaxf(8.f * res[k] + 0.5f, 0.f), 1.f);
+    if (P.aux && P.gate > 0.f) {
+      float g = fminf(fmaxf(P.gate / (1.f + __expf(-r[3])), 0.f), 1.f);
+#pragma unroll
+      for (int k = 0; k < 3; k++) res[k] = res[k] + g * (P.aux[pix * 3 + k] - res[k]);
+    }
+  }
+  ((float4*)P.out)[pix] = make_float4(res[0], res[1], res[2], alpha);
+}
+
+extern "C" __global__ __launch_bounds__(64) void k_post_native(PostParams P) {
+  __shared__ h2 Ks[64][16];
+  __shared__ h2 Vt[32][32];
+  const h2* Wt = (const h2*)gWt; const float* Fp = gFp;
+  const int t = threadIdx.x, H = P.H, W = P.W;
+  const int py = P.row0 + blockIdx.y * 8 + ((t >> 5) & 1) * 4 + ((t >> 2) & 3);
+  const int px = P.col0 + blockIdx.x * 8 + ((t >> 4) & 1) * 4 + (t & 3);
+  const bool inside = py >= 0 && py < H && px >= 0 && px < W;
+
+  // ---- blend: b = f16(skip*skip_gain + f16(up(x)*main_gain)), memory channel order -> ref slots
+  h2 xr[16], xq[16];
+  {
+    float xb[32];
+#pragma unroll
+    for (int c = 0; c < 32; c++) xb[c] = 0.f;
+    if (inside) {
+      const int hw = (H >> 1) * (W >> 1);
+      const uint4* xs = (const uint4*)(P.x + ((size_t)(py >> 1) * (W >> 1) + (px >> 1)) * 16);
+      uint4 u0 = xs[0], u1 = *(const uint4*)((const uint8_t*)xs + (size_t)hw * 16);
+      uint32_t xw[8] = {u0.x, u0.y, u0.z, u0.w, u1.x, u1.y, u1.z, u1.w};
+      const int p = (py & 3) * 4 + (px & 3);
+      const uint8_t* sb = P.skip + ((size_t)(py >> 2) * (W >> 2) + (px >> 2)) * 512 + (p & 7) * 64 + 4 * (p >> 3);
+      uint32_t sw[8];
+#pragma unroll
+      for (int k = 0; k < 4; k++) { sw[k] = *(const uint32_t*)(sb + 16 * k); sw[4 + k] = *(const uint32_t*)(sb + 16 * k + 8); }
+#pragma unroll
+      for (int c = 0; c < 32; c++) {
+        float up = e4((xw[c >> 2] >> (8 * (c & 3))) & 0xFF);
+        float sk = e4((sw[c >> 2] >> (8 * (c & 3))) & 0xFF);
+        float m = f16r(__fmul_rn(up, gMain[c]));
+        xb[PI(c)] = f16r(fmaf(sk, gSkip[c], m));
+      }
+    }
+#pragma unroll
+    for (int i = 0; i < 16; i++) xr[i] = pk(xb[2 * i], xb[2 * i + 1]);
+  }
+#pragma unroll
+  for (int i = 0; i < 16; i++) xq[i] = q8h(xr[i]);
+
+  // ---- MLP: expand 32->128 (+cubic SiLU, q8), contract 128->32, streamed in chunks of 8 hidden values
+  float y[32];
+#pragma unroll
+  for (int c = 0; c < 32; c++) y[c] = 0.f;
+#pragma unroll 1
+  for (int hc = 0; hc < 128; hc += 8) {
+    float a[8];
+#pragma unroll
+    for (int j = 0; j < 8; j++) {
+      float s = 0.f;
+#pragma unroll
+      for (int k = 0; k < 16; k++) s = dot2(xq[k], Wt[WI((W_EXP + (hc + j) * 32) / 2 + k)], s);
+      float tc = fminf(fmaxf(s, -4.f), 4.f);
+      float inner = fmaf(fabsf(tc), -0.055908203125f, 0.447265625f);
+      a[j] = q8(__fmul_rn(s, fmaf(tc, inner, 0.89453125f)));
+    }
+    h2 ap[4];
+#pragma unroll
+    for (int j = 0; j < 4; j++) ap[j] = pk(a[2*j], a[2*j+1]);
+#pragma unroll
+    for (int c = 0; c < 32; c++)
+#pragma unroll
+      for (int j = 0; j < 4; j++) y[c] = dot2(ap[j], Wt[WI((W_CON + c * 128 + hc) / 2 + j)], y[c]);
+  }
+  // y = rs * x + mlp (two roundings), skip = y in f32, matrix operand = q8(f16(y))
+  h2 yq[16];
+#pragma unroll
+  for (int c = 0; c < 32; c += 2) {
+    h2 xv = xr[c / 2];
+    y[c] = __fadd_rn(__fmul_rn((float)xv.x, Fp[F_MS + c]), y[c]);
+    y[c+1] = __fadd_rn(__fmul_rn((float)xv.y, Fp[F_MS + c + 1]), y[c+1]);
+    yq[c / 2] = q8p(y[c], y[c+1]);
+  }
+
+  // ---- qkv in three passes of 32
+  h2 qh[16];
+  {
+    float v[32];
+#pragma unroll
+    for (int p = 0; p < 3; p++) {
+#pragma unroll
+      for (int d = 0; d < 32; d++) {
+        float s = 0.f;
+#pragma unroll
+        for (int k = 0; k < 16; k++) s = dot2(yq[k], Wt[WI((W_QKV + (p * 32 + d) * 32) / 2 + k)], s);
+        v[d] = s;
+      }
+      if (p == 0) {
+        float sc = __fmul_rn(norm_scale(v), Fp[F_HS]);
+#pragma unroll
+        for (int d = 0; d < 32; d += 2) qh[d / 2] = pk(q8(__fmul_rn(v[d], sc)), q8(__fmul_rn(v[d+1], sc)));
+      } else if (p == 1) {
+        float sc = norm_scale(v);
+#pragma unroll
+        for (int d = 0; d < 32; d += 2) Ks[t][d / 2] = pk(q8(__fmul_rn(v[d], sc)), q8(__fmul_rn(v[d+1], sc)));
+      } else {
+        _Float16* vt = (_Float16*)&Vt[0][0];
+#pragma unroll
+        for (int d = 0; d < 32; d += 2) { h2 vq = q8p(v[d], v[d+1]); vt[d * 64 + t] = vq.x; vt[(d+1) * 64 + t] = vq.y; }
+      }
+    }
+  }
+  __syncthreads();
+
+  // ---- logits -> exponent-ramp numerators (f16)
+  h2 pp[32];   // numerators, then probabilities; key pairs (2j, 2j+1)
+  const float2* brow = (const float2*)(Fp + F_BIAS + t * 64);
+#pragma unroll
+  for (int j = 0; j < 32; j++) {
+    float2 bb = brow[j];
+    float s0 = 0.f, s1 = 0.f;
+#pragma unroll
+    for (int i = 0; i < 16; i++) { s0 = dot2(qh[i], Ks[2*j][i], s0); s1 = dot2(qh[i], Ks[2*j+1][i], s1); }
+    h2 r = pk(fmaf(s0, 0.044921875f, bb.x), fmaf(s1, 0.044921875f, bb.y));
+    r = __builtin_elementwise_max(r, (h2){(_Float16)1.03125f, (_Float16)1.03125f});
+    r = __builtin_elementwise_min(r, (h2){(_Float16)1.5693359375f, (_Float16)1.5693359375f});
+    uint32_t bits = ((__builtin_bit_cast(uint32_t, r) & 0x03FF03FFu) << 5);
+    pp[j] = __builtin_bit_cast(h2, bits);
+  }
+  // denominator: key = 16 block + 4 pair + 2 member + half; blocks, then pairs, then halves, then members.
+  // pp[j] holds keys 2j (.x, half 0) and 2j+1 (.y, half 1); key/2 = 8 block + 2 pair + member.
+  h2 hm[2];
+#pragma unroll
+  for (int m = 0; m < 2; m++) {
+    h2 pr[4];
+#pragma unroll
+    for (int p = 0; p < 4; p++) { int b = 2 * p + m; pr[p] = ((pp[b] + pp[8 + b]) + pp[16 + b]) + pp[24 + b]; }
+    hm[m] = ((pr[0] + pr[1]) + pr[2]) + pr[3];
+  }
+  _Float16 den = (hm[0].x + hm[0].y) + (hm[1].x + hm[1].y);
+  float rec = __fdiv_rn(1.f, fmaxf((float)den, 0.00006103515625f));
+#pragma unroll
+  for (int j = 0; j < 32; j++)
+    pp[j] = q8p(__fmul_rn((float)pp[j].x, rec), __fmul_rn((float)pp[j].y, rec));
+
+  // ---- context = P V, stored q8(f16())
+  h2 ch[16];
+#pragma unroll
+  for (int d = 0; d < 32; d += 2) {
+    float s0 = 0.f, s1 = 0.f;
+#pragma unroll
+    for (int j = 0; j < 32; j++) { s0 = dot2(pp[j], Vt[d][j], s0); s1 = dot2(pp[j], Vt[d+1][j], s1); }
+    ch[d / 2] = q8p(s0, s1);
+  }
+
+  // ---- out = ars * skip + Wo . context ; written as the f32 accumulator
+  if (!inside) return;
+  // out = ars * skip + Wo . context; wide = f16(out) streamed straight into the 32->4 projection (f32 accumulate)
+  const h2* pr = (const h2*)gProj;
+  float r[4] = {0.f, 0.f, 0.f, 0.f};
+#pragma unroll
+  for (int c = 0; c < 32; c += 2) {
+    float o2[2];
+#pragma unroll
+    for (int e = 0; e < 2; e++) {
+      float s = 0.f;
+#pragma unroll
+      for (int k = 0; k < 16; k++) s = dot2(ch[k], Wt[WI((W_OUT + (c + e) * 32) / 2 + k)], s);
+      o2[e] = __fadd_rn(__fmul_rn(y[c + e], Fp[F_AS + c + e]), s);
+    }
+    h2 wv = pk(o2[0], o2[1]);
+#pragma unroll
+    for (int k = 0; k < 4; k++) r[k] = dot2(wv, pr[k * 16 + c / 2], r[k]);
+  }
+  compose(P, (size_t)py * W + px, r[0], r[1], r[2], r[3]);
+}
