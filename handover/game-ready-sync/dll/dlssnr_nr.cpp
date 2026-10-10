@@ -13,7 +13,7 @@
 //                result -> output copy and return 1 (the result is stale by the network latency, ~10 frames at 60 fps).
 //   worker     : create the HIP runtime once (seconds), then per job: wait until the readback copy landed (sentinel
 //                polling, no queue access needed), run nr_run, publish the answer into an upload buffer.
-// ponytail: single feature/pass, RGBA16F only, model size fixed to the generated data dir; add RGBA8 + more sizes when needed.
+// ponytail: single feature/pass; model size = one step dir (nr_data\\WxH) picked at create, fixed until the host recreates.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d12.h>
@@ -34,7 +34,7 @@
 // ---------------------------------------------------------------- logging / settings
 static CRITICAL_SECTION g_cs; static FILE* g_log; static char g_err[512] = "";
 static std::wstring g_dir;                         // folder of this DLL
-static std::string g_dataDir, g_logName = "dlssnr_nr.log"; static int g_vitEvery = 1, g_settleMs = 20, g_jobTimeoutMs = 3000;
+static std::string g_dataDir, g_modelRes = "auto", g_logName = "dlssnr_nr.log"; static int g_vitEvery = 1, g_settleMs = 20, g_jobTimeoutMs = 3000;
 static std::atomic<int> g_evalCalls{0};
 static float g_intensity = -1.0f;                       // nr_set_intensity 0..2 (runtime strength of the network); <0 = keep the strength baked into the data dir
 static float curIntensity() { return g_intensity; }
@@ -55,6 +55,7 @@ static void loadSettings() {
     std::wstring ini = g_dir + L"nr_port.ini"; char b[1024];
     GetPrivateProfileStringA("nr", "data_dir", "nr_data", b, sizeof b, narrow(ini).c_str()); g_dataDir = b;
     if (g_dataDir.size() < 2 || (g_dataDir[1] != ':' && g_dataDir[0] != '\\' && g_dataDir[0] != '/')) g_dataDir = narrow(g_dir) + g_dataDir;   // relative -> next to the DLL
+    GetPrivateProfileStringA("nr", "model_res", "auto", b, sizeof b, narrow(ini).c_str()); g_modelRes = b;   // WxH (a subfolder of data_dir) or auto
     GetPrivateProfileStringA("nr", "log", "dlssnr_nr.log", b, sizeof b, narrow(ini).c_str()); g_logName = b;
     g_vitEvery = (int)GetPrivateProfileIntA("nr", "vit_every", 1, narrow(ini).c_str());
     g_settleMs = (int)GetPrivateProfileIntA("nr", "settle_ms", 20, narrow(ini).c_str());
@@ -194,7 +195,7 @@ struct Feature {
     unsigned W = 0, H = 0, pitch = 0;
     ID3D12Resource* rb = nullptr; ID3D12Resource* up[2] = {}; uint8_t* rbp = nullptr; uint8_t* upp[2] = {};
     std::atomic<int> state{S_LOADING}; std::atomic<int> published{-1}; std::atomic<bool> quit{false};
-    std::thread th; nr_ctx* ctx = nullptr; DWORD jobStart = 0; bool warnedFmt = false, warnedSize = false;
+    std::thread th; std::string dir; nr_ctx* ctx = nullptr; DWORD jobStart = 0; bool warnedFmt = false, warnedSize = false;
     std::atomic<unsigned> resetGen{0}, slotEval[2] = {{0}, {0}}; unsigned jobGen = 0; float appliedIntensity = -2.f;   // resetGen: bumped by a real reset; slotEval: last evaluate that recorded a read of a slot
     std::vector<uint8_t> tin, tout;
     ID3D12Device* dev = nullptr; ID3D12RootSignature* rs = nullptr; ID3D12PipelineState* pso = nullptr; ID3D12DescriptorHeap* heap = nullptr; UINT incr = 0; bool delta = false;
@@ -245,9 +246,9 @@ static void worker(Feature* F) {
     try {
         char err[512] = {0};
         if (!loadRuntime()) { F->state = S_FAILED; return; }
-        logf("worker: nr_create(%s, %ux%u, vit_every %d)...", g_dataDir.c_str(), F->W, F->H, g_vitEvery);
+        logf("worker: nr_create(%s, %ux%u, vit_every %d)...", F->dir.c_str(), F->W, F->H, g_vitEvery);
         DWORD t0 = GetTickCount();
-        F->ctx = safeCreate(g_dataDir.c_str(), (int)F->W, (int)F->H, g_vitEvery, err, sizeof err);
+        F->ctx = safeCreate(F->dir.c_str(), (int)F->W, (int)F->H, g_vitEvery, err, sizeof err);
         if (!F->ctx) { seterr("nr_create failed: %s", err); F->state = S_FAILED; return; }
         if (F->quit) { if (p_destroy) p_destroy(F->ctx); F->ctx = nullptr; return; }   // released while the runtime was loading: clean up and leave
         logf("worker: runtime ready after %lu ms", GetTickCount() - t0);
@@ -356,9 +357,31 @@ static Sync* makeSync(Feature* F) {
     return s;
 }
 
+// Model resolution step: data_dir holds one subfolder per step (640x360, 960x540, 1280x720, ...), or is itself one
+// data dir (legacy). nr_port.ini model_res=WxH picks a step; auto (default) takes the step nearest in height to the size
+// the host creates the feature with (OptiScaler's Model resolution slider sets that size; a change recreates the feature).
+static bool readMeta(const std::string& dir, unsigned* w, unsigned* h);
+static std::string pickModelDir(unsigned w, unsigned h) {
+    unsigned mw, mh; if (readMeta(g_dataDir, &mw, &mh)) return g_dataDir;
+    std::vector<std::pair<unsigned, unsigned>> st; WIN32_FIND_DATAA fd; HANDLE fh = FindFirstFileA((g_dataDir + "\\*x*").c_str(), &fd);
+    if (fh != INVALID_HANDLE_VALUE) { do { unsigned a, b; if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && sscanf_s(fd.cFileName, "%ux%u", &a, &b) == 2) st.push_back({a, b}); } while (FindNextFileA(fh, &fd)); FindClose(fh); }
+    auto name = [](unsigned a, unsigned b) { char n[32]; snprintf(n, sizeof n, "%ux%u", a, b); return std::string(n); };
+    if (st.empty()) return g_dataDir;   // create reports the missing meta.txt
+    std::string want = g_modelRes;
+    if (want != "auto" && std::none_of(st.begin(), st.end(), [&](const std::pair<unsigned, unsigned>& p) { return name(p.first, p.second) == want; })) { logf("model_res %s: no such step in %s, using auto", want.c_str(), g_dataDir.c_str()); want = "auto"; }
+    if (want == "auto" && !st.empty()) {
+        auto best = std::make_pair(1280u, 720u); bool def = std::find(st.begin(), st.end(), best) != st.end(); if (!def) best = st[0];
+        if (h) for (auto& p : st) if (abs((int)p.second - (int)h) < abs((int)best.second - (int)h)) best = p;   // ties keep 1280x720
+        want = name(best.first, best.second);
+    }
+    std::string steps; for (auto& p : st) steps += " " + name(p.first, p.second);
+    logf("model resolution: %s (model_res=%s, host size %ux%u, steps:%s)", want.c_str(), g_modelRes.c_str(), w, h, steps.c_str());
+    return g_dataDir + "\\" + want;
+}
+
 // ---------------------------------------------------------------- exports
-static bool readMeta(unsigned* w, unsigned* h) {
-    std::string p = g_dataDir + "\\meta.txt"; FILE* f = nullptr; fopen_s(&f, p.c_str(), "r"); if (!f) return false;
+static bool readMeta(const std::string& dir, unsigned* w, unsigned* h) {
+    std::string p = dir + "\\meta.txt"; FILE* f = nullptr; fopen_s(&f, p.c_str(), "r"); if (!f) return false;
     char line[256]; *w = *h = 0;
     while (fgets(line, sizeof line, f)) { unsigned v; if (sscanf_s(line, "width=%u", &v) == 1) *w = v; if (sscanf_s(line, "height=%u", &v) == 1) *h = v; }
     fclose(f); return *w && *h;
@@ -381,11 +404,11 @@ __declspec(dllexport) void* dlssnr_call_create(const wchar_t* snippet, const wch
         logf("create: snippet=%ls dev=%p %ux%u", snippet ? snippet : L"", (void*)dev, w, h);
         dlssnr_call_last_create = 0;
         if (!dev) { seterr("create: no D3D12 device"); return nullptr; }
-        unsigned mw = 0, mh = 0;
-        if (!readMeta(&mw, &mh)) { seterr("create: no meta.txt in data_dir '%s' (run gen_runtime_data.py, see INSTALL.md)", g_dataDir.c_str()); return nullptr; }
+        unsigned mw = 0, mh = 0; const std::string dir = pickModelDir(w, h);
+        if (!readMeta(dir, &mw, &mh)) { seterr("create: no meta.txt in '%s' (run gen_runtime_data.py, see INSTALL.md)", dir.c_str()); return nullptr; }
         if ((mw != w || mh != h) && g_sync) { logf("create: frame %ux%u, model %ux%u - sync path resamples (universal for any resolution / upscaler mode)", w, h, mw, mh); w = mw; h = mh; }
-        if (mw != w || mh != h) { seterr("create: model size %ux%u but data dir '%s' is for %ux%u - generate data for this size", w, h, g_dataDir.c_str(), mw, mh); return nullptr; }
-        auto* F = new Feature; F->W = w; F->H = h; F->pitch = align256(w * 8);
+        if (mw != w || mh != h) { seterr("create: model size %ux%u but data dir '%s' is for %ux%u - generate data for this size", w, h, dir.c_str(), mw, mh); return nullptr; }
+        auto* F = new Feature; F->dir = dir; F->W = w; F->H = h; F->pitch = align256(w * 8);
         F->tin.resize((size_t)w * h * 8); F->tout.resize((size_t)w * h * 8);
         UINT64 sz = (UINT64)F->pitch * h;
         F->rb = makeBuffer(dev, D3D12_HEAP_TYPE_READBACK, sz, &F->rbp);

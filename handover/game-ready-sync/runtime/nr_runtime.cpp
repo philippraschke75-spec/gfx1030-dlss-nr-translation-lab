@@ -74,7 +74,8 @@ static bool upload_arena(nr_ctx* c) {   // pristine arena between two 0xA5 guard
 #ifdef _WIN32
   if (FILE* m = fopen((c->dir + "/weights.map").c_str(), "r")) {
     std::map<std::string, std::pair<const uint8_t*, uint64_t>> rec;
-    HMODULE dll = LoadLibraryExA((c->dir + "/../nvngx_dlssnr.dll").c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    HMODULE dll = nullptr;   // beside the data dir, or one level up (nr_data\<W>x<H>\ step dirs)
+    for (const char* up : {"/../", "/../../"}) if (!dll) dll = LoadLibraryExA((c->dir + up + "nvngx_dlssnr.dll").c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
     HRSRC r = dll ? FindResourceA(dll, "WEIGHTS_HT", MAKEINTRESOURCEA(10)) : nullptr;
     const uint8_t* b = r ? (const uint8_t*)LockResource(LoadResource(dll, r)) : nullptr; uint64_t sz = r ? SizeofResource(dll, r) : 0, o = 8;
     while (b && o + 8 <= sz) {
