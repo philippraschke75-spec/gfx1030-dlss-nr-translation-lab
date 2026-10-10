@@ -27,3 +27,5 @@ research/
 !/gfx1032-dlss-nr-research-main/**/*.c
 !/gfx1032-dlss-nr-research-main/**/*.ps1
 /gfx1032-dlss-nr-research-main/**/CMakeFiles/
+
+asm_opt/work/
