@@ -1,0 +1,105 @@
+{
+ "summary": {
+  "source": "E:\\dlss 5\\rdna2\\build\\kernels-hw-scratch\\_Z12k_final_head10HeadParams.s",
+  "baseline_text_equals_deployed": true,
+  "instructions": {
+   "baseline": 1349,
+   "final": 1331
+  },
+  "moves_removed": 18,
+  "dual_pairs_rewritten": 9,
+  "dual_pairs_retained": [],
+  "interleaved_blocks": 2,
+  "interleaved_dot_instructions": 128,
+  "initialisers_hoisted": 14,
+  "final_sha256": "d674316510d3b788b0e4886dc9ec7964d53074ed85ade8d66a1a84b68cdf4d91"
+ },
+ "direct": [
+  {
+   "line": 863,
+   "original": "// original: v_dual_mov_b32 v1, 0 :: v_dual_and_b32 v4, 8, v2",
+   "after": [
+    "v_mov_b32 v1, 0",
+    "v_and_b32 v4, 8, v2"
+   ]
+  },
+  {
+   "line": 877,
+   "original": "// original: v_dual_mov_b32 v7, v1 :: v_dual_and_b32 v2, 64, v2",
+   "after": [
+    "v_mov_b32 v7, v1",
+    "v_and_b32 v2, 64, v2"
+   ]
+  },
+  {
+   "line": 983,
+   "original": "// original: v_dual_mov_b32 v12, v10 :: v_dual_mov_b32 v11, v9",
+   "after": [
+    "v_mov_b32 v12, v10",
+    "v_mov_b32 v11, v9"
+   ]
+  },
+  {
+   "line": 989,
+   "original": "// original: v_dual_mov_b32 v16, 0 :: v_dual_mov_b32 v19, 0",
+   "after": [
+    "v_mov_b32 v16, 0",
+    "v_mov_b32 v19, 0"
+   ]
+  },
+  {
+   "line": 995,
+   "original": "// original: v_dual_mov_b32 v18, 0 :: v_dual_mov_b32 v17, 0",
+   "after": [
+    "v_mov_b32 v18, 0",
+    "v_mov_b32 v17, 0"
+   ]
+  },
+  {
+   "line": 1902,
+   "original": "// original: v_dual_add_f32 v20, v52, v60 :: v_dual_add_f32 v19, v53, v19",
+   "after": [
+    "v_add_f32 v20, v52, v60",
+    "v_add_f32 v19, v53, v19"
+   ]
+  },
+  {
+   "line": 1919,
+   "original": "// original: v_dual_add_f32 v23, v57, v62 :: v_dual_add_f32 v16, v58, v16",
+   "after": [
+    "v_add_f32 v23, v57, v62",
+    "v_add_f32 v16, v58, v16"
+   ]
+  },
+  {
+   "line": 2437,
+   "original": "// original: v_dual_mov_b32 v20, 0x7f :: v_dual_mov_b32 v21, 0x7f",
+   "after": [
+    "v_mov_b32 v20, 0x7f",
+    "v_mov_b32 v21, 0x7f"
+   ]
+  },
+  {
+   "line": 2852,
+   "original": "// original: v_dual_mov_b32 v18, 0x7f :: v_dual_mov_b32 v19, 0x7f",
+   "after": [
+    "v_mov_b32 v18, 0x7f",
+    "v_mov_b32 v19, 0x7f"
+   ]
+  }
+ ],
+ "interleave": [
+  {
+   "line": 1705,
+   "accumulators": 8,
+   "dot_instructions": 64,
+   "initialisers_hoisted": 7
+  },
+  {
+   "line": 1811,
+   "accumulators": 8,
+   "dot_instructions": 64,
+   "initialisers_hoisted": 7
+  }
+ ]
+}

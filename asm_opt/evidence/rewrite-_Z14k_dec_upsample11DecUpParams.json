@@ -1,0 +1,185 @@
+{
+ "summary": {
+  "source": "E:\\dlss 5\\rdna2\\build\\kernels-hw-scratch\\_Z14k_dec_upsample11DecUpParams.s",
+  "baseline_text_equals_deployed": true,
+  "instructions": {
+   "baseline": 2577,
+   "final": 2539
+  },
+  "moves_removed": 38,
+  "dual_pairs_rewritten": 19,
+  "dual_pairs_retained": [],
+  "interleaved_blocks": 2,
+  "interleaved_dot_instructions": 128,
+  "initialisers_hoisted": 14,
+  "final_sha256": "4e91cbbf0b2f7332a6e65e427f8299fe8e2f78cc3170a0171b7d08e8632fe40f"
+ },
+ "direct": [
+  {
+   "line": 422,
+   "original": "// original: v_dual_mov_b32 v25, v1 :: v_dual_lshlrev_b32 v2, 9, v14",
+   "after": [
+    "v_mov_b32 v25, v1",
+    "v_lshlrev_b32 v2, 9, v14"
+   ]
+  },
+  {
+   "line": 652,
+   "original": "// original: v_dual_add_f32 v2, v26, v2 :: v_dual_add_f32 v3, v25, v3",
+   "after": [
+    "v_add_f32 v2, v26, v2",
+    "v_add_f32 v3, v25, v3"
+   ]
+  },
+  {
+   "line": 674,
+   "original": "// original: v_dual_add_f32 v4, v30, v5 :: v_dual_add_f32 v5, v31, v6",
+   "after": [
+    "v_add_f32 v4, v30, v5",
+    "v_add_f32 v5, v31, v6"
+   ]
+  },
+  {
+   "line": 680,
+   "original": "// original: v_dual_add_f32 v6, v29, v7 :: v_dual_add_f32 v7, v28, v8",
+   "after": [
+    "v_add_f32 v6, v29, v7",
+    "v_add_f32 v7, v28, v8"
+   ]
+  },
+  {
+   "line": 732,
+   "original": "// original: v_dual_mov_b32 v2, 0 :: v_dual_mov_b32 v3, 0",
+   "after": [
+    "v_mov_b32 v2, 0",
+    "v_mov_b32 v3, 0"
+   ]
+  },
+  {
+   "line": 964,
+   "original": "// original: v_dual_mov_b32 v4, 0 :: v_dual_mov_b32 v5, 0",
+   "after": [
+    "v_mov_b32 v4, 0",
+    "v_mov_b32 v5, 0"
+   ]
+  },
+  {
+   "line": 1188,
+   "original": "// original: v_dual_mov_b32 v6, 0 :: v_dual_mov_b32 v7, 0",
+   "after": [
+    "v_mov_b32 v6, 0",
+    "v_mov_b32 v7, 0"
+   ]
+  },
+  {
+   "line": 1412,
+   "original": "// original: v_dual_mov_b32 v8, 0 :: v_dual_mov_b32 v9, 0",
+   "after": [
+    "v_mov_b32 v8, 0",
+    "v_mov_b32 v9, 0"
+   ]
+  },
+  {
+   "line": 1636,
+   "original": "// original: v_dual_mov_b32 v32, 0 :: v_dual_mov_b32 v33, 0",
+   "after": [
+    "v_mov_b32 v32, 0",
+    "v_mov_b32 v33, 0"
+   ]
+  },
+  {
+   "line": 1864,
+   "original": "// original: v_dual_mov_b32 v34, 0 :: v_dual_mov_b32 v35, 0",
+   "after": [
+    "v_mov_b32 v34, 0",
+    "v_mov_b32 v35, 0"
+   ]
+  },
+  {
+   "line": 2092,
+   "original": "// original: v_dual_mov_b32 v36, 0 :: v_dual_mov_b32 v37, 0",
+   "after": [
+    "v_mov_b32 v36, 0",
+    "v_mov_b32 v37, 0"
+   ]
+  },
+  {
+   "line": 2320,
+   "original": "// original: v_dual_mov_b32 v38, 0 :: v_dual_mov_b32 v39, 0",
+   "after": [
+    "v_mov_b32 v38, 0",
+    "v_mov_b32 v39, 0"
+   ]
+  },
+  {
+   "line": 4029,
+   "original": "// original: v_dual_mov_b32 v41, 0 :: v_dual_mov_b32 v42, 0",
+   "after": [
+    "v_mov_b32 v41, 0",
+    "v_mov_b32 v42, 0"
+   ]
+  },
+  {
+   "line": 4253,
+   "original": "// original: v_dual_mov_b32 v46, 0 :: v_dual_mov_b32 v47, 0",
+   "after": [
+    "v_mov_b32 v46, 0",
+    "v_mov_b32 v47, 0"
+   ]
+  },
+  {
+   "line": 4477,
+   "original": "// original: v_dual_mov_b32 v50, 0 :: v_dual_mov_b32 v51, 0",
+   "after": [
+    "v_mov_b32 v50, 0",
+    "v_mov_b32 v51, 0"
+   ]
+  },
+  {
+   "line": 4701,
+   "original": "// original: v_dual_mov_b32 v55, 0 :: v_dual_mov_b32 v56, 0",
+   "after": [
+    "v_mov_b32 v55, 0",
+    "v_mov_b32 v56, 0"
+   ]
+  },
+  {
+   "line": 4925,
+   "original": "// original: v_dual_mov_b32 v59, 0 :: v_dual_mov_b32 v60, 0",
+   "after": [
+    "v_mov_b32 v59, 0",
+    "v_mov_b32 v60, 0"
+   ]
+  },
+  {
+   "line": 5373,
+   "original": "// original: v_dual_mov_b32 v68, 0 :: v_dual_mov_b32 v69, 0",
+   "after": [
+    "v_mov_b32 v68, 0",
+    "v_mov_b32 v69, 0"
+   ]
+  },
+  {
+   "line": 5597,
+   "original": "// original: v_dual_mov_b32 v70, 0 :: v_dual_mov_b32 v71, 0",
+   "after": [
+    "v_mov_b32 v70, 0",
+    "v_mov_b32 v71, 0"
+   ]
+  }
+ ],
+ "interleave": [
+  {
+   "line": 562,
+   "accumulators": 8,
+   "dot_instructions": 64,
+   "initialisers_hoisted": 7
+  },
+  {
+   "line": 6007,
+   "accumulators": 8,
+   "dot_instructions": 64,
+   "initialisers_hoisted": 7
+  }
+ ]
+}

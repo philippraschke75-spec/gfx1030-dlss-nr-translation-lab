@@ -1,0 +1,1305 @@
+{
+ "c32_f0_x-4_y-4 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "99d5029ed88763f66c416b99f15b0ffa6298f1ecfa3d3147b4f2d461fb2597c4",
+    "steps": 82959,
+    "changed_bytes": 4585,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "99d5029ed88763f66c416b99f15b0ffa6298f1ecfa3d3147b4f2d461fb2597c4",
+    "steps": 80887,
+    "changed_bytes": 4585,
+    "seconds": 0.8,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "99d5029ed88763f66c416b99f15b0ffa6298f1ecfa3d3147b4f2d461fb2597c4",
+    "steps": 80887,
+    "changed_bytes": 4585,
+    "seconds": 1.0,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f0_x-4_y0 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "ad9c911b2ac87b9466f4e193af0eb4ca667bdbe79b1fa8d610e73df917213f91",
+    "steps": 83329,
+    "changed_bytes": 5086,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "ad9c911b2ac87b9466f4e193af0eb4ca667bdbe79b1fa8d610e73df917213f91",
+    "steps": 81249,
+    "changed_bytes": 5086,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "ad9c911b2ac87b9466f4e193af0eb4ca667bdbe79b1fa8d610e73df917213f91",
+    "steps": 81249,
+    "changed_bytes": 5086,
+    "seconds": 1.2,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f0_x0_y-4 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "932fee20072e9e3a4705711d6a895eb70b162b6b1c9d0489a64447596f052e53",
+    "steps": 83372,
+    "changed_bytes": 5075,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "932fee20072e9e3a4705711d6a895eb70b162b6b1c9d0489a64447596f052e53",
+    "steps": 81292,
+    "changed_bytes": 5075,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "932fee20072e9e3a4705711d6a895eb70b162b6b1c9d0489a64447596f052e53",
+    "steps": 81292,
+    "changed_bytes": 5075,
+    "seconds": 1.7,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f0_x0_y0 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "c1c17213a783de0648a5189afa65016ab48e9f3ef73b362626a774704ef476fc",
+    "steps": 84115,
+    "changed_bytes": 6086,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "c1c17213a783de0648a5189afa65016ab48e9f3ef73b362626a774704ef476fc",
+    "steps": 82019,
+    "changed_bytes": 6086,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "c1c17213a783de0648a5189afa65016ab48e9f3ef73b362626a774704ef476fc",
+    "steps": 82019,
+    "changed_bytes": 6086,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f1_x-4_y-4 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "c3173ab9bf68887d7622a34e4b867d2c217fb87c61f6bff8ce8f2cbbc9ff0b29",
+    "steps": 83081,
+    "changed_bytes": 4583,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "c3173ab9bf68887d7622a34e4b867d2c217fb87c61f6bff8ce8f2cbbc9ff0b29",
+    "steps": 81009,
+    "changed_bytes": 4583,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "c3173ab9bf68887d7622a34e4b867d2c217fb87c61f6bff8ce8f2cbbc9ff0b29",
+    "steps": 81009,
+    "changed_bytes": 4583,
+    "seconds": 1.0,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f1_x-4_y0 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "4081915921a727126c37b39ea31535d92ea6ec9b4004eaf8ec0adec58ce4456a",
+    "steps": 83539,
+    "changed_bytes": 5069,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "4081915921a727126c37b39ea31535d92ea6ec9b4004eaf8ec0adec58ce4456a",
+    "steps": 81459,
+    "changed_bytes": 5069,
+    "seconds": 0.8,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "4081915921a727126c37b39ea31535d92ea6ec9b4004eaf8ec0adec58ce4456a",
+    "steps": 81459,
+    "changed_bytes": 5069,
+    "seconds": 0.8,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f1_x0_y-4 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "084c65a3f1fc5e9a998008a69986abd65e3ef595b3bea73b0897213ebef8a631",
+    "steps": 83439,
+    "changed_bytes": 5081,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "084c65a3f1fc5e9a998008a69986abd65e3ef595b3bea73b0897213ebef8a631",
+    "steps": 81359,
+    "changed_bytes": 5081,
+    "seconds": 0.8,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "084c65a3f1fc5e9a998008a69986abd65e3ef595b3bea73b0897213ebef8a631",
+    "steps": 81359,
+    "changed_bytes": 5081,
+    "seconds": 1.0,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f1_x0_y0 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "d9ce9928d5b0c4ac4d6ccff1ff804580135012a7f2ba4f8aca0b85b0ad09f3fd",
+    "steps": 84237,
+    "changed_bytes": 6088,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "d9ce9928d5b0c4ac4d6ccff1ff804580135012a7f2ba4f8aca0b85b0ad09f3fd",
+    "steps": 82141,
+    "changed_bytes": 6088,
+    "seconds": 0.8,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "d9ce9928d5b0c4ac4d6ccff1ff804580135012a7f2ba4f8aca0b85b0ad09f3fd",
+    "steps": 82141,
+    "changed_bytes": 6088,
+    "seconds": 1.1,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f2_x-4_y-4 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "ba96373002eca6ce3ccbf6fffac4dff86f5d2c8e650fe0c7f602d1ed33548b16",
+    "steps": 83104,
+    "changed_bytes": 4587,
+    "seconds": 0.8,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "ba96373002eca6ce3ccbf6fffac4dff86f5d2c8e650fe0c7f602d1ed33548b16",
+    "steps": 81024,
+    "changed_bytes": 4587,
+    "seconds": 0.8,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "ba96373002eca6ce3ccbf6fffac4dff86f5d2c8e650fe0c7f602d1ed33548b16",
+    "steps": 81024,
+    "changed_bytes": 4587,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f2_x-4_y0 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "581db61ee77f5bc1adf1966201df13596645e853ba43ccd1739ab44bce43c936",
+    "steps": 83575,
+    "changed_bytes": 5089,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "581db61ee77f5bc1adf1966201df13596645e853ba43ccd1739ab44bce43c936",
+    "steps": 81479,
+    "changed_bytes": 5089,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "581db61ee77f5bc1adf1966201df13596645e853ba43ccd1739ab44bce43c936",
+    "steps": 81479,
+    "changed_bytes": 5089,
+    "seconds": 1.2,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f2_x0_y-4 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "c852c09e0753c3dc9ec4890bc79bfef381dfdea12ad0a03aa6a85d69d0a99ff1",
+    "steps": 83484,
+    "changed_bytes": 5092,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "c852c09e0753c3dc9ec4890bc79bfef381dfdea12ad0a03aa6a85d69d0a99ff1",
+    "steps": 81388,
+    "changed_bytes": 5092,
+    "seconds": 0.8,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "c852c09e0753c3dc9ec4890bc79bfef381dfdea12ad0a03aa6a85d69d0a99ff1",
+    "steps": 81388,
+    "changed_bytes": 5092,
+    "seconds": 1.1,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f2_x0_y0 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "48ccb4825a3ab184a028d2fdcff066c855abec919c72f80d13f36c5559d36a51",
+    "steps": 84348,
+    "changed_bytes": 6090,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "48ccb4825a3ab184a028d2fdcff066c855abec919c72f80d13f36c5559d36a51",
+    "steps": 82220,
+    "changed_bytes": 6090,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "48ccb4825a3ab184a028d2fdcff066c855abec919c72f80d13f36c5559d36a51",
+    "steps": 82220,
+    "changed_bytes": 6090,
+    "seconds": 1.0,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f4_x-4_y-4 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "b4e74e221ac6ac6368122e1c2b839b0bd17937842c40fe7ab7a8b6e92101d226",
+    "steps": 87374,
+    "changed_bytes": 4842,
+    "seconds": 1.0,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "b4e74e221ac6ac6368122e1c2b839b0bd17937842c40fe7ab7a8b6e92101d226",
+    "steps": 85294,
+    "changed_bytes": 4842,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "b4e74e221ac6ac6368122e1c2b839b0bd17937842c40fe7ab7a8b6e92101d226",
+    "steps": 85294,
+    "changed_bytes": 4842,
+    "seconds": 1.5,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f4_x-4_y0 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "343591fa47e30c31063276fa0bf56b930097147d4057fa43c14dc8bed03f0c6c",
+    "steps": 87985,
+    "changed_bytes": 5594,
+    "seconds": 1.0,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "343591fa47e30c31063276fa0bf56b930097147d4057fa43c14dc8bed03f0c6c",
+    "steps": 85897,
+    "changed_bytes": 5594,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "343591fa47e30c31063276fa0bf56b930097147d4057fa43c14dc8bed03f0c6c",
+    "steps": 85897,
+    "changed_bytes": 5594,
+    "seconds": 1.5,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f4_x0_y-4 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "c4191d31efa70d73e0219498f7d5dd8a0412d8cb414d3255ac53cd17cbf1656f",
+    "steps": 87908,
+    "changed_bytes": 5588,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "c4191d31efa70d73e0219498f7d5dd8a0412d8cb414d3255ac53cd17cbf1656f",
+    "steps": 85820,
+    "changed_bytes": 5588,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "c4191d31efa70d73e0219498f7d5dd8a0412d8cb414d3255ac53cd17cbf1656f",
+    "steps": 85820,
+    "changed_bytes": 5588,
+    "seconds": 1.3,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f4_x0_y0 lds=None": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "d86d7f9c7c680cea12fa846ba457e9b5442c71c573a653c72050292c6d427c95",
+    "steps": 89051,
+    "changed_bytes": 7102,
+    "seconds": 1.0,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "direct": {
+    "sha256": "d86d7f9c7c680cea12fa846ba457e9b5442c71c573a653c72050292c6d427c95",
+    "steps": 86947,
+    "changed_bytes": 7102,
+    "seconds": 0.9,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   },
+   "final": {
+    "sha256": "d86d7f9c7c680cea12fa846ba457e9b5442c71c573a653c72050292c6d427c95",
+    "steps": 86947,
+    "changed_bytes": 7102,
+    "seconds": 1.8,
+    "bytes_differing_from_gfx1100_emulator": 0,
+    "bytes_differing_from_gpu_deployed": 0
+   }
+  }
+ },
+ "c32_f8_x0_y0 lds=65536": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "4611a07f7d530586fc88d2944a82b9fb73531bc01115ac4367bd582fb469e467",
+    "steps": 94831,
+    "changed_bytes": 6080,
+    "seconds": 1.0
+   },
+   "direct": {
+    "sha256": "4611a07f7d530586fc88d2944a82b9fb73531bc01115ac4367bd582fb469e467",
+    "steps": 92647,
+    "changed_bytes": 6080,
+    "seconds": 1.0
+   },
+   "final": {
+    "sha256": "4611a07f7d530586fc88d2944a82b9fb73531bc01115ac4367bd582fb469e467",
+    "steps": 92647,
+    "changed_bytes": 6080,
+    "seconds": 1.0
+   }
+  }
+ },
+ "c32_f8_x0_y0 lds=hw": {
+  "pass": true,
+  "result": {
+   "deployed": {
+    "sha256": "d9e38c39781580109b06687796e5a5580f1da97f6c27edfb641e44ddaefea2c4",
+    "steps": 94831,
+    "changed_bytes": 6080,
+    "seconds": 1.0
+   },
+   "direct": {
+    "sha256": "d9e38c39781580109b06687796e5a5580f1da97f6c27edfb641e44ddaefea2c4",
+    "steps": 92647,
+    "changed_bytes": 6080,
+    "seconds": 1.0
+   },
+   "final": {
+    "sha256": "d9e38c39781580109b06687796e5a5580f1da97f6c27edfb641e44ddaefea2c4",
+    "steps": 92647,
+    "changed_bytes": 6080,
+    "seconds": 1.1
+   }
+  }
+ },
+ "frame _Z10k_swin_varILi32ELb0EEv9VarParams #0 flags=1": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "cf21885fe6d17aa0e4a25a6187ca1e3590cd066305646e77075476b28b7fe83b",
+     "steps": 252657,
+     "changed_bytes": 18213,
+     "seconds": 9.1
+    },
+    "direct": {
+     "sha256": "cf21885fe6d17aa0e4a25a6187ca1e3590cd066305646e77075476b28b7fe83b",
+     "steps": 246369,
+     "changed_bytes": 18213,
+     "seconds": 9.2
+    },
+    "final": {
+     "sha256": "cf21885fe6d17aa0e4a25a6187ca1e3590cd066305646e77075476b28b7fe83b",
+     "steps": 246369,
+     "changed_bytes": 18213,
+     "seconds": 9.1
+    }
+   },
+   {
+    "dispatch": 0,
+    "grid": [
+     112,
+     64
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      56,
+      32
+     ],
+     [
+      111,
+      63
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z10k_swin_varILi32ELb0EEv9VarParams #1 flags=0": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "a8d41cedf368d77cf0964b8739f0cfa0c9ff3e33a12e6749bdbb82f8aa721f6a",
+     "steps": 249695,
+     "changed_bytes": 15290,
+     "seconds": 8.5
+    },
+    "direct": {
+     "sha256": "a8d41cedf368d77cf0964b8739f0cfa0c9ff3e33a12e6749bdbb82f8aa721f6a",
+     "steps": 243455,
+     "changed_bytes": 15290,
+     "seconds": 8.6
+    },
+    "final": {
+     "sha256": "a8d41cedf368d77cf0964b8739f0cfa0c9ff3e33a12e6749bdbb82f8aa721f6a",
+     "steps": 243455,
+     "changed_bytes": 15290,
+     "seconds": 8.4
+    }
+   },
+   {
+    "dispatch": 1,
+    "grid": [
+     113,
+     65
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      56,
+      32
+     ],
+     [
+      112,
+      64
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z10k_swin_varILi32ELb0EEv9VarParams #2 flags=0": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "f8d7d1cfc8d7b50c6dfb475a1cd832060ed623ca9f4e4559154fbae02bffa3ff",
+     "steps": 249341,
+     "changed_bytes": 15314,
+     "seconds": 8.4
+    },
+    "direct": {
+     "sha256": "f8d7d1cfc8d7b50c6dfb475a1cd832060ed623ca9f4e4559154fbae02bffa3ff",
+     "steps": 243101,
+     "changed_bytes": 15314,
+     "seconds": 8.6
+    },
+    "final": {
+     "sha256": "f8d7d1cfc8d7b50c6dfb475a1cd832060ed623ca9f4e4559154fbae02bffa3ff",
+     "steps": 243101,
+     "changed_bytes": 15314,
+     "seconds": 8.6
+    }
+   },
+   {
+    "dispatch": 2,
+    "grid": [
+     113,
+     64
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      56,
+      32
+     ],
+     [
+      112,
+      63
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z10k_swin_varILi32ELb0EEv9VarParams #3 flags=4": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "be4eab50bf8e28fb960906b646ad98848eed6b1d6f54414624393e72d897412e",
+     "steps": 262349,
+     "changed_bytes": 16836,
+     "seconds": 8.9
+    },
+    "direct": {
+     "sha256": "be4eab50bf8e28fb960906b646ad98848eed6b1d6f54414624393e72d897412e",
+     "steps": 256085,
+     "changed_bytes": 16836,
+     "seconds": 9.0
+    },
+    "final": {
+     "sha256": "be4eab50bf8e28fb960906b646ad98848eed6b1d6f54414624393e72d897412e",
+     "steps": 256085,
+     "changed_bytes": 16836,
+     "seconds": 9.4
+    }
+   },
+   {
+    "dispatch": 3,
+    "grid": [
+     112,
+     65
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      56,
+      32
+     ],
+     [
+      111,
+      64
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z10k_swin_varILi32ELb0EEv9VarParams #4 flags=8": {
+  "pass": false,
+  "result": "declared-LDS model: ds_write_b16 @553c out of bounds at 15616 (deployed code on the real frame too); see the lds=hw entry"
+ },
+ "frame _Z10k_swin_varILi32ELb0EEv9VarParams #5 flags=0": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "50adbb8d19f5eaeaed746c5b5ff261b8466f19a62bcc7a8da32d59c02b7e6d73",
+     "steps": 249634,
+     "changed_bytes": 15339,
+     "seconds": 8.9
+    },
+    "direct": {
+     "sha256": "50adbb8d19f5eaeaed746c5b5ff261b8466f19a62bcc7a8da32d59c02b7e6d73",
+     "steps": 243394,
+     "changed_bytes": 15339,
+     "seconds": 8.8
+    },
+    "final": {
+     "sha256": "50adbb8d19f5eaeaed746c5b5ff261b8466f19a62bcc7a8da32d59c02b7e6d73",
+     "steps": 243394,
+     "changed_bytes": 15339,
+     "seconds": 8.7
+    }
+   },
+   {
+    "dispatch": 5,
+    "grid": [
+     113,
+     65
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      56,
+      32
+     ],
+     [
+      112,
+      64
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z10k_swin_varILi32ELb0EEv9VarParams #6 flags=0": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "69d5157dfb7247824b8faaad1becd0d07dfaff42429e2a018cc61618af39796f",
+     "steps": 249313,
+     "changed_bytes": 15333,
+     "seconds": 8.7
+    },
+    "direct": {
+     "sha256": "69d5157dfb7247824b8faaad1becd0d07dfaff42429e2a018cc61618af39796f",
+     "steps": 243073,
+     "changed_bytes": 15333,
+     "seconds": 8.8
+    },
+    "final": {
+     "sha256": "69d5157dfb7247824b8faaad1becd0d07dfaff42429e2a018cc61618af39796f",
+     "steps": 243073,
+     "changed_bytes": 15333,
+     "seconds": 8.6
+    }
+   },
+   {
+    "dispatch": 6,
+    "grid": [
+     113,
+     64
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      56,
+      32
+     ],
+     [
+      112,
+      63
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z10k_swin_varILi32ELb0EEv9VarParams #7 flags=2": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "992ba2d606ebe586806e3b868cd72fd7c16b70bb28e1bf1d98503fb3669630e3",
+     "steps": 249877,
+     "changed_bytes": 15354,
+     "seconds": 8.6
+    },
+    "direct": {
+     "sha256": "992ba2d606ebe586806e3b868cd72fd7c16b70bb28e1bf1d98503fb3669630e3",
+     "steps": 243589,
+     "changed_bytes": 15354,
+     "seconds": 8.7
+    },
+    "final": {
+     "sha256": "992ba2d606ebe586806e3b868cd72fd7c16b70bb28e1bf1d98503fb3669630e3",
+     "steps": 243589,
+     "changed_bytes": 15354,
+     "seconds": 8.7
+    }
+   },
+   {
+    "dispatch": 7,
+    "grid": [
+     112,
+     65
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      56,
+      32
+     ],
+     [
+      111,
+      64
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z12k_attention212AttnParams1d #0": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "c34a0257fcfc409b1dece56665f74319fbf8815d80d829e9084da03464661085",
+     "steps": 819513,
+     "changed_bytes": 6089,
+     "seconds": 16.7
+    },
+    "direct": {
+     "sha256": "c34a0257fcfc409b1dece56665f74319fbf8815d80d829e9084da03464661085",
+     "steps": 794013,
+     "changed_bytes": 6089,
+     "seconds": 16.8
+    },
+    "final": {
+     "sha256": "c34a0257fcfc409b1dece56665f74319fbf8815d80d829e9084da03464661085",
+     "steps": 794013,
+     "changed_bytes": 6089,
+     "seconds": 16.6
+    }
+   },
+   {
+    "dispatch": 0,
+    "grid": [
+     7,
+     32
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      3,
+      16
+     ],
+     [
+      6,
+      31
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z12k_attention212AttnParams1d #7": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "c34a0257fcfc409b1dece56665f74319fbf8815d80d829e9084da03464661085",
+     "steps": 819513,
+     "changed_bytes": 6089,
+     "seconds": 16.5
+    },
+    "direct": {
+     "sha256": "c34a0257fcfc409b1dece56665f74319fbf8815d80d829e9084da03464661085",
+     "steps": 794013,
+     "changed_bytes": 6089,
+     "seconds": 16.7
+    },
+    "final": {
+     "sha256": "c34a0257fcfc409b1dece56665f74319fbf8815d80d829e9084da03464661085",
+     "steps": 794013,
+     "changed_bytes": 6089,
+     "seconds": 16.6
+    }
+   },
+   {
+    "dispatch": 7,
+    "grid": [
+     7,
+     32
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      3,
+      16
+     ],
+     [
+      6,
+      31
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z14k_dec_upsample11DecUpParams #0": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "bddac9a88b836c8ee7a913f43ca29e12790c832690408c1608e85ae8eddd96e0",
+     "steps": 6778700,
+     "changed_bytes": 24469,
+     "seconds": 113.1
+    },
+    "direct": {
+     "sha256": "bddac9a88b836c8ee7a913f43ca29e12790c832690408c1608e85ae8eddd96e0",
+     "steps": 6667916,
+     "changed_bytes": 24469,
+     "seconds": 112.9
+    },
+    "final": {
+     "sha256": "bddac9a88b836c8ee7a913f43ca29e12790c832690408c1608e85ae8eddd96e0",
+     "steps": 6667916,
+     "changed_bytes": 24469,
+     "seconds": 115.1
+    }
+   },
+   {
+    "dispatch": 0,
+    "grid": [
+     112,
+     1
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      56,
+      0
+     ],
+     [
+      111,
+      0
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z12k_final_head10HeadParams #0": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "15f7237d818389594064c3be5fabf5977b3c068c6db1e3172dff67f33c7c47f6",
+     "steps": 1531941,
+     "changed_bytes": 48922,
+     "seconds": 39.1
+    },
+    "direct": {
+     "sha256": "15f7237d818389594064c3be5fabf5977b3c068c6db1e3172dff67f33c7c47f6",
+     "steps": 1517637,
+     "changed_bytes": 48922,
+     "seconds": 38.6
+    },
+    "final": {
+     "sha256": "15f7237d818389594064c3be5fabf5977b3c068c6db1e3172dff67f33c7c47f6",
+     "steps": 1517637,
+     "changed_bytes": 48922,
+     "seconds": 38.0
+    }
+   },
+   {
+    "lds": null,
+    "dispatch": 0,
+    "grid": [
+     28,
+     1
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      14,
+      0
+     ],
+     [
+      27,
+      0
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z8k_import12ImportParams #0": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "bfbe236d21e474e29827f9b39c996a6b5f016541b0e5c02dda8423bd83956014",
+     "steps": 15312,
+     "changed_bytes": 9190,
+     "seconds": 1.4
+    },
+    "direct": {
+     "sha256": "bfbe236d21e474e29827f9b39c996a6b5f016541b0e5c02dda8423bd83956014",
+     "steps": 13632,
+     "changed_bytes": 9190,
+     "seconds": 1.9
+    },
+    "final": {
+     "sha256": "bfbe236d21e474e29827f9b39c996a6b5f016541b0e5c02dda8423bd83956014",
+     "steps": 13632,
+     "changed_bytes": 9190,
+     "seconds": 2.0
+    }
+   },
+   {
+    "lds": null,
+    "dispatch": 0,
+    "grid": [
+     7,
+     1024
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      3,
+      512
+     ],
+     [
+      6,
+      1023
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z16k_conv_res_views12ConvPlParams #0": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "1ec979b5f4bd5b5c72af22f7127a62e96778caac392bdbc8207205109477a8cf",
+     "steps": 868702,
+     "changed_bytes": 30585,
+     "seconds": 21.6
+    },
+    "direct": {
+     "sha256": "1ec979b5f4bd5b5c72af22f7127a62e96778caac392bdbc8207205109477a8cf",
+     "steps": 852910,
+     "changed_bytes": 30585,
+     "seconds": 21.9
+    },
+    "final": {
+     "sha256": "1ec979b5f4bd5b5c72af22f7127a62e96778caac392bdbc8207205109477a8cf",
+     "steps": 852910,
+     "changed_bytes": 30585,
+     "seconds": 21.5
+    }
+   },
+   {
+    "lds": null,
+    "dispatch": 0,
+    "grid": [
+     112,
+     1
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      56,
+      0
+     ],
+     [
+      111,
+      0
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z8k_export12ExportParams #0": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "8e5068f3f22229921d14c491311b680d0b8d4f8f940d039f46a9eeb2208de1a0",
+     "steps": 44556,
+     "changed_bytes": 5456,
+     "seconds": 1.5
+    },
+    "direct": {
+     "sha256": "8e5068f3f22229921d14c491311b680d0b8d4f8f940d039f46a9eeb2208de1a0",
+     "steps": 38088,
+     "changed_bytes": 5456,
+     "seconds": 2.4
+    },
+    "final": {
+     "sha256": "8e5068f3f22229921d14c491311b680d0b8d4f8f940d039f46a9eeb2208de1a0",
+     "steps": 38088,
+     "changed_bytes": 5456,
+     "seconds": 2.4
+    }
+   },
+   {
+    "lds": null,
+    "dispatch": 0,
+    "grid": [
+     7,
+     960
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      3,
+      480
+     ],
+     [
+      6,
+      959
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z8k_repack12RepackParams #0": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "0aab4920f3c098c9b92dbd3ebe7b4a7be586c89a37dfa3d03c6518681a7fa5cc",
+     "steps": 17544,
+     "changed_bytes": 5358,
+     "seconds": 1.3
+    },
+    "direct": {
+     "sha256": "0aab4920f3c098c9b92dbd3ebe7b4a7be586c89a37dfa3d03c6518681a7fa5cc",
+     "steps": 17208,
+     "changed_bytes": 5358,
+     "seconds": 1.8
+    },
+    "final": {
+     "sha256": "0aab4920f3c098c9b92dbd3ebe7b4a7be586c89a37dfa3d03c6518681a7fa5cc",
+     "steps": 17208,
+     "changed_bytes": 5358,
+     "seconds": 2.0
+    }
+   },
+   {
+    "lds": null,
+    "dispatch": 0,
+    "grid": [
+     256,
+     1
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      128,
+      0
+     ],
+     [
+      255,
+      0
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z8k_repack12RepackParams #1": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "c169ff2ac8f2466b013c22aaa88a8830faa60c8d02151ef068e5fe374a6417af",
+     "steps": 17376,
+     "changed_bytes": 5344,
+     "seconds": 1.4
+    },
+    "direct": {
+     "sha256": "c169ff2ac8f2466b013c22aaa88a8830faa60c8d02151ef068e5fe374a6417af",
+     "steps": 17040,
+     "changed_bytes": 5344,
+     "seconds": 1.8
+    },
+    "final": {
+     "sha256": "c169ff2ac8f2466b013c22aaa88a8830faa60c8d02151ef068e5fe374a6417af",
+     "steps": 17040,
+     "changed_bytes": 5344,
+     "seconds": 1.9
+    }
+   },
+   {
+    "lds": null,
+    "dispatch": 1,
+    "grid": [
+     256,
+     1
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      128,
+      0
+     ],
+     [
+      255,
+      0
+     ]
+    ]
+   }
+  ]
+ },
+ "frame _Z10k_swin_varILi32ELb0EEv9VarParams #4 flags=8 lds=hw": {
+  "pass": true,
+  "result": [
+   {
+    "deployed": {
+     "sha256": "2a75647c7eb434c8530abc0a423429d07c4030c2756d95edcf8f287bfe6913af",
+     "steps": 283838,
+     "changed_bytes": 18413,
+     "seconds": 9.4
+    },
+    "direct": {
+     "sha256": "2a75647c7eb434c8530abc0a423429d07c4030c2756d95edcf8f287bfe6913af",
+     "steps": 277286,
+     "changed_bytes": 18413,
+     "seconds": 9.9
+    },
+    "final": {
+     "sha256": "2a75647c7eb434c8530abc0a423429d07c4030c2756d95edcf8f287bfe6913af",
+     "steps": 277286,
+     "changed_bytes": 18413,
+     "seconds": 10.0
+    }
+   },
+   {
+    "lds": "hw",
+    "dispatch": 4,
+    "grid": [
+     112,
+     64
+    ],
+    "workgroups": [
+     [
+      0,
+      0
+     ],
+     [
+      56,
+      32
+     ],
+     [
+      111,
+      63
+     ]
+    ]
+   }
+  ]
+ }
+}

@@ -1,0 +1,500 @@
+{
+ "summary": {
+  "source": "E:\\dlss 5\\rdna2\\build\\kernels-hw-scratch\\_Z8k_export12ExportParams.s",
+  "baseline_text_equals_deployed": true,
+  "instructions": {
+   "baseline": 1229,
+   "final": 1109
+  },
+  "moves_removed": 120,
+  "dual_pairs_rewritten": 60,
+  "dual_pairs_retained": [],
+  "interleaved_blocks": 0,
+  "interleaved_dot_instructions": 0,
+  "initialisers_hoisted": 0,
+  "final_sha256": "748d07323f7e46fd45c0332972a0048fc3eb40c72b1119e3bfb1055634b0df12"
+ },
+ "direct": [
+  {
+   "line": 142,
+   "original": "// original: v_dual_sub_f32 v3, v0, v3 :: v_dual_sub_f32 v4, v1, v4",
+   "after": [
+    "v_sub_f32 v3, v0, v3",
+    "v_sub_f32 v4, v1, v4"
+   ]
+  },
+  {
+   "line": 198,
+   "original": "// original: v_dual_cndmask_b32 v11, 0, v5 :: v_dual_max_f32 v6, v6, v6",
+   "after": [
+    "v_cndmask_b32 v11, 0, v5, vcc_lo",
+    "v_max_f32 v6, v6, v6"
+   ]
+  },
+  {
+   "line": 204,
+   "original": "// original: v_dual_max_f32 v13, v11, v11 :: v_dual_max_f32 v8, v8, v8",
+   "after": [
+    "v_max_f32 v13, v11, v11",
+    "v_max_f32 v8, v8, v8"
+   ]
+  },
+  {
+   "line": 286,
+   "original": "// original: v_dual_mul_f32 v13, 0.5, v16 :: v_dual_add_nc_u32 v6, 1, v6",
+   "after": [
+    "v_mul_f32 v13, 0.5, v16",
+    "v_add_nc_u32 v6, 1, v6"
+   ]
+  },
+  {
+   "line": 383,
+   "original": "// original: v_dual_max_f32 v6, v4, v4 :: v_dual_max_f32 v11, v5, v5",
+   "after": [
+    "v_max_f32 v6, v4, v4",
+    "v_max_f32 v11, v5, v5"
+   ]
+  },
+  {
+   "line": 400,
+   "original": "// original: v_dual_max_f32 v6, 0, v6 :: v_dual_max_f32 v11, 0, v11",
+   "after": [
+    "v_max_f32 v6, 0, v6",
+    "v_max_f32 v11, 0, v11"
+   ]
+  },
+  {
+   "line": 829,
+   "original": "// original: v_dual_max_f32 v8, v9, v9 :: v_dual_max_f32 v9, v10, v10",
+   "after": [
+    "v_max_f32 v8, v9, v9",
+    "v_max_f32 v9, v10, v10"
+   ]
+  },
+  {
+   "line": 843,
+   "original": "// original: v_dual_min_f32 v9, 0x3f733333, v9 :: v_dual_sub_f32 v10, 1.0, v6",
+   "after": [
+    "v_min_f32 v9, 0x3f733333, v9",
+    "v_sub_f32 v10, 1.0, v6"
+   ]
+  },
+  {
+   "line": 898,
+   "original": "// original: v_dual_sub_f32 v11, 1.0, v8 :: v_dual_fmac_f32 v18, v23, v18",
+   "after": [
+    "v_sub_f32 v11, 1.0, v8",
+    "v_fma_f32 v18, v23, v18, v18"
+   ]
+  },
+  {
+   "line": 1198,
+   "original": "// original: v_dual_mul_f32 v13, v12, v11 :: v_dual_add_f32 v14, -1.0, v9",
+   "after": [
+    "v_mul_f32 v13, v12, v11",
+    "v_add_f32 v14, -1.0, v9"
+   ]
+  },
+  {
+   "line": 1206,
+   "original": "// original: v_dual_mul_f32 v15, v9, v13 :: v_dual_sub_f32 v8, v8, v14",
+   "after": [
+    "v_mul_f32 v15, v9, v13",
+    "v_sub_f32 v8, v8, v14"
+   ]
+  },
+  {
+   "line": 1228,
+   "original": "// original: v_dual_sub_f32 v14, v12, v8 :: v_dual_sub_f32 v9, v15, v9",
+   "after": [
+    "v_sub_f32 v14, v12, v8",
+    "v_sub_f32 v9, v15, v9"
+   ]
+  },
+  {
+   "line": 1263,
+   "original": "// original: v_dual_mul_f32 v12, v11, v11 :: v_dual_sub_f32 v13, v8, v9",
+   "after": [
+    "v_mul_f32 v12, v11, v11",
+    "v_sub_f32 v13, v8, v9"
+   ]
+  },
+  {
+   "line": 1348,
+   "original": "// original: v_dual_fmac_f32 v17, v12, v11 :: v_dual_add_f32 v18, 0x3f2aaaaa, v16",
+   "after": [
+    "v_fma_f32 v17, v12, v11, v17",
+    "v_add_f32 v18, 0x3f2aaaaa, v16"
+   ]
+  },
+  {
+   "line": 1386,
+   "original": "// original: v_dual_add_f32 v14, v19, v17 :: v_dual_add_f32 v9, v9, v15",
+   "after": [
+    "v_add_f32 v14, v19, v17",
+    "v_add_f32 v9, v9, v15"
+   ]
+  },
+  {
+   "line": 1427,
+   "original": "// original: v_dual_sub_f32 v9, v12, v9 :: v_dual_sub_f32 v14, v11, v16",
+   "after": [
+    "v_sub_f32 v9, v12, v9",
+    "v_sub_f32 v14, v11, v16"
+   ]
+  },
+  {
+   "line": 1441,
+   "original": "// original: v_dual_mul_f32 v16, 0x3f317218, v8 :: v_dual_add_f32 v11, v13, v14",
+   "after": [
+    "v_mul_f32 v16, 0x3f317218, v8",
+    "v_add_f32 v11, v13, v14"
+   ]
+  },
+  {
+   "line": 1452,
+   "original": "// original: v_dual_fmac_f32 v15, 0xb102e308, v8 :: v_dual_add_f32 v8, v11, v9",
+   "after": [
+    "v_fma_f32 v15, 0xb102e308, v8, v15",
+    "v_add_f32 v8, v11, v9"
+   ]
+  },
+  {
+   "line": 1476,
+   "original": "// original: v_dual_add_f32 v13, v9, v11 :: v_dual_sub_f32 v12, v11, v12",
+   "after": [
+    "v_add_f32 v13, v9, v11",
+    "v_sub_f32 v12, v11, v12"
+   ]
+  },
+  {
+   "line": 1523,
+   "original": "// original: v_dual_add_f32 v14, v13, v9 :: v_dual_sub_f32 v11, v15, v12",
+   "after": [
+    "v_add_f32 v14, v13, v9",
+    "v_sub_f32 v11, v15, v12"
+   ]
+  },
+  {
+   "line": 1534,
+   "original": "// original: v_dual_sub_f32 v9, v9, v12 :: v_dual_add_f32 v8, v8, v11",
+   "after": [
+    "v_sub_f32 v9, v9, v12",
+    "v_add_f32 v8, v8, v11"
+   ]
+  },
+  {
+   "line": 1553,
+   "original": "// original: v_dual_sub_f32 v12, v9, v14 :: v_dual_mul_f32 v13, v11, v9",
+   "after": [
+    "v_sub_f32 v12, v9, v14",
+    "v_mul_f32 v13, v11, v9"
+   ]
+  },
+  {
+   "line": 1608,
+   "original": "// original: v_dual_fmac_f32 v16, 0x32a5705f, v14 :: v_dual_sub_f32 v15, v15, v17",
+   "after": [
+    "v_fma_f32 v16, 0x32a5705f, v14, v16",
+    "v_sub_f32 v15, v15, v17"
+   ]
+  },
+  {
+   "line": 1614,
+   "original": "// original: v_dual_add_f32 v15, v15, v16 :: v_dual_sub_f32 v8, v8, v13",
+   "after": [
+    "v_add_f32 v15, v15, v16",
+    "v_sub_f32 v8, v8, v13"
+   ]
+  },
+  {
+   "line": 1644,
+   "original": "// original: v_dual_add_f32 v8, v12, v8 :: v_dual_cndmask_b32 v9, 0, v9",
+   "after": [
+    "v_add_f32 v8, v12, v8",
+    "v_cndmask_b32 v9, 0, v9, vcc_lo"
+   ]
+  },
+  {
+   "line": 1882,
+   "original": "// original: v_dual_sub_f32 v13, v13, v15 :: v_dual_sub_f32 v10, v16, v10",
+   "after": [
+    "v_sub_f32 v13, v13, v15",
+    "v_sub_f32 v10, v16, v10"
+   ]
+  },
+  {
+   "line": 1912,
+   "original": "// original: v_dual_mul_f32 v13, v12, v12 :: v_dual_sub_f32 v14, v9, v10",
+   "after": [
+    "v_mul_f32 v13, v12, v12",
+    "v_sub_f32 v14, v9, v10"
+   ]
+  },
+  {
+   "line": 1997,
+   "original": "// original: v_dual_fmac_f32 v18, v13, v12 :: v_dual_add_f32 v19, 0x3f2aaaaa, v17",
+   "after": [
+    "v_fma_f32 v18, v13, v12, v18",
+    "v_add_f32 v19, 0x3f2aaaaa, v17"
+   ]
+  },
+  {
+   "line": 2035,
+   "original": "// original: v_dual_add_f32 v15, v20, v18 :: v_dual_add_f32 v10, v10, v16",
+   "after": [
+    "v_add_f32 v15, v20, v18",
+    "v_add_f32 v10, v10, v16"
+   ]
+  },
+  {
+   "line": 2076,
+   "original": "// original: v_dual_sub_f32 v10, v13, v10 :: v_dual_sub_f32 v15, v12, v17",
+   "after": [
+    "v_sub_f32 v10, v13, v10",
+    "v_sub_f32 v15, v12, v17"
+   ]
+  },
+  {
+   "line": 2090,
+   "original": "// original: v_dual_mul_f32 v17, 0x3f317218, v9 :: v_dual_add_f32 v12, v14, v15",
+   "after": [
+    "v_mul_f32 v17, 0x3f317218, v9",
+    "v_add_f32 v12, v14, v15"
+   ]
+  },
+  {
+   "line": 2101,
+   "original": "// original: v_dual_fmac_f32 v16, 0xb102e308, v9 :: v_dual_add_f32 v9, v12, v10",
+   "after": [
+    "v_fma_f32 v16, 0xb102e308, v9, v16",
+    "v_add_f32 v9, v12, v10"
+   ]
+  },
+  {
+   "line": 2125,
+   "original": "// original: v_dual_add_f32 v14, v10, v12 :: v_dual_sub_f32 v13, v12, v13",
+   "after": [
+    "v_add_f32 v14, v10, v12",
+    "v_sub_f32 v13, v12, v13"
+   ]
+  },
+  {
+   "line": 2172,
+   "original": "// original: v_dual_add_f32 v15, v14, v10 :: v_dual_sub_f32 v12, v16, v13",
+   "after": [
+    "v_add_f32 v15, v14, v10",
+    "v_sub_f32 v12, v16, v13"
+   ]
+  },
+  {
+   "line": 2183,
+   "original": "// original: v_dual_sub_f32 v10, v10, v13 :: v_dual_add_f32 v9, v9, v12",
+   "after": [
+    "v_sub_f32 v10, v10, v13",
+    "v_add_f32 v9, v9, v12"
+   ]
+  },
+  {
+   "line": 2202,
+   "original": "// original: v_dual_sub_f32 v13, v10, v15 :: v_dual_mul_f32 v14, v12, v10",
+   "after": [
+    "v_sub_f32 v13, v10, v15",
+    "v_mul_f32 v14, v12, v10"
+   ]
+  },
+  {
+   "line": 2257,
+   "original": "// original: v_dual_fmac_f32 v17, 0x32a5705f, v15 :: v_dual_sub_f32 v16, v16, v18",
+   "after": [
+    "v_fma_f32 v17, 0x32a5705f, v15, v17",
+    "v_sub_f32 v16, v16, v18"
+   ]
+  },
+  {
+   "line": 2263,
+   "original": "// original: v_dual_add_f32 v16, v16, v17 :: v_dual_sub_f32 v9, v9, v14",
+   "after": [
+    "v_add_f32 v16, v16, v17",
+    "v_sub_f32 v9, v9, v14"
+   ]
+  },
+  {
+   "line": 2293,
+   "original": "// original: v_dual_add_f32 v9, v13, v9 :: v_dual_cndmask_b32 v10, 0, v10",
+   "after": [
+    "v_add_f32 v9, v13, v9",
+    "v_cndmask_b32 v10, 0, v10, vcc_lo"
+   ]
+  },
+  {
+   "line": 2502,
+   "original": "// original: v_dual_sub_f32 v13, v13, v15 :: v_dual_sub_f32 v16, v10, v16",
+   "after": [
+    "v_sub_f32 v13, v13, v15",
+    "v_sub_f32 v16, v10, v16"
+   ]
+  },
+  {
+   "line": 2508,
+   "original": "// original: v_dual_sub_f32 v10, v13, v10 :: v_dual_sub_f32 v11, v16, v11",
+   "after": [
+    "v_sub_f32 v10, v13, v10",
+    "v_sub_f32 v11, v16, v11"
+   ]
+  },
+  {
+   "line": 2584,
+   "original": "// original: v_dual_fmac_f32 v15, v13, v17 :: v_dual_mul_f32 v20, v12, v16",
+   "after": [
+    "v_fma_f32 v15, v13, v17, v15",
+    "v_mul_f32 v20, v12, v16"
+   ]
+  },
+  {
+   "line": 2598,
+   "original": "// original: v_dual_sub_f32 v18, v17, v18 :: v_dual_add_f32 v19, 0x3f2aaaaa, v17",
+   "after": [
+    "v_sub_f32 v18, v17, v18",
+    "v_add_f32 v19, 0x3f2aaaaa, v17"
+   ]
+  },
+  {
+   "line": 2617,
+   "original": "// original: v_dual_sub_f32 v15, v17, v15 :: v_dual_fmac_f32 v18, v16, v14",
+   "after": [
+    "v_sub_f32 v15, v17, v15",
+    "v_fma_f32 v18, v16, v14, v18"
+   ]
+  },
+  {
+   "line": 2626,
+   "original": "// original: v_dual_fmac_f32 v18, v13, v12 :: v_dual_add_f32 v11, 0x31739010, v11",
+   "after": [
+    "v_fma_f32 v18, v13, v12, v18",
+    "v_add_f32 v11, 0x31739010, v11"
+   ]
+  },
+  {
+   "line": 2642,
+   "original": "// original: v_dual_add_f32 v15, v20, v18 :: v_dual_sub_f32 v16, v19, v13",
+   "after": [
+    "v_add_f32 v15, v20, v18",
+    "v_sub_f32 v16, v19, v13"
+   ]
+  },
+  {
+   "line": 2709,
+   "original": "// original: v_dual_fmac_f32 v16, 0xb102e308, v10 :: v_dual_sub_f32 v11, v13, v11",
+   "after": [
+    "v_fma_f32 v16, 0xb102e308, v10, v16",
+    "v_sub_f32 v11, v13, v11"
+   ]
+  },
+  {
+   "line": 2723,
+   "original": "// original: v_dual_add_f32 v10, v12, v11 :: v_dual_add_f32 v11, v17, v16",
+   "after": [
+    "v_add_f32 v10, v12, v11",
+    "v_add_f32 v11, v17, v16"
+   ]
+  },
+  {
+   "line": 2734,
+   "original": "// original: v_dual_add_f32 v14, v11, v12 :: v_dual_sub_f32 v13, v12, v13",
+   "after": [
+    "v_add_f32 v14, v11, v12",
+    "v_sub_f32 v13, v12, v13"
+   ]
+  },
+  {
+   "line": 2750,
+   "original": "// original: v_dual_sub_f32 v18, v14, v15 :: v_dual_sub_f32 v17, v11, v17",
+   "after": [
+    "v_sub_f32 v18, v14, v15",
+    "v_sub_f32 v17, v11, v17"
+   ]
+  },
+  {
+   "line": 2759,
+   "original": "// original: v_dual_sub_f32 v16, v16, v17 :: v_dual_sub_f32 v11, v11, v18",
+   "after": [
+    "v_sub_f32 v16, v16, v17",
+    "v_sub_f32 v11, v11, v18"
+   ]
+  },
+  {
+   "line": 2770,
+   "original": "// original: v_dual_add_f32 v11, v12, v11 :: v_dual_sub_f32 v12, v13, v16",
+   "after": [
+    "v_add_f32 v11, v12, v11",
+    "v_sub_f32 v12, v13, v16"
+   ]
+  },
+  {
+   "line": 2858,
+   "original": "// original: v_dual_sub_f32 v15, v12, v13 :: v_dual_sub_f32 v10, v10, v14",
+   "after": [
+    "v_sub_f32 v15, v12, v13",
+    "v_sub_f32 v10, v10, v14"
+   ]
+  },
+  {
+   "line": 2880,
+   "original": "// original: v_dual_fmac_f32 v17, 0x32a5705f, v15 :: v_dual_sub_f32 v16, v16, v18",
+   "after": [
+    "v_fma_f32 v17, 0x32a5705f, v15, v17",
+    "v_sub_f32 v16, v16, v18"
+   ]
+  },
+  {
+   "line": 2916,
+   "original": "// original: v_dual_add_f32 v10, v13, v10 :: v_dual_cndmask_b32 v11, 0x7f800000, v11",
+   "after": [
+    "v_add_f32 v10, v13, v10",
+    "v_cndmask_b32 v11, 0x7f800000, v11, vcc_lo"
+   ]
+  },
+  {
+   "line": 3018,
+   "original": "// original: v_dual_max_f32 v4, v4, v4 :: v_dual_cndmask_b32 v5, 0, v2",
+   "after": [
+    "v_max_f32 v4, v4, v4",
+    "v_cndmask_b32 v5, 0, v2, vcc_lo"
+   ]
+  },
+  {
+   "line": 3024,
+   "original": "// original: v_dual_max_f32 v3, v3, v3 :: v_dual_max_f32 v8, v5, v5",
+   "after": [
+    "v_max_f32 v3, v3, v3",
+    "v_max_f32 v8, v5, v5"
+   ]
+  },
+  {
+   "line": 3206,
+   "original": "// original: v_dual_max_f32 v3, v1, v1 :: v_dual_max_f32 v4, v0, v0",
+   "after": [
+    "v_max_f32 v3, v1, v1",
+    "v_max_f32 v4, v0, v0"
+   ]
+  },
+  {
+   "line": 3220,
+   "original": "// original: v_dual_max_f32 v3, 0, v3 :: v_dual_max_f32 v4, 0, v4",
+   "after": [
+    "v_max_f32 v3, 0, v3",
+    "v_max_f32 v4, 0, v4"
+   ]
+  },
+  {
+   "line": 3253,
+   "original": "// original: v_dual_max_f32 v5, 0, v5 :: v_dual_and_b32 v4, 0x7ff, v4",
+   "after": [
+    "v_max_f32 v5, 0, v5",
+    "v_and_b32 v4, 0x7ff, v4"
+   ]
+  }
+ ],
+ "interleave": []
+}

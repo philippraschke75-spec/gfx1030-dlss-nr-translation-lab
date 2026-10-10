@@ -1,0 +1,97 @@
+{
+ "summary": {
+  "source": "E:\\dlss 5\\rdna2\\build\\kernels-hw-scratch\\_Z16k_conv_res_views12ConvPlParams.s",
+  "baseline_text_equals_deployed": true,
+  "instructions": {
+   "baseline": 2297,
+   "final": 2281
+  },
+  "moves_removed": 16,
+  "dual_pairs_rewritten": 8,
+  "dual_pairs_retained": [],
+  "interleaved_blocks": 2,
+  "interleaved_dot_instructions": 128,
+  "initialisers_hoisted": 14,
+  "final_sha256": "144550c80dea01f596197c0a972c53d7b0f3bf4de5841df508d67cda9e0db9e2"
+ },
+ "direct": [
+  {
+   "line": 898,
+   "original": "// original: v_dual_mul_f32 v1, 0x4f7ffffe, v1 :: v_dual_lshlrev_b32 v22, 9, v3",
+   "after": [
+    "v_mul_f32 v1, 0x4f7ffffe, v1",
+    "v_lshlrev_b32 v22, 9, v3"
+   ]
+  },
+  {
+   "line": 1497,
+   "original": "// original: v_dual_mov_b32 v3, v12 :: v_dual_and_b32 v4, 31, v74",
+   "after": [
+    "v_mov_b32 v3, v12",
+    "v_and_b32 v4, 31, v74"
+   ]
+  },
+  {
+   "line": 3431,
+   "original": "// original: v_dual_mov_b32 v14, v10 :: v_dual_mov_b32 v13, v9",
+   "after": [
+    "v_mov_b32 v14, v10",
+    "v_mov_b32 v13, v9"
+   ]
+  },
+  {
+   "line": 4119,
+   "original": "// original: v_dual_mov_b32 v115, v4 :: v_dual_mov_b32 v116, v5",
+   "after": [
+    "v_mov_b32 v115, v4",
+    "v_mov_b32 v116, v5"
+   ]
+  },
+  {
+   "line": 4125,
+   "original": "// original: v_dual_mov_b32 v117, v6 :: v_dual_mov_b32 v118, v7",
+   "after": [
+    "v_mov_b32 v117, v6",
+    "v_mov_b32 v118, v7"
+   ]
+  },
+  {
+   "line": 4131,
+   "original": "// original: v_dual_mov_b32 v114, v3 :: v_dual_mov_b32 v113, v2",
+   "after": [
+    "v_mov_b32 v114, v3",
+    "v_mov_b32 v113, v2"
+   ]
+  },
+  {
+   "line": 4402,
+   "original": "// original: v_dual_add_f32 v3, v115, v3 :: v_dual_add_f32 v8, v116, v77",
+   "after": [
+    "v_add_f32 v3, v115, v3",
+    "v_add_f32 v8, v116, v77"
+   ]
+  },
+  {
+   "line": 4408,
+   "original": "// original: v_dual_add_f32 v4, v117, v4 :: v_dual_add_f32 v77, v119, v5",
+   "after": [
+    "v_add_f32 v4, v117, v4",
+    "v_add_f32 v77, v119, v5"
+   ]
+  }
+ ],
+ "interleave": [
+  {
+   "line": 4193,
+   "accumulators": 8,
+   "dot_instructions": 64,
+   "initialisers_hoisted": 7
+  },
+  {
+   "line": 4299,
+   "accumulators": 8,
+   "dot_instructions": 64,
+   "initialisers_hoisted": 7
+  }
+ ]
+}

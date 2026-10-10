@@ -1,0 +1,298 @@
+{
+ "summary": {
+  "source": "E:\\dlss 5\\rdna2\\build\\combo\\k\\_Z12k_attention212AttnParams1d.s",
+  "baseline_text_equals_deployed": true,
+  "instructions": {
+   "baseline": 1983,
+   "final": 1921
+  },
+  "moves_removed": 62,
+  "dual_pairs_rewritten": 31,
+  "dual_pairs_retained": [
+   {
+    "line": 332,
+    "original": "// original: v_dual_mov_b32 v6, v4 :: v_dual_lshlrev_b32 v17, 4, v6",
+    "reason": "RAW hazard: second op reads first destination"
+   },
+   {
+    "line": 1354,
+    "original": "// original: v_dual_mov_b32 v8, v4 :: v_dual_and_b32 v31, 3, v8",
+    "reason": "RAW hazard: second op reads first destination"
+   }
+  ],
+  "interleaved_blocks": 3,
+  "interleaved_dot_instructions": 192,
+  "initialisers_hoisted": 0,
+  "final_sha256": "0d5d0e4338532c373ae0b03a501e281d1de4abc379362d3129f0209c67fba784"
+ },
+ "direct": [
+  {
+   "line": 25,
+   "original": "// original: v_dual_mov_b32 v2, 0 :: v_dual_lshlrev_b32 v1, 2, v0",
+   "after": [
+    "v_mov_b32 v2, 0",
+    "v_lshlrev_b32 v1, 2, v0"
+   ]
+  },
+  {
+   "line": 36,
+   "original": "// original: v_dual_mov_b32 v3, v0 :: v_dual_add_nc_u32 v20, 0x2200, v1",
+   "after": [
+    "v_mov_b32 v3, v0",
+    "v_add_nc_u32 v20, 0x2200, v1"
+   ]
+  },
+  {
+   "line": 93,
+   "original": "// original: v_dual_mov_b32 v2, 0 :: v_dual_add_nc_u32 v1, 0x4b00, v1",
+   "after": [
+    "v_mov_b32 v2, 0",
+    "v_add_nc_u32 v1, 0x4b00, v1"
+   ]
+  },
+  {
+   "line": 261,
+   "original": "// original: v_dual_mov_b32 v4, 0 :: v_dual_and_b32 v23, 15, v0",
+   "after": [
+    "v_mov_b32 v4, 0",
+    "v_and_b32 v23, 15, v0"
+   ]
+  },
+  {
+   "line": 363,
+   "original": "// original: v_dual_mov_b32 v3, v8 :: v_dual_lshlrev_b32 v28, 2, v9",
+   "after": [
+    "v_mov_b32 v3, v8",
+    "v_lshlrev_b32 v28, 2, v9"
+   ]
+  },
+  {
+   "line": 388,
+   "original": "// original: v_dual_mov_b32 v16, v7 :: v_dual_lshlrev_b32 v29, 2, v10",
+   "after": [
+    "v_mov_b32 v16, v7",
+    "v_lshlrev_b32 v29, 2, v10"
+   ]
+  },
+  {
+   "line": 397,
+   "original": "// original: v_dual_mov_b32 v15, v6 :: v_dual_mov_b32 v14, v5",
+   "after": [
+    "v_mov_b32 v15, v6",
+    "v_mov_b32 v14, v5"
+   ]
+  },
+  {
+   "line": 442,
+   "original": "// original: v_dual_mov_b32 v8, v3 :: v_dual_mov_b32 v7, v2",
+   "after": [
+    "v_mov_b32 v8, v3",
+    "v_mov_b32 v7, v2"
+   ]
+  },
+  {
+   "line": 448,
+   "original": "// original: v_dual_mov_b32 v9, v27 :: v_dual_mov_b32 v6, v1",
+   "after": [
+    "v_mov_b32 v9, v27",
+    "v_mov_b32 v6, v1"
+   ]
+  },
+  {
+   "line": 472,
+   "original": "// original: v_dual_mov_b32 v36, v4 :: v_dual_and_b32 v45, 15, v6",
+   "after": [
+    "v_mov_b32 v36, v4",
+    "v_and_b32 v45, 15, v6"
+   ]
+  },
+  {
+   "line": 498,
+   "original": "// original: v_dual_mov_b32 v32, v4 :: v_dual_and_b32 v11, 63, v7",
+   "after": [
+    "v_mov_b32 v32, v4",
+    "v_and_b32 v11, 63, v7"
+   ]
+  },
+  {
+   "line": 510,
+   "original": "// original: v_dual_mov_b32 v34, v4 :: v_dual_and_b32 v43, 15, v5",
+   "after": [
+    "v_mov_b32 v34, v4",
+    "v_and_b32 v43, 15, v5"
+   ]
+  },
+  {
+   "line": 537,
+   "original": "// original: v_dual_mov_b32 v38, v4 :: v_dual_add_nc_u32 v47, s34, v42",
+   "after": [
+    "v_mov_b32 v38, v4",
+    "v_add_nc_u32 v47, s34, v42"
+   ]
+  },
+  {
+   "line": 1466,
+   "original": "// original: v_dual_mov_b32 v10, v4 :: v_dual_lshlrev_b32 v5, 2, v30",
+   "after": [
+    "v_mov_b32 v10, v4",
+    "v_lshlrev_b32 v5, 2, v30"
+   ]
+  },
+  {
+   "line": 1486,
+   "original": "// original: v_dual_mov_b32 v5, 0 :: v_dual_and_b32 v32, 48, v6",
+   "after": [
+    "v_mov_b32 v5, 0",
+    "v_and_b32 v32, 48, v6"
+   ]
+  },
+  {
+   "line": 2199,
+   "original": "// original: v_dual_add_f32 v5, 0, v5 :: v_dual_add_f32 v6, 0, v6",
+   "after": [
+    "v_add_f32 v5, 0, v5",
+    "v_add_f32 v6, 0, v6"
+   ]
+  },
+  {
+   "line": 2205,
+   "original": "// original: v_dual_add_f32 v7, 0, v7 :: v_dual_add_f32 v8, 0, v8",
+   "after": [
+    "v_add_f32 v7, 0, v7",
+    "v_add_f32 v8, 0, v8"
+   ]
+  },
+  {
+   "line": 2213,
+   "original": "// original: v_dual_add_f32 v9, 0, v9 :: v_dual_add_f32 v10, 0, v10",
+   "after": [
+    "v_add_f32 v9, 0, v9",
+    "v_add_f32 v10, 0, v10"
+   ]
+  },
+  {
+   "line": 2222,
+   "original": "// original: v_dual_add_f32 v11, 0, v11 :: v_dual_add_f32 v12, 0, v12",
+   "after": [
+    "v_add_f32 v11, 0, v11",
+    "v_add_f32 v12, 0, v12"
+   ]
+  },
+  {
+   "line": 2482,
+   "original": "// original: v_dual_mov_b32 v7, 0 :: v_dual_add_nc_u32 v6, s43, v25",
+   "after": [
+    "v_mov_b32 v7, 0",
+    "v_add_nc_u32 v6, s43, v25"
+   ]
+  },
+  {
+   "line": 3031,
+   "original": "// original: v_dual_cndmask_b32 v9, v9, v8 :: v_dual_and_b32 v14, 0xff, v14",
+   "after": [
+    "v_cndmask_b32 v9, v9, v8, vcc_lo",
+    "v_and_b32 v14, 0xff, v14"
+   ]
+  },
+  {
+   "line": 3058,
+   "original": "// original: v_dual_cndmask_b32 v12, v12, v8 :: v_dual_and_b32 v15, 0xffff, v15",
+   "after": [
+    "v_cndmask_b32 v12, v12, v8, vcc_lo",
+    "v_and_b32 v15, 0xffff, v15"
+   ]
+  },
+  {
+   "line": 3079,
+   "original": "// original: v_dual_cndmask_b32 v13, v13, v8 :: v_dual_and_b32 v14, 0xffff, v14",
+   "after": [
+    "v_cndmask_b32 v13, v13, v8, vcc_lo",
+    "v_and_b32 v14, 0xffff, v14"
+   ]
+  },
+  {
+   "line": 3106,
+   "original": "// original: v_dual_cndmask_b32 v8, v30, v8 :: v_dual_and_b32 v9, 0xff, v9",
+   "after": [
+    "v_cndmask_b32 v8, v30, v8, vcc_lo",
+    "v_and_b32 v9, 0xff, v9"
+   ]
+  },
+  {
+   "line": 3213,
+   "original": "// original: v_dual_mov_b32 v8, 0x7f :: v_dual_mov_b32 v9, 0x7f",
+   "after": [
+    "v_mov_b32 v8, 0x7f",
+    "v_mov_b32 v9, 0x7f"
+   ]
+  },
+  {
+   "line": 4281,
+   "original": "// original: v_dual_mov_b32 v72, v7 :: v_dual_mov_b32 v73, v8",
+   "after": [
+    "v_mov_b32 v72, v7",
+    "v_mov_b32 v73, v8"
+   ]
+  },
+  {
+   "line": 4287,
+   "original": "// original: v_dual_mov_b32 v74, v9 :: v_dual_mov_b32 v75, v10",
+   "after": [
+    "v_mov_b32 v74, v9",
+    "v_mov_b32 v75, v10"
+   ]
+  },
+  {
+   "line": 4293,
+   "original": "// original: v_dual_mov_b32 v71, v6 :: v_dual_mov_b32 v70, v5",
+   "after": [
+    "v_mov_b32 v71, v6",
+    "v_mov_b32 v70, v5"
+   ]
+  },
+  {
+   "line": 4518,
+   "original": "// original: v_dual_add_f32 v8, v76, v8 :: v_dual_add_f32 v9, v69, v77",
+   "after": [
+    "v_add_f32 v8, v76, v8",
+    "v_add_f32 v9, v69, v77"
+   ]
+  },
+  {
+   "line": 4532,
+   "original": "// original: v_dual_add_f32 v6, v72, v6 :: v_dual_add_f32 v33, v73, v79",
+   "after": [
+    "v_add_f32 v6, v72, v6",
+    "v_add_f32 v33, v73, v79"
+   ]
+  },
+  {
+   "line": 4538,
+   "original": "// original: v_dual_add_f32 v7, v74, v7 :: v_dual_add_f32 v34, v75, v80",
+   "after": [
+    "v_add_f32 v7, v74, v7",
+    "v_add_f32 v34, v75, v80"
+   ]
+  }
+ ],
+ "interleave": [
+  {
+   "line": 2114,
+   "accumulators": 8,
+   "dot_instructions": 64,
+   "initialisers_hoisted": 0
+  },
+  {
+   "line": 4335,
+   "accumulators": 8,
+   "dot_instructions": 64,
+   "initialisers_hoisted": 0
+  },
+  {
+   "line": 4423,
+   "accumulators": 8,
+   "dot_instructions": 64,
+   "initialisers_hoisted": 0
+  }
+ ]
+}
