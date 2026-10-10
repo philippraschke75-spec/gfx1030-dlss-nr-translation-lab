@@ -20,5 +20,8 @@ s = (A + K).astype(np.float16).astype(np.float64)
 r = (s - K).astype(np.float16).view(np.uint16)
 got = (r & 0x7FFF) | (x & 0x8000)
 bad = (got != ref) & ~nan
+# NaN/inf: q8 gives fminf(NaN|inf, 448) = 448 with x's sign; candidate must too
+special = ~np.isfinite(f)
+bad |= special & (got != (0x5F00 | (x & 0x8000)))
 print(f"q8h u16: {bad.sum()} mismatches over 65536 f16 (NaN inputs excluded: {nan.sum()})")
 sys.exit(1 if bad.any() else 0)
