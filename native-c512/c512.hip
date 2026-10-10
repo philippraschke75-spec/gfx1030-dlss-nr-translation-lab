@@ -82,6 +82,27 @@ __device__ __forceinline__ void mma16(const uint2* As, const uint2* Ws, float ac
   }
 }
 
+// Generic: KD k-dwords, NB outputs per thread (Ws row stride 16 NB). mmaT<16, 4> == mma16.
+template <int KD, int NB>
+__device__ __forceinline__ void mmaT(const uint2* As, const uint2* Ws, float acc[4][NB]) {
+  const int ty = threadIdx.x >> 4, tx = threadIdx.x & 15;
+#pragma unroll 4
+  for (int kd = 0; kd < KD; kd++) {
+    const uint4 a01 = *(const uint4*)(As + kd * 64 + ty * 4), a23 = *(const uint4*)(As + kd * 64 + ty * 4 + 2);
+    const uint32_t A[4][2] = {{a01.x, a01.y}, {a01.z, a01.w}, {a23.x, a23.y}, {a23.z, a23.w}};
+    uint32_t B[NB][2];
+#pragma unroll
+    for (int e2 = 0; e2 < NB / 2; e2++) {
+      const uint4 w = *(const uint4*)(Ws + kd * (16 * NB) + tx * NB + 2 * e2);
+      B[2 * e2][0] = w.x; B[2 * e2][1] = w.y; B[2 * e2 + 1][0] = w.z; B[2 * e2 + 1][1] = w.w;
+    }
+#pragma unroll
+    for (int i = 0; i < 4; i++)
+#pragma unroll
+      for (int e = 0; e < NB; e++) acc[i][e] = dot2(A[i][1], B[e][1], dot2(A[i][0], B[e][0], acc[i][e]));
+  }
+}
+
 // X in planes [C/16][H][W][16] instead of tiles (first C=512 block): the four dwords of a piece are loaded one by one.
 struct Planes { const uint8_t* p; int H, W; };
 
@@ -380,7 +401,7 @@ __device__ __forceinline__ void gemm_k32(const uint8_t* __restrict__ X, int atil
 #define FFWD_ATTR
 #endif
 #ifndef FFWD_LDS
-#define FFWD_LDS 3072
+#define FFWD_LDS 2560
 #endif
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -575,8 +596,8 @@ extern "C" __global__ void __launch_bounds__(256, ATTN_WAVES) ATTN_ATTR k_qkv_at
 //  A_g [64 r][512 k]: g<<11 | kc<<14 (k>>5) | k0,k3,k4,r0,k1,k2,r1..r5 -> bits 0..10
 //  Q0_g [256 j][64 r]: 262144 + g<<14 | r1,r0,r4,j1,r2,r3,j0,j3,j4,j2,j5,j6,j7,r5 -> bits 0..13
 //  Q2_g [64 n][256 j]: 393216 + g<<14 | j0,j1,j2,n3,j3,j4,n0,n1,n2,n4,n5,j5,j6,j7 -> bits 0..13
-// LDS 24 KB: stage-1 staging (16 KB), then Ws[16][64] | Rs | Hs (8 KB each). The Q0/Q2 chunk loads are issued one
-// phase ahead so their latency hides behind the previous mma16.
+// LDS 20 KB: stage-1 staging (16 KB), then Rs (8 KB) | Q0s | Hs | Q2s (4 KB each, 32-wide hidden chunks). Chunk loads are issued one
+// chunk ahead (threads 0-127 load Q0, 128-255 Q2) so their latency hides behind the previous chunk.
 struct Ffwd2Params { const uint8_t* x; const uint8_t* xp; uint8_t* out; const uint8_t* w; int H, W, T; };
 
 __device__ __forceinline__ uint32_t pkh(float a, float b) {
@@ -607,10 +628,15 @@ extern "C" __global__ void __launch_bounds__(256, FFWD_WAVES) FFWD_ATTR k_ffwd2_
   }
   float acc[4][4];
   gemm_k32<512, 4>(P.x, lin_tile(tile0, P.T), wa, acc, lds, Planes{P.x ? nullptr : P.xp, P.H, P.W});
-  uint2* Ws = lds; uint2* Rs = lds + 1024; uint2* Hs = lds + 2048;
-  const uint8_t* q0src = rec + 262144 + (g << 14) + ((tid >> 7) << 13) + (tid & 127) * 16;   // + jc << 11
-  const uint8_t* q2src = rec + 393216 + (g << 14) + tid * 16;                                 // + jc << 12
-  uint4 q0 = *(const uint4*)q0src;
+  // stage 2 in 32-wide hidden chunks (same j order, same dot2 sequence per output): LDS Rs 8 KB | Q0s | Hs | Q2s 4 KB
+  // each = 20 KB -> 3 workgroups per CU (24 KB allowed only 2, so the 224-workgroup grid ran in two rounds).
+  // Threads 0..127 stage Q0 (r5 = t>>6, u = t&63), 128..255 stage Q2 (u = t&127); loads issued one chunk ahead.
+  uint2* Rs = lds; uint2* Q0s = lds + 1024; uint2* Hs = lds + 1536; uint2* Q2s = lds + 2048;
+  const int lt = tid & 127;
+  const uint8_t* wsrc = tid < 128 ? rec + 262144 + (g << 14) + ((lt >> 6) << 13) + (lt & 63) * 16   // + c << 10
+                                  : rec + 393216 + (g << 14) + lt * 16;                              // + c << 11
+  const int wsh = tid < 128 ? 10 : 11;
+  uint4 wv = *(const uint4*)wsrc;
   __syncthreads();   // stage-1 staging reads done before Rs overwrites it
   // R in Q0's dword order: kd = r>>2, lo = (r, r+2), hi = (r+1, r+3); thread holds r = 4tx..4tx+3
 #pragma unroll
@@ -626,52 +652,43 @@ extern "C" __global__ void __launch_bounds__(256, FFWD_WAVES) FFWD_ATTR k_ffwd2_
 #pragma unroll
     for (int e = 0; e < 4; e++) out[i][e] = 0.f;
 #ifdef EXP_FFWD_STAGE1_ONLY
-  for (int jc = 0; jc < 0; jc++) {
+  for (int c = 0; c < 0; c++) {
 #else
-  for (int jc = 0; jc < 4; jc++) {
+  for (int c = 0; c < 8; c++) {
 #endif
-    // Q0 chunk: 64 j x 64 r. thread: r5 = tid>>7, u = tid&127; dword e: r4 = e&1, j1 = e>>1
-    __syncthreads();   // previous users of Ws (last Q2) are done; Rs visible
+    __syncthreads();   // previous chunk's Hs / Q2s reads done; Rs visible
     {
-      const int r5 = tid >> 7, u = tid & 127;
-      const uint32_t d[4] = {q0.x, q0.y, q0.z, q0.w};
+      const uint32_t d[4] = {wv.x, wv.y, wv.z, wv.w};
+      if (tid < 128) {   // Q0 chunk: 32 j x 64 r; dword e: r4 = e&1, j1 = e>>1
+        const int r5 = lt >> 6, u = lt & 63;
 #pragma unroll
-      for (int e = 0; e < 4; e++) {
-        const int j = (u >> 2 & 1) | (e >> 1) << 1 | (u >> 5 & 1) << 2 | (u >> 3 & 1) << 3 | (u >> 4 & 1) << 4 | (u >> 6 & 1) << 5;
-        const int kd = (u & 1) | (u >> 1 & 1) << 1 | (e & 1) << 2 | r5 << 3;
-        Ws[kd * 64 + j] = cvt4(d[e]);
+        for (int e = 0; e < 4; e++) {
+          const int j = (u >> 2 & 1) | (e >> 1) << 1 | (u >> 5 & 1) << 2 | (u >> 3 & 1) << 3 | (u >> 4 & 1) << 4;
+          const int kd = (u & 3) | (e & 1) << 2 | r5 << 3;
+          Q0s[kd * 32 + j] = cvt4(d[e]);
+        }
+      } else {           // Q2 chunk: 64 n x 32 j; dword e: j2 = e&1, n3 = e>>1; row stored at its storage position
+        const int u = lt;
+#pragma unroll
+        for (int e = 0; e < 4; e++) {
+          const int n = (u >> 2 & 7) | (e >> 1) << 3 | (u >> 5 & 3) << 4;
+          const int kd = (e & 1) | (u & 3) << 1;
+          Q2s[kd * 64 + ((n & 32) | ipi32(n & 31))] = cvt4(d[e]);
+        }
       }
     }
-    const uint4 q2 = *(const uint4*)(q2src + (jc << 12));
+    if (c + 1 < 8) wv = *(const uint4*)(wsrc + ((size_t)(c + 1) << wsh));
     __syncthreads();
-    float hc[4][4];
+    float hc[4][2];
 #pragma unroll
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 4; i++) hc[i][0] = hc[i][1] = 0.f;
+    mmaT<16, 2>(Rs, Q0s, hc);   // hidden j = 32c + 2tx + e
 #pragma unroll
-      for (int e = 0; e < 4; e++) hc[i][e] = 0.f;
-    mma16(Rs, Ws, hc);   // hidden j = 4tx+e of this chunk
-#pragma unroll
-    for (int i = 0; i < 4; i++) {
-      float s[4];
-#pragma unroll
-      for (int e = 0; e < 4; e++) s[e] = q8(split_act(hc[i][e] * 256.f));
-      Hs[tx * 64 + ty * 4 + i] = make_uint2(pkh(s[0], s[1]), pkh(s[2], s[3]));   // Q2 order: j..j+3
-    }
-    __syncthreads();   // Ws (Q0) reads and Hs writes done
-    // Q2 chunk: 64 n x 64 j; dword e: j2 = e&1, n3 = e>>1; row stored at its storage position
-    {
-      const int u = tid;
-      const uint32_t d[4] = {q2.x, q2.y, q2.z, q2.w};
-#pragma unroll
-      for (int e = 0; e < 4; e++) {
-        const int n = (u >> 2 & 7) | (e >> 1) << 3 | (u >> 5 & 3) << 4;
-        const int kd = (e & 1) | (u & 3) << 1 | (u >> 7) << 3;
-        Ws[kd * 64 + ((n & 32) | ipi32(n & 31))] = cvt4(d[e]);
-      }
-    }
-    if (jc + 1 < 4) q0 = *(const uint4*)(q0src + ((jc + 1) << 11));
+    for (int i = 0; i < 4; i++)   // Q2 order: dword lo = (j, j+1), hi = (j+2, j+3), kd = j>>2
+      ((uint32_t*)Hs)[(tx >> 1) * 128 + (ty * 4 + i) * 2 + (tx & 1)] =
+          pkh(q8(split_act(hc[i][0] * 256.f)), q8(split_act(hc[i][1] * 256.f)));
     __syncthreads();
-    mma16(Hs, Ws, out);
+    mmaT<8, 4>(Hs, Q2s, out);
   }
   // out: thread holds storage rows 64g + 4tx..+3
   const int r = 64 * g + tx * 4;
