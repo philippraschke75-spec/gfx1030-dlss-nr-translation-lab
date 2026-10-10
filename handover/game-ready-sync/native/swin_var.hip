@@ -118,7 +118,15 @@ __device__ __forceinline__ void stage(uint32_t* dst, int ldn, const uint8_t* rec
   }
 }
 
-template <int C>
+// SPLIT (perf-swin2, launched with grid z = 2): workgroup z computes expand+mid (Ms) of heads [z*NH/2, (z+1)*NH/2) and
+// stores Ms in g_ms; the workgroup of the window that arrives second runs the contract over all NH heads in order
+// 0..NH-1 from g_ms, then the rest of the block. Same operations in the same order as SPLIT = false (byte-identical).
+// ponytail: fixed window capacity per width; windows beyond it run unsplit in workgroup z = 0.
+constexpr int CAP256 = 160, CAP128 = 512;
+__device__ uint32_t g_ms256[CAP256 * 8 * 1024], g_ms128[CAP128 * 4 * 1024];
+__device__ uint32_t g_cnt256[CAP256], g_cnt128[CAP128];
+
+template <int C, bool SPLIT = false>
 __device__ __forceinline__ void swin_block(const VarParams& P) {
   constexpr int NH = C / 32, KB = C / 32;                  // heads, 32-wide K steps over C
   constexpr int PWD = C >= 128 ? 128 : 64, NPASS = C / PWD, CPT = PWD / 32;   // C-wide outputs: tx*CPT within a pass
@@ -250,8 +258,14 @@ __device__ __forceinline__ void swin_block(const VarParams& P) {
       for (int c = 0; c < CPT; c++) accc[a][r][c] = 0.f;
 
   // ================= MLP, one head (128 hidden values) at a time, in NS sub-chunks of HC
+  constexpr int CAP = C == 256 ? CAP256 : C == 128 ? CAP128 : 0;
+  const int win = blockIdx.y * gridDim.x + blockIdx.x;
+  const bool sp = SPLIT && win < CAP;
+  uint32_t* gms = C == 256 ? g_ms256 : g_ms128;
+  if (SPLIT && !sp && blockIdx.z) return;   // beyond capacity: z = 0 runs the window unsplit
+  const int hb = sp ? (int)blockIdx.z * (NH / 2) : 0, he = sp ? hb + NH / 2 : NH;
 #pragma unroll 1
-  for (int h = 0; h < NH; h++) {
+  for (int h = SPLIT ? hb : 0; h < (SPLIT ? he : NH); h++) {
     const bool ldc = tid < PWD * 2;   // contract pieces of one pass
     auto con_src = [&](int pass) {
       return *((const uint4*)(rec + R_CON + (h * (C / 16) + pass * (PWD / 16)) * 512) + (ldc ? tid : 0)); };
@@ -312,6 +326,16 @@ __device__ __forceinline__ void swin_block(const VarParams& P) {
 #pragma unroll
       for (int c = 0; c < 4; c += 2)
         R2[((tx8 * 4 + c) >> 1) * 64 + ty8 * 2 + r] = pk(q8(f16r(macc[r][c] * 256.f)), q8(f16r(macc[r][c + 1] * 256.f)));
+    if (SPLIT && sp) {   // hand Ms to the contract workgroup
+#pragma unroll
+      for (int r = 0; r < 2; r++)
+#pragma unroll
+        for (int c = 0; c < 4; c += 2) {
+          const int i = ((tx8 * 4 + c) >> 1) * 64 + ty8 * 2 + r;
+          gms[(win * NH + h) * 1024 + i] = R2[i];
+        }
+      continue;
+    }
     // ---- contract partial: accc += Ms . Wc[:, h*32 .. +32]^T (GN = C/16), passes of PWD output channels
 #pragma unroll
     for (int pass = 0; pass < NPASS; pass++) {
@@ -329,6 +353,48 @@ __device__ __forceinline__ void swin_block(const VarParams& P) {
         for (int r = 0; r < 8; r++)
 #pragma unroll
           for (int c = 0; c < CPT; c++) accc[pass][r][c] = dot2(av[r], bv[c], accc[pass][r][c]);
+      }
+    }
+  }
+
+  if constexpr (SPLIT) if (sp) {   // the window's second workgroup to arrive runs the contract for all heads, in order
+    __shared__ uint32_t s_last;
+    uint32_t* cnt = (C == 256 ? g_cnt256 : g_cnt128) + win;
+    __builtin_amdgcn_fence(__ATOMIC_RELEASE, "agent");
+    __syncthreads();
+    if (tid == 0) {
+      s_last = __hip_atomic_fetch_add(cnt, 1u, __ATOMIC_ACQ_REL, __HIP_MEMORY_SCOPE_AGENT);
+      if (s_last) __hip_atomic_store(cnt, 0u, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);   // reset for the next dispatch
+    }
+    __syncthreads();
+    if (!s_last) return;
+    __builtin_amdgcn_fence(__ATOMIC_ACQUIRE, "agent");
+    const bool ldc = tid < PWD * 2;
+#pragma unroll 1
+    for (int h = 0; h < NH; h++) {   // the contract code above, Ms from g_ms
+      auto con_src = [&](int pass) {
+        return *((const uint4*)(rec + R_CON + (h * (C / 16) + pass * (PWD / 16)) * 512) + (ldc ? tid : 0)); };
+      uint4 wc = con_src(0);
+      __syncthreads();
+#pragma unroll
+      for (int k = 0; k < 4; k++) R2[tid + 256 * k] = gms[(win * NH + h) * 1024 + tid + 256 * k];
+#pragma unroll
+      for (int pass = 0; pass < NPASS; pass++) {
+        __syncthreads();
+        if (ldc) put16(R3, PWD, wc, tid & 31, (tid >> 5) * 16);
+        __syncthreads();
+        if (pass + 1 < NPASS) wc = con_src(pass + 1);
+#pragma unroll KPU
+        for (int kp = 0; kp < 16; kp++) {
+          uint4 a0 = *(const uint4*)&R2[kp * 64 + ty * 8];
+          uint4 a1 = *(const uint4*)&R2[kp * 64 + ty * 8 + 4];
+          uint32_t av[8] = {a0.x, a0.y, a0.z, a0.w, a1.x, a1.y, a1.z, a1.w}, bv[CPT];
+          ldw<CPT>(&R3[kp * PWD + tx * CPT], bv);
+#pragma unroll
+          for (int r = 0; r < 8; r++)
+#pragma unroll
+            for (int c = 0; c < CPT; c++) accc[pass][r][c] = dot2(av[r], bv[c], accc[pass][r][c]);
+        }
       }
     }
   }
@@ -618,4 +684,7 @@ __device__ __forceinline__ void swin_block(const VarParams& P) {
 
 extern "C" __global__ __launch_bounds__(256) void k_swin_c256(VarParams P) { swin_block<256>(P); }
 extern "C" __global__ __launch_bounds__(256) void k_swin_c128(VarParams P) { swin_block<128>(P); }
+// split variants, launch with grid z = 2 (see SPLIT above)
+extern "C" __global__ __launch_bounds__(256) void k_swin_c256s(VarParams P) { swin_block<256, true>(P); }
+extern "C" __global__ __launch_bounds__(256) void k_swin_c128s(VarParams P) { swin_block<128, true>(P); }
 extern "C" __global__ __launch_bounds__(256) __attribute__((amdgpu_waves_per_eu(8))) void k_swin_c64(VarParams P) { swin_block<64>(P); }
