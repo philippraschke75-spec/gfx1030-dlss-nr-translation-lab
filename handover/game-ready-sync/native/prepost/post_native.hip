@@ -20,6 +20,14 @@ typedef _Float16 h2 __attribute__((ext_vector_type(2)));
 #define F_HS (4096 + 64)
 #define F_FLOATS (4096 + 65)
 #include "post_weights.h"
+#include "wstage.h"
+#if PREW
+#define WEXP(j, k) WEXP_L(Lr, j, k)
+#define WCON(c, j) WCON_L(Lr, c, j)
+#else
+#define WEXP(j, k) Wt[WI((W_EXP + (hc + j) * 32) / 2 + k)]
+#define WCON(c, j) Wt[WI((W_CON + c * 128 + hc) / 2 + j)]
+#endif
 
 struct PostParams {
   const uint8_t* x; const uint8_t* skip; float* out; const void* wrec;   // wrec unused (weights baked)
@@ -166,25 +174,46 @@ extern "C" __global__ __launch_bounds__(64) void k_post_native(PostParams P) {
   float y[32];
 #pragma unroll
   for (int c = 0; c < 32; c++) y[c] = 0.f;
+#if PREW
+  __shared__ uint4 Wl[2][64];
+  Wl[0][t] = wfetch(Wt, 0, t);
+  PREW_SYNC();
+#endif
 #pragma unroll 1
   for (int hc = 0; hc < 128; hc += 8) {
+#if PREW
+    const LP Lc = (LP)Wl[(hc >> 3) & 1];
+    LP Lr;
+    float pin = 0.f;
+    uint4 wn;
+    if (hc + 8 < 128) wn = wfetch(Wt, hc + 8, t);   // next chunk in flight during this one
+#endif
     float a[8];
 #pragma unroll
     for (int j = 0; j < 8; j++) {
+      PREW_ROW();
       float s = 0.f;
 #pragma unroll
-      for (int k = 0; k < 16; k++) s = dot2(xq[k], Wt[WI((W_EXP + (hc + j) * 32) / 2 + k)], s);
+      for (int k = 0; k < 16; k++) s = dot2(xq[k], WEXP(j, k), s);
       float tc = fminf(fmaxf(s, -4.f), 4.f);
       float inner = fmaf(fabsf(tc), -0.055908203125f, 0.447265625f);
       a[j] = q8(__fmul_rn(s, fmaf(tc, inner, 0.89453125f)));
+      PREW_DONE(a[j]);
     }
     h2 ap[4];
 #pragma unroll
     for (int j = 0; j < 4; j++) ap[j] = pk(a[2*j], a[2*j+1]);
 #pragma unroll
-    for (int c = 0; c < 32; c++)
+    for (int c = 0; c < 32; c++) {
+      PREW_ROW();
 #pragma unroll
-      for (int j = 0; j < 4; j++) y[c] = dot2(ap[j], Wt[WI((W_CON + c * 128 + hc) / 2 + j)], y[c]);
+      for (int j = 0; j < 4; j++) y[c] = dot2(ap[j], WCON(c, j), y[c]);
+      PREW_DONE(y[c]);
+    }
+#if PREW
+    if (hc + 8 < 128) Wl[((hc >> 3) & 1) ^ 1][t] = wn;
+    PREW_SYNC();   // also: everyone is done reading this buffer before it is refilled next iteration
+#endif
   }
   // y = rs * x + mlp (two roundings), skip = y in f32, matrix operand = q8(f16(y))
   h2 yq[16];
