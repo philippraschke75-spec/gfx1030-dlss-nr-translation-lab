@@ -74,6 +74,7 @@ int main(int argc, char** argv) {
     char e2[512] = ""; void* ref = rcreate(dd, (int)MW, (int)MH, 1, e2, sizeof e2); if (!ref) { printf("FAIL reference nr_create: %s\n", e2); return 3; }
     double t0 = now(); while (state(f) == 0 && now() - t0 < 90000) Sleep(50);
     printf("dll state %d after %.0f ms (5 = sync)\n", state(f), now() - t0); if (state(f) != 5) { printf("FAIL sync path not active: %s\n", err()); return 4; }
+    { UINT64 hz = 0; q->GetTimestampFrequency(&hz); printf("timestamp frequency %llu Hz\n", (unsigned long long)hz); }   // NR_TS=1 in the DLL assumes 100 MHz
 
     std::vector<uint16_t> in((size_t)MW * MH * 4), refo((size_t)MW * MH * 4);
     auto makeFrame = [&](int k) {   // shifted base image -> texture format bytes in upload, and the exact half4 the network sees in `in`
@@ -117,8 +118,9 @@ int main(int argc, char** argv) {
         if (r != 1) { notRun++; printf("frame %d: evaluate returned %d\n", k, r); continue; }
         ts_.push_back(ms); size_t bad; double mx; compare(&bad, &mx);
         bool ok = UP > 1 ? psnr(se_o) >= 30 : bad <= (size_t)MW * MH * 3 / 1000; failed += !ok;   // UP > 1 (resampled): compare quality, not values
-        if (k < 3 || k % 50 == 0 || !ok) printf("frame %d: %.1f ms list (ref nr_run %.1f ms) | %zu rgb values beyond tol, max err %.4g %s\n", k, ms, tr.back(), bad, mx, ok ? "ok" : "MISMATCH");
-        if (UP > 1 && (k < 3 || !ok)) printf("  psnr vs reference: NR %.1f dB, no NR %.1f dB\n", psnr(se_o), psnr(se_i));
+        static const bool all = getenv("NR_TEST_ALL") != nullptr;   // NR_TEST_ALL=1: one line per frame
+        if (all || k < 3 || k % 50 == 0 || !ok) printf("frame %d: %.1f ms list (ref nr_run %.1f ms) | %zu rgb values beyond tol, max err %.4g %s\n", k, ms, tr.back(), bad, mx, ok ? "ok" : "MISMATCH");
+        if ((UP > 1 || !ok) && (k < 3 || !ok)) printf("  psnr vs reference: NR %.1f dB, no NR %.1f dB\n", psnr(se_o), psnr(se_i));   // !ok at UP=1: quantifies a lossy setting (e.g. ini vit_every=2 vs the vit_every=1 reference)
     }
     // robustness: the host records a frame but never executes it, then carries on
     makeFrame(frames); frame(frames, false, &ms); int after = 0, afterBad = 0; double afterMax = 0;

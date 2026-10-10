@@ -37,6 +37,9 @@ struct nr_ctx {
   hipStream_t s = nullptr, ps = nullptr; uint32_t* hf = nullptr; std::thread th; std::condition_variable cv; std::deque<unsigned> q;
   std::atomic<bool> stop{false}; std::atomic<int> inflight{0};
   std::vector<hipEvent_t> prof; std::vector<std::string> names;   // NR_PROF only
+  // Whole-frame hipGraph (NR_GRAPH=0 or NR_PROF disables): one hipGraphLaunch instead of 156 hipModuleLaunchKernel. Kernargs are copied
+  // into the nodes at capture, so graphs are dropped whenever a kernarg changes (apply_strength). [0] = full frame, [1] = ViT skipped.
+  hipGraphExec_t gexec[2] = {nullptr, nullptr}; hipStream_t gs = nullptr; bool use_graph = false;
 };
 static const size_t kStrOff0 = 0x28, kStrOff1 = 0x48;
 static const size_t PAD = 1 << 16;
@@ -177,8 +180,38 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
   }
   fclose(f);
   HK(hipEventCreate(&c->e0)); HK(hipEventCreate(&c->e1));
-  if (getenv("NR_PROF")) { c->prof.resize(c->steps.size()); for (auto& e : c->prof) HK(hipEventCreate(&e)); }
+  if (const char* pf = getenv("NR_PROF")) if (*pf == '1') { c->prof.resize(c->steps.size()); for (auto& e : c->prof) HK(hipEventCreate(&e)); }   // NR_PROF=2: frame-level ext timing only, graph stays on
+  // Measured 2026-10-10 (1280x720, 156 dispatches): the graph saves ~0.1 ms of CPU submit on the HIP thread and nothing on the GPU (the frame is
+  // GPU-bound, launches run far ahead), so it stays opt-in: NR_GRAPH=1.
+  const char* ng = getenv("NR_GRAPH"); c->use_graph = c->prof.empty() && ng && *ng == '1';
+  HK(hipStreamCreateWithFlags(&c->gs, hipStreamNonBlocking));   // nr_run's own stream (graph capture needs a non-null stream)
   return c;
+}
+
+static void drop_graphs(nr_ctx* c) { for (auto& g : c->gexec) if (g) { hipGraphExecDestroy(g); g = nullptr; } }
+static bool launch_steps(nr_ctx* c, hipStream_t st, bool skip_vit) {   // the network's dispatches, in manifest order
+  for (size_t i = 0; i < c->steps.size(); i++) {
+    if (skip_vit && (int)i >= c->vit_lo && (int)i < c->vit_hi) continue;
+    Step& s = c->steps[i]; size_t sz = s.ka.size();
+    void* cfg[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, s.ka.data(), HIP_LAUNCH_PARAM_BUFFER_SIZE, &sz, HIP_LAUNCH_PARAM_END};
+    if (hipModuleLaunchKernel(s.fn, s.gx, s.gy, s.gz, s.thr, 1, 1, 0, st, nullptr, cfg) != hipSuccess) return false;
+    if (c->prof.size()) hipEventRecord(c->prof[i], st);
+  }
+  return true;
+}
+static bool launch_all(nr_ctx* c, hipStream_t st) {         // one frame on stream st: the graph when enabled (captured on first use), else direct launches
+  bool skip_vit = c->vit_every > 1 && (c->frame % c->vit_every) != 0;   // frame 0 always computes
+  if (!c->use_graph) return launch_steps(c, st, skip_vit);
+  hipGraphExec_t& ge = c->gexec[skip_vit];
+  if (!ge) {   // relaxed: other threads may keep doing ordinary HIP calls (the test's reference context) while we capture
+    hipGraph_t g = nullptr;
+    if (hipStreamBeginCapture(st, hipStreamCaptureModeRelaxed) != hipSuccess) return false;
+    bool ok = launch_steps(c, st, skip_vit);
+    if (hipStreamEndCapture(st, &g) != hipSuccess || !ok) { if (g) hipGraphDestroy(g); return false; }
+    hipError_t e = hipGraphInstantiate(&ge, g, nullptr, nullptr, 0); hipGraphDestroy(g);
+    if (e != hipSuccess) { ge = nullptr; return false; }
+  }
+  return hipGraphLaunch(ge, st) == hipSuccess;
 }
 
 NR_API size_t nr_bytes(nr_ctx* c) { return c->src_size; }
@@ -187,7 +220,7 @@ static void apply_strength(nr_ctx* c) {                    // between frames, fr
   std::lock_guard<std::mutex> g(c->mx); if (!c->dirty) return;
   for (auto& st : c->steps) { auto& k = st.ov ? st.src : st.ka;   // strength offsets are in the original layout
     if (st.pre && k.size() >= kStrOff1 + 8) { memcpy(k.data() + kStrOff0, &c->pend[0], 8); memcpy(k.data() + kStrOff1, &c->pend[2], 8); if (st.ov) nr_apply_override(*st.ov, st.src, st.ka); } }
-  memcpy(c->str, c->pend, sizeof c->str); c->dirty = false;
+  memcpy(c->str, c->pend, sizeof c->str); c->dirty = false; drop_graphs(c);   // graphs hold kernarg copies: recapture on next use
 }
 NR_API int nr_set_strength(nr_ctx* c, float tone, float structure, float a, float b) {
   if (!c) return 1; if (!(tone >= 0 && tone <= 64 && structure >= 0 && structure <= 64 && a >= 0 && a <= 64 && b >= 0 && b <= 64)) return 2;   // rejects NaN and absurd values
@@ -203,27 +236,15 @@ NR_API int nr_get_strength(nr_ctx* c, float* tone, float* structure, float* a, f
   if (tone) *tone = v[0]; if (structure) *structure = v[1]; if (a) *a = v[2]; if (b) *b = v[3]; return 0;
 }
 
-static bool launch_all(nr_ctx* c, hipStream_t st) {         // the network's dispatches, in manifest order
-  bool skip_vit = c->vit_every > 1 && (c->frame % c->vit_every) != 0;   // frame 0 always computes
-  for (size_t i = 0; i < c->steps.size(); i++) {
-    if (skip_vit && (int)i >= c->vit_lo && (int)i < c->vit_hi) continue;
-    Step& s = c->steps[i]; size_t sz = s.ka.size();
-    void* cfg[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, s.ka.data(), HIP_LAUNCH_PARAM_BUFFER_SIZE, &sz, HIP_LAUNCH_PARAM_END};
-    if (hipModuleLaunchKernel(s.fn, s.gx, s.gy, s.gz, s.thr, 1, 1, 0, st, nullptr, cfg) != hipSuccess) return false;
-    if (c->prof.size()) hipEventRecord(c->prof[i], st);
-  }
-  return true;
-}
-
 NR_API int nr_run(nr_ctx* c, const void* in, void* out, float* gpu_ms) {
-  apply_strength(c);
-  if (hipMemcpy(c->d + PAD + c->off_src, in, c->src_size, hipMemcpyHostToDevice) != hipSuccess) return 1;
+  apply_strength(c); hipStream_t s = c->gs;
+  if (hipMemcpyAsync(c->d + PAD + c->off_src, in, c->src_size, hipMemcpyHostToDevice, s) != hipSuccess) return 1;   // pageable source: staged synchronously
   // k_export reads the previous contents of its destination (it behaves like a max/accumulate on many pixels): without clearing it, every frame after
   // the first carries bright single-pixel specks from the previous result (measured: 2010 vs 26 spikes>0.15 per frame). Always start from zeros, as frame 0 does.
-  if (hipMemset(c->d + PAD + c->off_dst, 0, c->dst_size) != hipSuccess) return 1;
-  hipEventRecord(c->e0);
-  if (!launch_all(c, nullptr)) return 2;
-  hipEventRecord(c->e1);
+  if (hipMemsetAsync(c->d + PAD + c->off_dst, 0, c->dst_size, s) != hipSuccess) return 1;
+  hipEventRecord(c->e0, s);
+  if (!launch_all(c, s)) return 2;
+  hipEventRecord(c->e1, s);
   if (hipEventSynchronize(c->e1) != hipSuccess) return 3;   // ponytail: no timeout like net_run's SWIN_TIMEOUT; add if a hang matters
   if (gpu_ms) hipEventElapsedTime(gpu_ms, c->e0, c->e1);
   if (c->prof.size() && c->frame == 5) {   // NR_PROF=1: per-dispatch GPU time of frame 5 to stderr (events between launches serialize nothing extra)
@@ -269,21 +290,27 @@ static void ext_thread(nr_ctx* c) {
     { std::unique_lock<std::mutex> g(c->mx); c->cv.wait(g, [&] { return c->stop || !c->q.empty(); }); if (c->stop) return; seq = c->q.front(); c->q.pop_front(); }
     bool ready = false;
 #ifdef _WIN32
-    DWORD t0 = GetTickCount();
+    DWORD t0 = GetTickCount(); unsigned polls = 0;
     while (!c->stop && GetTickCount() - t0 < (DWORD)kExtWaitMs) {
       if (hipMemcpyAsync(c->hf, c->sig, 4, hipMemcpyDeviceToHost, c->ps) != hipSuccess || hipStreamSynchronize(c->ps) != hipSuccess) break;
-      if ((int)(*c->hf - seq) >= 0) { ready = true; break; }
+      polls++; if ((int)(*c->hf - seq) >= 0) { ready = true; break; }
       Sleep(0);
     }
 #endif
     if (ready) {   // late/never-executed frame: skip it; D3D12's bounded spin shows the native frame
-      apply_strength(c); hipStream_t s = c->s;
+      apply_strength(c); hipStream_t s = c->s; static const bool pf = getenv("NR_PROF") != nullptr;
+      LARGE_INTEGER f, t0, t1, t2; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&t0);
+      if (pf) hipEventRecord(c->e0, s);
+      // Pointing k_import/k_export straight at io (no device copies) was tried 2026-10-10: bit-exact, 0.0 ms difference (the two 7 MB copies cost tens of us).
       bool ok = hipMemcpyAsync(c->d + PAD + c->off_src, c->io, c->src_size, hipMemcpyDeviceToDevice, s) == hipSuccess &&
                 hipMemsetAsync(c->d + PAD + c->off_dst, 0, c->dst_size, s) == hipSuccess &&   // k_export accumulates into its destination, see nr_run
                 launch_all(c, s) &&
                 hipMemcpyAsync(c->io + c->out_off, c->d + PAD + c->off_dst, c->dst_size, hipMemcpyDeviceToDevice, s) == hipSuccess &&
                 hipStreamWriteValue32(s, c->io + c->flag_off, seq, 0) == hipSuccess;
-      hipStreamSynchronize(s); c->frame++;
+      if (pf) hipEventRecord(c->e1, s);
+      QueryPerformanceCounter(&t1); hipStreamSynchronize(s); QueryPerformanceCounter(&t2); c->frame++;
+      if (pf && (seq % 50 == 5)) { float g = 0; hipEventElapsedTime(&g, c->e0, c->e1);   // NR_PROF: where the wall time of one ext frame goes
+        fprintf(stderr, "ext %u: %u polls, submit %.3f ms, submit+wait %.3f ms, gpu e0..e1 %.3f ms\n", seq, polls, (t1.QuadPart - t0.QuadPart) * 1e3 / f.QuadPart, (t2.QuadPart - t0.QuadPart) * 1e3 / f.QuadPart, g); }
       if (!ok) fprintf(stderr, "nr_ext: frame %u launch failed\n", seq);
     }
     c->inflight--;
@@ -297,8 +324,7 @@ NR_API int nr_ext_enqueue(nr_ctx* c, unsigned seq, int max_inflight) {
 NR_API int nr_ext_close(nr_ctx* c, int) {
   if (!c) return 0;
   if (c->th.joinable()) { { std::lock_guard<std::mutex> g(c->mx); c->stop = true; c->q.clear(); } c->cv.notify_all(); c->th.join(); }   // bounded: one poll <= kExtWaitMs
-  if (c->s) { hipStreamSynchronize(c->s); hipStreamDestroy(c->s); c->s = nullptr; }
-  if (c->ps) { hipStreamDestroy(c->ps); c->ps = nullptr; }
+  if (c->s) { hipStreamSynchronize(c->s); hipStreamDestroy(c->s); c->s = nullptr; }  if (c->ps) { hipStreamDestroy(c->ps); c->ps = nullptr; }
   if (c->hf) { hipHostFree(c->hf); c->hf = nullptr; }
   if (c->em_io) hipDestroyExternalMemory(c->em_io); if (c->em_sig) hipDestroyExternalMemory(c->em_sig);
   c->em_io = c->em_sig = nullptr; c->io = c->sig = nullptr; c->stop = false; c->inflight = 0; return 0;
@@ -307,6 +333,7 @@ NR_API int nr_ext_close(nr_ctx* c, int) {
 NR_API void nr_destroy(nr_ctx* c) {
   if (!c) return;
   if (nr_ext_close(c, 2000)) return;   // GPU still busy with our memory: leak the context instead of freeing under it
+  drop_graphs(c); if (c->gs) hipStreamDestroy(c->gs);
   for (auto m : c->mods) hipModuleUnload(m);
   if (c->d) hipFree(c->d);
   delete c;

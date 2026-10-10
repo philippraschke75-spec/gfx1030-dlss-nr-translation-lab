@@ -189,6 +189,7 @@ struct Sync {                                       // D3D12 side of the sync pa
     UINT64 ioAlloc = 0, ioSize = 0, sigAlloc = 0, sigSize = 0, outOff = 0, flagOff = 0;
     ID3D12RootSignature* rs = nullptr; ID3D12PipelineState *imp = nullptr, *spin = nullptr, *exp = nullptr; ID3D12DescriptorHeap* heap = nullptr; UINT incr = 0;
     unsigned seq = 0; unsigned busy = 0; unsigned ran = 0;
+    ID3D12QueryHeap* ts = nullptr; ID3D12Resource* tsRb = nullptr; uint64_t* tsp = nullptr; double tsSum[3] = {0, 0, 0}; unsigned tsN = 0;   // NR_TS=1: GPU timestamps around imp / spin / exp
 };
 struct Feature {
     unsigned W = 0, H = 0, pitch = 0;
@@ -315,7 +316,7 @@ static bool makeDelta(Feature* F) {
 
 static void freeSync(Sync* s) {
     if (!s) return;
-    for (IUnknown* u : std::initializer_list<IUnknown*>{s->io, s->sig, s->st, s->rs, s->imp, s->spin, s->exp, s->heap}) if (u) u->Release();
+    for (IUnknown* u : std::initializer_list<IUnknown*>{s->io, s->sig, s->st, s->rs, s->imp, s->spin, s->exp, s->heap, s->ts, s->tsRb}) if (u) u->Release();
     if (s->hIo) CloseHandle(s->hIo); if (s->hSig) CloseHandle(s->hSig); delete s;
 }
 static ID3D12Resource* sharedBuffer(ID3D12Device* d, UINT64 size, D3D12_HEAP_FLAGS hf, UINT64* alloc) {
@@ -353,6 +354,12 @@ static Sync* makeSync(Feature* F) {
     D3D12_DESCRIPTOR_HEAP_DESC hd = {}; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 2 * kSyncRing; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     if (FAILED(d->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&s->heap)))) { logf("sync: descriptor heap failed"); freeSync(s); return nullptr; }
     s->incr = d->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    if (getenv("NR_TS")) {   // profiling only: 4 timestamps per in-flight frame, resolved into a readback buffer, read 8 frames later
+        D3D12_QUERY_HEAP_DESC qd = {}; qd.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP; qd.Count = 4 * kSyncRing;
+        if (FAILED(d->CreateQueryHeap(&qd, IID_PPV_ARGS(&s->ts)))) s->ts = nullptr;
+        if (s->ts && !(s->tsRb = makeBuffer(d, D3D12_HEAP_TYPE_READBACK, 8 * 4 * kSyncRing, (uint8_t**)&s->tsp))) { s->ts->Release(); s->ts = nullptr; }
+        logf("sync: NR_TS timestamps %s", s->ts ? "on" : "unavailable");
+    }
     return s;
 }
 
@@ -438,14 +445,20 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             cmd->SetComputeRootDescriptorTable(0, gpu); cmd->SetComputeRootUnorderedAccessView(1, s->io->GetGPUVirtualAddress()); cmd->SetComputeRootUnorderedAccessView(2, s->st->GetGPUVirtualAddress());
             cmd->SetComputeRoot32BitConstants(3, 8, cb, 0);
             D3D12_RESOURCE_BARRIER uav = {}; uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;   // null resource = all UAV writes
-            cmd->SetPipelineState(s->imp); cmd->Dispatch((F->W + 7) / 8, (F->H + 7) / 8, 1); cmd->ResourceBarrier(1, &uav);
+            const UINT tq = (seq % kSyncRing) * 4; auto stamp = [&](UINT i) { if (s->ts) cmd->EndQuery(s->ts, D3D12_QUERY_TYPE_TIMESTAMP, tq + i); };
+            if (s->ts && seq > 8) {   // frame seq-8 has certainly landed: 3 intervals (imp, spin = HIP network + handshake, exp), 100 MHz ticks on AMD
+                const uint64_t* t = s->tsp + ((seq - 8) % kSyncRing) * 4; if (t[3] > t[0]) { for (int i = 0; i < 3; i++) s->tsSum[i] += (t[i + 1] - t[i]) / 100000.0; s->tsN++; }
+                if (s->tsN == 100) { logf("ts: imp %.3f ms, spin %.3f ms, exp %.3f ms (mean of %u frames)", s->tsSum[0] / s->tsN, s->tsSum[1] / s->tsN, s->tsSum[2] / s->tsN, s->tsN); s->tsSum[0] = s->tsSum[1] = s->tsSum[2] = 0; s->tsN = 0; }
+            }
+            stamp(0); cmd->SetPipelineState(s->imp); cmd->Dispatch((F->W + 7) / 8, (F->H + 7) / 8, 1); cmd->ResourceBarrier(1, &uav); stamp(1);
             auto tr = [&](D3D12_RESOURCE_STATES a, D3D12_RESOURCE_STATES b) { D3D12_RESOURCE_BARRIER t = {}; t.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION; t.Transition.pResource = s->sig; t.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES; t.Transition.StateBefore = a; t.Transition.StateAfter = b; cmd->ResourceBarrier(1, &t); };
             tr(D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
             D3D12_WRITEBUFFERIMMEDIATE_PARAMETER wp = { s->sig->GetGPUVirtualAddress(), seq }; D3D12_WRITEBUFFERIMMEDIATE_MODE wm = D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
             c2->WriteBufferImmediate(1, &wp, &wm);                  // input is in io: release the HIP stream
             tr(D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COMMON);
-            cmd->SetPipelineState(s->spin); cmd->Dispatch(1, 1, 1); cmd->ResourceBarrier(1, &uav);   // wait (bounded) for the HIP stream's flag_out = seq
-            cmd->SetPipelineState(s->exp); cmd->Dispatch((w + 7) / 8, (h + 7) / 8, 1); cmd->ResourceBarrier(1, &uav);
+            cmd->SetPipelineState(s->spin); cmd->Dispatch(1, 1, 1); cmd->ResourceBarrier(1, &uav); stamp(2);   // wait (bounded) for the HIP stream's flag_out = seq
+            cmd->SetPipelineState(s->exp); cmd->Dispatch((w + 7) / 8, (h + 7) / 8, 1); cmd->ResourceBarrier(1, &uav); stamp(3);
+            if (s->ts) cmd->ResolveQueryData(s->ts, D3D12_QUERY_TYPE_TIMESTAMP, tq, 4, s->tsRb, (UINT64)tq * 8);
             return 1;
         }
 
