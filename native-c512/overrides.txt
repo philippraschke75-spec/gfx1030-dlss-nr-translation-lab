@@ -1,0 +1,7 @@
+# native C=512 conv_res2 + ViT expand/contract/qkv (native-c512/c512.hip). Combine with native-mid/overrides.txt lines.
+_Z11k_conv_res211Conv2Params|E:\dlss 5\native-c512\c512.co|k_conv2_n|=|8|=|=|424|0<-0:424
+_Z9k_expand212ExpandParams|E:\dlss 5\native-c512\c512.co|k_vit_expand_n|=|64|=|=|424|0<-0:424
+_Z11k_contract212ConvParams1d|E:\dlss 5\native-c512\c512.co|k_vit_contract_n|=|16|=|=|424|0<-0:424
+_Z6k_qkv29QkvParams|E:\dlss 5\native-c512\c512.co|k_vit_qkv_n|=|48|=|=|424|0<-0:424
+_Z11k_qkv_attn210AttnParams|E:\dlss 5\native-c512\c512.co|k_qkv_attn_n|=|=|=|=|424|0<-0:424
+_Z7k_ffwd211Ffwd2Params|E:\dlss 5\native-c512\c512.co|k_ffwd2_n|=|=|=|=|424|0<-0:424
