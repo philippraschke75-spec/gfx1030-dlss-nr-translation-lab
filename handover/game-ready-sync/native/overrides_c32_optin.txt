@@ -1,0 +1,3 @@
+# Opt-in and LOSSY. To use it, append this line to the data dir's overrides.txt and copy native_swin32.co (built by build_native.sh) to kernels\.
+# It saves ~1.8 ms of GPU time per frame at 1280x720, but the end-to-end output is only ~34 dB PSNR against the release kernels. Not enabled by default.
+_Z10k_swin_varILi32ELb0EEv9VarParams|kernels\native_swin32.co|k_swin_c32|=|=|=|=|424|0<-0:424
