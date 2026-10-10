@@ -125,7 +125,7 @@ static hipError_t load_mod(nr_ctx* c, const std::string& path, hipModule_t* m) {
 }
 
 NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_every, char* err, int errlen) {
-  nr_ctx* c = new nr_ctx; c->dir = data_dir; c->vit_every = vit_every < 1 ? 1 : vit_every;
+  nr_ctx* c = new nr_ctx; c->dir = data_dir; const bool bn = vit_every < -1; c->vit_every = bn ? -vit_every : vit_every < 1 ? 1 : vit_every;
   std::map<std::string, std::string> kv;   // meta.txt: key=value
   { FILE* f = fopen((c->dir + "/meta.txt").c_str(), "r"); if (!f) FAIL("no meta.txt in %s", data_dir);
     char l[256]; while (fgets(l, sizeof l, f)) { char* q = strchr(l, '='); if (q) { *q = 0; kv[l] = std::string(q + 1); } } fclose(f); }
@@ -133,7 +133,7 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
   if ((int)num("width") != width || (int)num("height") != height) FAIL("data dir is %sx%s, asked for %dx%d", kv["width"].c_str(), kv["height"].c_str(), width, height);
   c->base = num("base"); c->arena = num("arena_size"); c->off_src = num("off_src"); c->src_size = num("src_size");
   c->off_dst = num("off_dst"); c->dst_size = num("dst_size"); c->vit_lo = (int)num("vit_lo"); c->vit_hi = (int)num("vit_hi");
-  if (c->vit_every > 1 && num("off_vitres") == num("off_headb")) FAIL("vit_every>1 needs data generated with VIT_OWN=1");
+  if (!bn && c->vit_every > 1 && num("off_vitres") == num("off_headb")) FAIL("vit_every>1 needs data generated with VIT_OWN=1");
 
   hipDeviceProp_t p{}; HK(hipGetDeviceProperties(&p, 0));
   c->mach = rdna2_mach(p.gcnArchName); if (!c->mach) FAIL("not an RDNA2 GPU (gfx1030-1036): %s", p.gcnArchName);
@@ -177,6 +177,11 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
     c->names.push_back(st.ov ? st.ov->sym : t[1]); c->steps.push_back(std::move(st));
   }
   fclose(f);
+  if (bn) {   // bottleneck reuse: also skip the c512 encoder stage + k_final_head before the ViT and k_dec_upsample + c512 decoder stage after it
+    c->vit_lo -= 33; c->vit_hi += 33;   // (32 dispatches each side + 1). Their outputs live in own arena buffers that nothing later overwrites.
+    if (c->vit_lo < 0 || c->vit_hi >= (int)c->names.size() || c->names[c->vit_lo].find("ffwd2") == std::string::npos || c->names[c->vit_hi].find("swin") == std::string::npos)
+      FAIL("bottleneck reuse: unexpected dispatch layout around %d..%d", c->vit_lo, c->vit_hi);
+  }
   HK(hipEventCreate(&c->e0)); HK(hipEventCreate(&c->e1));
   if (getenv("NR_PROF")) { c->prof.resize(c->steps.size()); for (auto& e : c->prof) HK(hipEventCreate(&e)); }
   return c;
