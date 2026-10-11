@@ -40,7 +40,7 @@ static float g_intensity = -1.0f;                       // nr_set_intensity 0..2
 static float curIntensity() { return g_intensity; }
 static std::atomic<bool> g_exiting{false};              // set by atexit: at process exit never join/destroy anything (leak it, the OS reclaims)
 static struct ExitHook { ExitHook() { atexit([] { g_exiting = true; }); } } g_exitHook;
-static int g_apply = 1, g_gate = 1; static float g_gain = 1.0f, g_gateLo = 0.03f, g_gateHi = 0.15f;   // apply=1: out = current frame + gain * (NR(old frame) - old frame) (no lag); apply=0: copy the finished (stale) NR image
+static int g_apply = 1, g_gate = 1, g_ldrIn = 1; static float g_gain = 1.0f, g_gateLo = 0.03f, g_gateHi = 0.15f;   // apply=1: out = current frame + gain * (NR(old frame) - old frame) (no lag); apply=0: copy the finished (stale) NR image
 static int g_sync = 1, g_spinMs = 250, g_maxInflight = 3, g_fg = 0, g_fgWaitMs = 4, g_fgMaxAge = 3, g_mv = 0, g_nrEvery = 1; static float g_mvLo = 0.05f, g_mvHi = 0.25f;   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
 
 static void logf(const char* fmt, ...) {
@@ -64,6 +64,7 @@ static void loadSettings() {
     g_apply = (int)GetPrivateProfileIntA("nr", "apply", 1, narrow(ini).c_str());
     GetPrivateProfileStringA("nr", "gain", "1.0", b, sizeof b, narrow(ini).c_str()); g_gain = (float)atof(b);
     g_gate = (int)GetPrivateProfileIntA("nr", "gate", 1, narrow(ini).c_str());
+    g_ldrIn = (int)GetPrivateProfileIntA("nr", "ldr_input", 1, narrow(ini).c_str());   // resampled path: clamp the network input to [0,1] (0 = old HDR input, white flicker)
     GetPrivateProfileStringA("nr", "gate_lo", "0.03", b, sizeof b, narrow(ini).c_str()); g_gateLo = (float)atof(b);
     GetPrivateProfileStringA("nr", "gate_hi", "0.15", b, sizeof b, narrow(ini).c_str()); g_gateHi = (float)atof(b);
     GetPrivateProfileStringA("nr", "intensity", "-1", b, sizeof b, narrow(ini).c_str()); g_intensity = (float)atof(b); if (!(g_intensity >= 0.f)) g_intensity = -1.f; if (g_intensity > 2.f) g_intensity = 2.f;
@@ -181,11 +182,18 @@ static const char* kSyncHlsl =
 "  float4 v[4]; for (int i = 0; i < 4; i++) v[i] = float4(f16tof32(q[i].x & 0xFFFF), f16tof32(q[i].x >> 16), f16tof32(q[i].y & 0xFFFF), f16tof32(q[i].y >> 16));\n"
 "  return lerp(lerp(v[0], v[1], t.x), lerp(v[2], v[3], t.x), t.y); }\n"
 "float4 sn(float4 v) { return float4(san(v.x), san(v.y), san(v.z), san(v.w)); }\n"
+"#ifdef HDR_IN\n"
+"float4 ld(float4 v) { return sn(v); }\n"
+"#else\n"
+"float4 ld(float4 v) { v = sn(v); return float4(saturate(v.rgb), v.a); }\n"
+"#endif\n"   // resampled path: the network only knows [0,1] (its output clips at 1). HDR texels
+                                                                             // (specular, emissive) light up whole dark patches around them -> white flicker as they move.
+                                                                             // exp adds out - in on top of the live frame, so the excess above 1 survives.
 "float4 colAt(float2 p) {\n"           // frame colour averaged over the model pixel footprint (4 bilinear taps), p = frame coords of the centre
 "  uint FW = FWH & 0xFFFF, FH = FWH >> 16; float2 s = float2(FW, FH) / float2(W, H) * 0.25; float4 r = 0;\n"
 "  for (int j = 0; j < 4; j++) { float2 q = clamp(p + s * float2((j & 1) ? 1 : -1, (j & 2) ? 1 : -1) - 0.5, 0.0, float2(FW - 1, FH - 1));\n"
 "    uint2 a = (uint2)q; uint2 b = min(a + 1, uint2(FW - 1, FH - 1)); float2 t = q - a;\n"
-"    r += lerp(lerp(sn(col[a]), sn(col[uint2(b.x, a.y)]), t.x), lerp(sn(col[uint2(a.x, b.y)]), sn(col[b]), t.x), t.y); }\n"
+"    r += lerp(lerp(ld(col[a]), ld(col[uint2(b.x, a.y)]), t.x), lerp(ld(col[uint2(a.x, b.y)]), ld(col[b]), t.x), t.y); }\n"
 "  return r * 0.25; }\n"
 "[numthreads(8,8,1)] void imp(uint3 id : SV_DispatchThreadID) {\n"
 "  if (id.x >= W || id.y >= H) return; uint FW = FWH & 0xFFFF, FH = FWH >> 16;\n"
@@ -398,10 +406,11 @@ static Sync* makeSync(Feature* F) {
     if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sb, &er)) || FAILED(d->CreateRootSignature(0, sb->GetBufferPointer(), sb->GetBufferSize(), IID_PPV_ARGS(&s->rs)))) { logf("sync: root signature failed"); freeSync(s); return nullptr; }
     sb->Release();
     ID3D12PipelineState** pso[5] = {&s->imp, &s->spin, &s->exp, &s->cap, &s->expPk}; const char* ep[5] = {"imp", "spin", "exp", "cap", "exp"};
-    const char* pk[4] = {"PACKED", "1", nullptr, nullptr};   // D3D_SHADER_MACRO[2], for expPk
     for (int i = 0; i < 5; i++) {
-        ID3DBlob* cs = nullptr; er = nullptr;
-        if (FAILED(comp(kSyncHlsl, strlen(kSyncHlsl), "nr_sync", i == 4 ? pk : nullptr, nullptr, ep[i], "cs_5_0", 1 << 15, 0, &cs, &er))) { logf("sync: shader %s: %s", ep[i], er ? (char*)er->GetBufferPointer() : "?"); freeSync(s); return nullptr; }
+        ID3DBlob* cs = nullptr; er = nullptr; const char* mac[6] = {}; int nm = 0;   // D3D_SHADER_MACRO[], null-terminated
+        if (i == 4) { mac[nm++] = "PACKED"; mac[nm++] = "1"; }                     // expPk
+        if (!g_ldrIn) { mac[nm++] = "HDR_IN"; mac[nm++] = "1"; }
+        if (FAILED(comp(kSyncHlsl, strlen(kSyncHlsl), "nr_sync", nm ? mac : nullptr, nullptr, ep[i], "cs_5_0", 1 << 15, 0, &cs, &er))) { logf("sync: shader %s: %s", ep[i], er ? (char*)er->GetBufferPointer() : "?"); freeSync(s); return nullptr; }
         D3D12_COMPUTE_PIPELINE_STATE_DESC pd = {}; pd.pRootSignature = s->rs; pd.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
         HRESULT h = d->CreateComputePipelineState(&pd, IID_PPV_ARGS(pso[i])); cs->Release(); if (FAILED(h)) { logf("sync: PSO %s failed", ep[i]); freeSync(s); return nullptr; }
     }
