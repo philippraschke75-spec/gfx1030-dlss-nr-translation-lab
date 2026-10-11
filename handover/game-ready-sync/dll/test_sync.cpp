@@ -102,7 +102,7 @@ int main(int argc, char** argv) {
     const bool pipe = GetPrivateProfileIntA("nr", "pipeline", 0, (dir + "\\nr_port.ini").c_str()) != 0; if (pipe) puts("pipeline=1: expecting frame k = NR(frame k-1)");
     std::vector<uint16_t> in((size_t)MW * MH * 4), refo((size_t)MW * MH * 4), refPrev(refo.size()); std::vector<uint16_t>* cr = pipe ? &refPrev : &refo;   // cr: the reference the output is compared with
     auto makeFrame = [&](int k) {   // shifted base image -> texture format bytes in upload, and the exact half4 the network sees in `in`
-        int sh = (k * 13) % MW;
+        static const int step = getenv("NR_TEST_SHIFT") ? atoi(getenv("NR_TEST_SHIFT")) : 13; int sh = (k * step) % MW;
         for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) {
             const uint16_t* s = &base[((size_t)(y / UP) * MW + (x / UP + sh) % MW) * 4]; uint16_t* d = &in[((size_t)(y / UP) * MW + x / UP) * 4];
             if (r11) { uint32_t v; pack_r11g11b10(s, &v); memcpy(upp + (size_t)y * pitch + x * 4, &v, 4); unpack_r11g11b10(v, d); }
@@ -232,6 +232,8 @@ int main(int argc, char** argv) {
         ts_.push_back(ms); size_t bad; double mx; compare(&bad, &mx);
         bool ok = UP > 1 ? psnr(se_o) >= 30 : bad <= (size_t)MW * MH * 3 / 1000; failed += !ok;   // UP > 1 (resampled): compare quality, not values
         if (k < 3 || k % 50 == 0 || !ok) printf("frame %d: %.1f ms list (ref nr_run %.1f ms) | %zu rgb values beyond tol, max err %.4g %s\n", k, ms, tr.back(), bad, mx, ok ? "ok" : "MISMATCH");
+        static const bool psall = getenv("NR_TEST_PSNR") != nullptr;   // NR_TEST_PSNR=1: PSNR vs the vit_every=1 reference every frame (lossy ini settings)
+        if (psall) printf("psnr %d %.2f %.2f\n", k, psnr(se_o), ms);
         if (UP > 1 && (k < 3 || !ok)) printf("  psnr vs reference: NR %.1f dB, no NR %.1f dB\n", psnr(se_o), psnr(se_i));
     }
     // robustness: the host records a frame but never executes it, then carries on
