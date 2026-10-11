@@ -55,6 +55,7 @@ NR_API int nr_ext_close(nr_ctx*, int timeout_ms);   // timeout unused: the poll 
 // History = the previous frame's network output in proxy space P (post-block output rgb, values [0,1]) as RGB32F over the PADDED
 // frame: pad_w x pad_h pixels, 12 B/px, row stride pad_w*12, image at the top-left (W x H), same indexing as k_import's RGB.
 // hist_valid != 0 points pre-block +0x40 (input lanes 7-9) and post-block +0x40 (lerp toward history, weight gate*sigmoid(head.a)) at it;
+// hist_valid = 2: post-block lerp only (pre-block +0x40 stays null) - stable on static frames, use this for now; 3 = pre-block only (debug).
 // 0 = no history (first frame, reset, cut, resize, skipped/late frame). k_export +0x38 stays 0.
 NR_API int nr_hist_layout(nr_ctx*, unsigned* pad_w, unsigned* pad_h);
 // nr_run with history: the history is the previous nr_run2 output, unwarped (static camera / testing). Returns 5 on a history alloc/copy error.
@@ -66,3 +67,6 @@ NR_API int nr_run2(nr_ctx*, const void* in, void* out, float* gpu_ms, int hist_v
 // Call after nr_ext_open. Returns 0 ok, 1 not open, 2 bad offsets.
 NR_API int nr_ext_history(nr_ctx*, unsigned long long hist_in_off, unsigned long long hist_out_off);
 NR_API int nr_ext_enqueue2(nr_ctx*, unsigned seq, int max_inflight, int hist_valid);
+// Debug only: run the first n dispatches of each frame (0 = all); read arena bytes (offsets as in meta.json placements).
+NR_API int nr_dbg_steps(nr_ctx*, int n);
+NR_API int nr_dbg_read(nr_ctx*, unsigned long long off, unsigned long long size, void* dst);
