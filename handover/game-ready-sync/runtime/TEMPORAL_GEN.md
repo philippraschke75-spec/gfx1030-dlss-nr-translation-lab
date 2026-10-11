@@ -59,6 +59,37 @@ The runtime owns the 12 B/px history buffer and patches pre/post +0x40 itself, s
   - The network itself turns 1 LSB of input into 1e-2 of output.
 * Moving input vs PyTorch: not run (no HARNESS.md).
 
+## Update 2: mode 1 data, noise amplification, hist_valid=2
+* New option hist_valid=2: post-block lerp only, with pre-block +0x40 null. It is stable on static frames.
+  hist_valid=3 is pre-block only (debug). Debug calls nr_dbg_steps / nr_dbg_read are for stage tracing.
+* make_release_dir.py takes env IO_MODE (default 0). mkdirs.sh builds both data dirs from one `POST_CROP=1 gen_patched.py` run:
+  - E:\dlss-runtime\temporal\m0\960x540 (mode 0) is byte-identical to the combo dir. This confirms the route.
+  - E:\dlss-runtime\temporal\m1\960x540 is mode 1: k_import/k_export +0x28 = 1.
+* Results at 960x540 from amp_test.py via E:\dlss-runtime\temporal\amp.sh, history off unless noted. All values are in P (proxy) space.
+
+  | | mode 0 (shipped) | mode 1 |
+  |---|---|---|
+  | noise amplification for ±1 LSB on all pixels (mean\|dP_out\| / mean\|dP_in\|) | **205x** (1.46e-2) | **42x** (2.97e-3) |
+  | output pixels changed > 1/255 | 92 % | 40 % |
+  | static, hist 1: \|o_t - o_{t-1}\| | ~1.4e-2, no convergence | 5.2e-3 -> 8e-4 after 10 frames (converges, like U2 E2b) |
+  | noise flicker, hist 0 / 1 / 2 | 1.46e-2 / 1.50e-2 / 1.48e-2 | 2.99e-3 / **0.98e-3** / 2.98e-3 |
+
+* Mode 1 + hist 1 passes the SPEC criterion: 3.0x less flicker. Mode 0 gets no benefit from history.
+* Mode 0 alone has 5x the noise amplification of mode 1. This is the likely root cause of the in-game flicker.
+* Stage trace (fraction of bytes that differ between a clean and a noisy run, after the first n dispatches):
+
+  | after | bytes changed |
+  |---|---|
+  | import | 19-34 % of the import RGB |
+  | pre-block (act A, fp8) | 1-1.5 % (fp8 rounding absorbs most of it) |
+  | first swin C32 dispatch | 5-6 % |
+  | encoder stage 1/2 (dispatches 3-11) | 30-41 % |
+  | everything later | flat at ~43-46 % |
+
+  The spread happens in the first two encoder swin stages, where fp8 rounding flips propagate. It is the same in both modes.
+  The difference between the modes is in magnitude, not reach: mode 0 feeds linear HDR (unbounded) into a network trained on proxy [0,1].
+* Not checked: whether mode 1 looks right in game. Commit 26bce36 noted dark blocks with mode != host value; that commit's own finding was host value 1.
+
 ## Open
 * With release data (import mode 0: linear HDR input, output clamped to [0,1]), pre-block history forms an unstable feedback loop.
   U2's E2b converged (0.0008) with import/export MODE 1 (proxy P). Next: a mode-1 data dir (IMPORT_MODE=1 via gen_patched.py) + nr_run2.

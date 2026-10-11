@@ -37,7 +37,7 @@ struct nr_ctx {
   hipStream_t s = nullptr, ps = nullptr; uint32_t* hf = nullptr; std::thread th; std::condition_variable cv; std::deque<std::pair<unsigned, int>> q;
   std::atomic<bool> stop{false}; std::atomic<int> inflight{0};
   // temporal history (nr_run2 / nr_ext_enqueue2): own PAD_H x PAD_W x RGB32F buffer, pointed to by pre-block +0x40 and post-block +0x40 when valid
-  float* hist = nullptr; uint64_t netout = 0, hist_ptr = 0; unsigned ph = 0, pw = 0; bool have_prev = false; size_t io_size = 0, hin = 0, hout = 0;
+  float* hist = nullptr; uint64_t netout = 0; int hist_mask = 0; unsigned ph = 0, pw = 0; bool have_prev = false; int dbg_n = 0; size_t io_size = 0, hin = 0, hout = 0;
   std::vector<hipEvent_t> prof; std::vector<std::string> names;   // NR_PROF only
 };
 static const size_t kStrOff0 = 0x28, kStrOff1 = 0x48;
@@ -200,11 +200,14 @@ static size_t hist_bytes(nr_ctx* c) { return (size_t)c->pw * c->ph * 12; }
 static bool hist_begin(nr_ctx* c, hipStream_t s, int valid, const uint8_t* src) {
   bool v = valid && c->hist && (src || c->have_prev);
   if (v && src && hipMemcpyAsync(c->hist, src, hist_bytes(c), hipMemcpyDeviceToDevice, s) != hipSuccess) return false;
-  uint64_t p = v ? (uint64_t)c->hist : 0;
-  if (p != c->hist_ptr) {
-    static const int mask = getenv("NR_HIST_MASK") ? atoi(getenv("NR_HIST_MASK")) : 3;   // debug: 1 = pre-block only, 2 = post-block only
-    for (auto& st : c->steps) if ((st.pre && (mask & 1)) || (st.post && (mask & 2))) { auto& k = st.ov ? st.src : st.ka; if (k.size() >= 0x48) { memcpy(k.data() + 0x40, &p, 8); if (st.ov) nr_apply_override(*st.ov, st.src, st.ka); } }
-    c->hist_ptr = p;
+  // hist_valid: 1 = pre-block lanes + post lerp, 2 = post lerp only (stable on static frames), 3 = pre-block only (debug). Env NR_HIST_MASK overrides 1.
+  static const int env = getenv("NR_HIST_MASK") ? atoi(getenv("NR_HIST_MASK")) : 3;
+  const int mask = !v ? 0 : valid == 2 ? 2 : valid == 3 ? 1 : env;
+  if (mask != c->hist_mask) {
+    for (auto& st : c->steps) if (st.pre || st.post) {
+      uint64_t p = (st.pre ? mask & 1 : mask & 2) ? (uint64_t)c->hist : 0; auto& k = st.ov ? st.src : st.ka;
+      if (k.size() >= 0x48) { memcpy(k.data() + 0x40, &p, 8); if (st.ov) nr_apply_override(*st.ov, st.src, st.ka); } }
+    c->hist_mask = mask;
   }
   return true;
 }
@@ -238,6 +241,7 @@ NR_API int nr_get_strength(nr_ctx* c, float* tone, float* structure, float* a, f
 static bool launch_all(nr_ctx* c, hipStream_t st) {         // the network's dispatches, in manifest order
   bool skip_vit = c->vit_every > 1 && (c->frame % c->vit_every) != 0;   // frame 0 always computes
   for (size_t i = 0; i < c->steps.size(); i++) {
+    if (c->dbg_n > 0 && (int)i >= c->dbg_n) break;
     if (skip_vit && (int)i >= c->vit_lo && (int)i < c->vit_hi) continue;
     Step& s = c->steps[i]; size_t sz = s.ka.size();
     void* cfg[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, s.ka.data(), HIP_LAUNCH_PARAM_BUFFER_SIZE, &sz, HIP_LAUNCH_PARAM_END};
@@ -269,6 +273,11 @@ NR_API int nr_run2(nr_ctx* c, const void* in, void* out, float* gpu_ms, int hist
   c->frame++; return 0;
 }
 
+// Debug (stage tracing): run only the first n dispatches (0 = all); copy arena bytes [off, off+size) to host.
+NR_API int nr_dbg_steps(nr_ctx* c, int n) { if (!c) return 1; c->dbg_n = n; return 0; }
+NR_API int nr_dbg_read(nr_ctx* c, unsigned long long off, unsigned long long size, void* dst) {
+  if (!c || off + size > c->arena) return 1; return hipMemcpy(dst, c->d + PAD + off, size, hipMemcpyDeviceToHost) != hipSuccess;
+}
 NR_API int nr_reset(nr_ctx* c) { c->frame = 0; c->have_prev = false; return upload_arena(c) ? 0 : 1; }
 
 static void ext_thread(nr_ctx* c);
