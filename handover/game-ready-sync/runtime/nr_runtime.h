@@ -46,6 +46,8 @@ NR_API int nr_ext_open(nr_ctx*, void* io, unsigned long long io_alloc, unsigned 
                        unsigned long long flag_off, void* sig, unsigned long long sig_alloc, unsigned long long sig_size, char* err, int errlen);
 // Queues frame `seq` (1, 2, 3, ...) on the runtime's own stream and returns at once: CPU thread polls flag_in >= seq (<= 500 ms, else frame skipped), input -> network,
 // run, network -> output, flag_out = seq. 0 = queued, 1 = busy (max_inflight frames still pending), <0 = error.
+// Temporal history (see nr_runtime.cpp): pre-block +0x40 -> io + hist_off (PAD_H x PAD_W x RGB32F, space of k_import: import_mode 0 = raw, else sRGB(x/(1+x))). 0 = ok.
+NR_API int nr_ext_history(nr_ctx*, unsigned long long hist_off, int* pad_w, int* pad_h, int* import_mode);
 NR_API int nr_ext_enqueue(nr_ctx*, unsigned seq, int max_inflight);
 // Releases the stream from any pending wait (flag_in = 0xFFFFFFFF), waits <= timeout_ms for it to drain, frees the imports.
 // Called by nr_destroy too. Returns 0 when the stream drained.

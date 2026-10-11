@@ -31,7 +31,7 @@ struct nr_ctx {
   // strength = the two f32 pairs of k_pre_block PreParams: +0x28 (LocalTone, LocalStructure) and +0x48 (a, b). Set from any thread, applied at the start of the next run.
   std::mutex mx; float str[4] = {0, 0, 1, 1}; float pend[4] = {0, 0, 1, 1}; bool dirty = false;
   // D3D12 interop (nr_ext_*): imported shared buffers, own non-blocking stream, one event per queued frame
-  hipExternalMemory_t em_io = nullptr, em_sig = nullptr; uint8_t *io = nullptr, *sig = nullptr; size_t out_off = 0, flag_off = 0;
+  hipExternalMemory_t em_io = nullptr, em_sig = nullptr; uint8_t *io = nullptr, *sig = nullptr; size_t out_off = 0, flag_off = 0, io_size = 0;
   // No GPU-side cross-API wait (hipStreamWaitValue32 hung the HIP queue forever when D3D12 never wrote flag_in -> TDR/PC freeze on 2026-10-08):
   // a CPU thread polls flag_in with a timeout and only then launches the frame.
   hipStream_t s = nullptr, ps = nullptr; uint32_t* hf = nullptr; std::thread th; std::condition_variable cv; std::deque<unsigned> q;
@@ -259,7 +259,7 @@ NR_API int nr_ext_open(nr_ctx* c, void* io, unsigned long long io_alloc, unsigne
   if (out_off < c->src_size || out_off + c->dst_size > flag_off || flag_off + 4 > io_size || sig_size < 4) { snprintf(err, errlen, "io layout too small"); return 2; }
   if (!import_buf(io, io_alloc, io_size, &c->em_io, &c->io) || !import_buf(sig, sig_alloc, sig_size, &c->em_sig, &c->sig)) {
     snprintf(err, errlen, "hipImportExternalMemory (D3D12Resource) failed"); nr_ext_close(c, 0); return 4; }
-  c->out_off = out_off; c->flag_off = flag_off;
+  c->out_off = out_off; c->flag_off = flag_off; c->io_size = io_size;
   if (hipStreamCreateWithFlags(&c->s, hipStreamNonBlocking) != hipSuccess || hipStreamCreateWithFlags(&c->ps, hipStreamNonBlocking) != hipSuccess ||
       hipHostMalloc((void**)&c->hf, 4) != hipSuccess) { snprintf(err, errlen, "hipStreamCreate failed"); nr_ext_close(c, 0); return 5; }
   c->th = std::thread(ext_thread, c);
@@ -295,6 +295,22 @@ static void ext_thread(nr_ctx* c) {
     c->inflight--;
   }
 }
+// Temporal history: point the pre-block's second colour source (kernarg +0x40, null by default = current colour) at io + hist_off.
+// The caller writes PAD_H x PAD_W x RGB32F there (proxy space, row pitch PAD_W*12) before it releases flag_in. Works with any data dir:
+// the pre-block reads +0x40 directly, no arena ctx+0x118 needed. Call after nr_ext_open, before the first enqueue. 0 = ok, *pw/*ph = PAD_W/PAD_H, *import_mode = k_import +0x28.
+NR_API int nr_ext_history(nr_ctx* c, unsigned long long hist_off, int* pw, int* ph, int* import_mode) {
+  if (!c || !c->io) return 1;
+  if (import_mode) { *import_mode = -1; for (size_t i = 0; i < c->steps.size(); i++) if (c->names[i].find("k_import") != std::string::npos && c->steps[i].ka.size() >= 0x2c) memcpy(import_mode, c->steps[i].ka.data() + 0x28, 4); }   // the history must be in the space k_import produces (mode 0: raw, else sRGB(x/(1+x)))
+  for (auto& st : c->steps) if (st.pre) {
+    auto& k = st.ov ? st.src : st.ka; if (k.size() < 0x48) return 2;
+    int H, W; memcpy(&H, k.data() + 0x18, 4); memcpy(&W, k.data() + 0x1c, 4);
+    if (H <= 0 || W <= 0 || hist_off % 4 || hist_off + (size_t)H * W * 12 > c->io_size) return 3;
+    std::lock_guard<std::mutex> g(c->mx); uint64_t p = (uint64_t)(c->io + hist_off); memcpy(k.data() + 0x40, &p, 8);
+    if (st.ov && !nr_apply_override(*st.ov, st.src, st.ka)) return 4;
+    if (pw) *pw = W; if (ph) *ph = H; return 0;
+  }
+  return 2;   // no k_pre_block step
+}
 NR_API int nr_ext_enqueue(nr_ctx* c, unsigned seq, int max_inflight) {
   if (!c || !c->s) return -1;
   if (c->inflight >= (max_inflight < 1 ? 1 : max_inflight)) return 1;
@@ -306,6 +322,8 @@ NR_API int nr_ext_close(nr_ctx* c, int) {
   if (c->s) { hipStreamSynchronize(c->s); hipStreamDestroy(c->s); c->s = nullptr; }
   if (c->ps) { hipStreamDestroy(c->ps); c->ps = nullptr; }
   if (c->hf) { hipHostFree(c->hf); c->hf = nullptr; }
+  for (auto& st : c->steps) if (st.pre && c->io) { auto& k = st.ov ? st.src : st.ka; uint64_t p = 0;   // history pointed into io: back to null before io goes away
+    if (k.size() >= 0x48) { memcpy(&p, k.data() + 0x40, 8); if (p >= (uint64_t)c->io && p < (uint64_t)c->io + c->io_size) { p = 0; memcpy(k.data() + 0x40, &p, 8); if (st.ov) nr_apply_override(*st.ov, st.src, st.ka); } } }
   if (c->em_io) hipDestroyExternalMemory(c->em_io); if (c->em_sig) hipDestroyExternalMemory(c->em_sig);
   c->em_io = c->em_sig = nullptr; c->io = c->sig = nullptr; c->stop = false; c->inflight = 0; return 0;
 }
