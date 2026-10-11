@@ -50,3 +50,19 @@ NR_API int nr_ext_enqueue(nr_ctx*, unsigned seq, int max_inflight);
 // Releases the stream from any pending wait (flag_in = 0xFFFFFFFF), waits <= timeout_ms for it to drain, frees the imports.
 // Called by nr_destroy too. Returns 0 when the stream drained.
 NR_API int nr_ext_close(nr_ctx*, int timeout_ms);   // timeout unused: the poll thread is bounded by its own 500 ms wait
+
+// ---- Temporal history (ABI v2, additive: nr_run / nr_ext_enqueue keep history off and stay bit-exact).
+// History = the previous frame's network output in proxy space P (post-block output rgb, values [0,1]) as RGB32F over the PADDED
+// frame: pad_w x pad_h pixels, 12 B/px, row stride pad_w*12, image at the top-left (W x H), same indexing as k_import's RGB.
+// hist_valid != 0 points pre-block +0x40 (input lanes 7-9) and post-block +0x40 (lerp toward history, weight gate*sigmoid(head.a)) at it;
+// 0 = no history (first frame, reset, cut, resize, skipped/late frame). k_export +0x38 stays 0.
+NR_API int nr_hist_layout(nr_ctx*, unsigned* pad_w, unsigned* pad_h);
+// nr_run with history: the history is the previous nr_run2 output, unwarped (static camera / testing). Returns 5 on a history alloc/copy error.
+NR_API int nr_run2(nr_ctx*, const void* in, void* out, float* gpu_ms, int hist_valid);
+// Optional io slots in the nr_ext io buffer (offsets in bytes, 4-aligned, each pad_w*pad_h*12 bytes, not overlapping the input; 0 = unused):
+//   hist_in_off:  the DLL writes the WARPED previous P here before signalling flag_in; used for frames enqueued with hist_valid=1.
+//                 If 0, the runtime uses its own unwarped previous output instead.
+//   hist_out_off: after every frame the runtime writes this frame's P here (before flag_out = seq), for the DLL's next warp.
+// Call after nr_ext_open. Returns 0 ok, 1 not open, 2 bad offsets.
+NR_API int nr_ext_history(nr_ctx*, unsigned long long hist_in_off, unsigned long long hist_out_off);
+NR_API int nr_ext_enqueue2(nr_ctx*, unsigned seq, int max_inflight, int hist_valid);
