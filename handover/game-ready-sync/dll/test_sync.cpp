@@ -102,7 +102,7 @@ int main(int argc, char** argv) {
     printf("device after create: 0x%08lx\n", (unsigned long)dev->GetDeviceRemovedReason());
 
     std::vector<uint16_t> in((size_t)MW * MH * 4), refo((size_t)MW * MH * 4);
-    const int DX = getenv("NR_TEST_DX") ? atoi(getenv("NR_TEST_DX")) : 13, DY = getenv("NR_TEST_DY") ? atoi(getenv("NR_TEST_DY")) : 0; const bool OBJ = getenv("NR_TEST_OBJ") != nullptr;
+    const int DX = getenv("NR_TEST_DX") ? atoi(getenv("NR_TEST_DX")) : getenv("NR_TEST_SHIFT") ? atoi(getenv("NR_TEST_SHIFT")) : 13, DY = getenv("NR_TEST_DY") ? atoi(getenv("NR_TEST_DY")) : 0; const bool OBJ = getenv("NR_TEST_OBJ") != nullptr;
     const UINT gpitch = (W * 4 + 255) & ~255u; std::vector<uint8_t> mvScratch((size_t)gpitch * H), dScratch((size_t)gpitch * H); uint8_t *mvp = mvScratch.data(), *dpp = dScratch.data();   // this frame's motion (RG16F) / depth (R32F) upload rows
     const UINT ow = MW / 3, oh = MH / 3, oy = MH / 3; auto objX = [&](int k) { return (UINT)(((long long)k * DX % (MW - ow) + (MW - ow)) % (MW - ow)); };
     auto inObj = [&](int k, UINT x, UINT y) { UINT ox = objX(k); return OBJ && k >= 0 && x >= ox && x < ox + ow && y >= oy && y < oy + oh; };
@@ -228,6 +228,8 @@ int main(int argc, char** argv) {
         ts_.push_back(ms); size_t bad; double mx; compare(&bad, &mx);
         bool ok = UP > 1 ? psnr(se_o) >= 30 : bad <= (size_t)MW * MH * 3 / 1000; failed += !ok;   // UP > 1 (resampled): compare quality, not values
         if (k < 3 || k % 50 == 0 || !ok) printf("frame %d: %.1f ms list (ref nr_run %.1f ms) | %zu rgb values beyond tol, max err %.4g %s\n", k, ms, tr.back(), bad, mx, ok ? "ok" : "MISMATCH");
+        static const bool psall = getenv("NR_TEST_PSNR") != nullptr;   // NR_TEST_PSNR=1: PSNR vs the vit_every=1 reference every frame (lossy ini settings)
+        if (psall) printf("psnr %d %.2f %.2f\n", k, psnr(se_o), ms);
         if (UP > 1 && (k < 3 || !ok)) printf("  psnr vs reference: NR %.1f dB, no NR %.1f dB\n", psnr(se_o), psnr(se_i));
     }
     // robustness: the host records a frame but never executes it, then carries on
