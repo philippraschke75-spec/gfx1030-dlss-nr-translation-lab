@@ -31,7 +31,7 @@ struct nr_ctx {
   // strength = the two f32 pairs of k_pre_block PreParams: +0x28 (LocalTone, LocalStructure) and +0x48 (a, b). Set from any thread, applied at the start of the next run.
   std::mutex mx; float str[4] = {0, 0, 1, 1}; float pend[4] = {0, 0, 1, 1}; bool dirty = false;
   // D3D12 interop (nr_ext_*): imported shared buffers, own non-blocking stream, one event per queued frame
-  hipExternalMemory_t em_io = nullptr, em_sig = nullptr; uint8_t *io = nullptr, *sig = nullptr; size_t out_off = 0, flag_off = 0;
+  hipExternalMemory_t em_io = nullptr, em_sig = nullptr; uint8_t *io = nullptr, *sig = nullptr; size_t out_off = 0, flag_off = 0, stride = 0;   // stride != 0: pipeline, job seq uses io slot (seq & 1) * stride
   // No GPU-side cross-API wait (hipStreamWaitValue32 hung the HIP queue forever when D3D12 never wrote flag_in -> TDR/PC freeze on 2026-10-08):
   // a CPU thread polls flag_in with a timeout and only then launches the frame.
   hipStream_t s = nullptr, ps = nullptr; uint32_t* hf = nullptr; std::thread th; std::condition_variable cv; std::deque<unsigned> q;
@@ -278,11 +278,11 @@ static void ext_thread(nr_ctx* c) {
     }
 #endif
     if (ready) {   // late/never-executed frame: skip it; D3D12's bounded spin shows the native frame
-      apply_strength(c); hipStream_t s = c->s;
-      bool ok = hipMemcpyAsync(c->d + PAD + c->off_src, c->io, c->src_size, hipMemcpyDeviceToDevice, s) == hipSuccess &&
+      apply_strength(c); hipStream_t s = c->s; uint8_t* io = c->io + (seq & 1) * c->stride;
+      bool ok = hipMemcpyAsync(c->d + PAD + c->off_src, io, c->src_size, hipMemcpyDeviceToDevice, s) == hipSuccess &&
                 hipMemsetAsync(c->d + PAD + c->off_dst, 0, c->dst_size, s) == hipSuccess &&   // k_export accumulates into its destination, see nr_run
                 launch_all(c, s) &&
-                hipMemcpyAsync(c->io + c->out_off, c->d + PAD + c->off_dst, c->dst_size, hipMemcpyDeviceToDevice, s) == hipSuccess &&
+                hipMemcpyAsync(io + c->out_off, c->d + PAD + c->off_dst, c->dst_size, hipMemcpyDeviceToDevice, s) == hipSuccess &&
                 hipStreamWriteValue32(s, c->io + c->flag_off, seq, 0) == hipSuccess;
       hipStreamSynchronize(s); c->frame++;
       if (!ok) fprintf(stderr, "nr_ext: frame %u launch failed\n", seq);
@@ -295,6 +295,10 @@ NR_API int nr_ext_enqueue(nr_ctx* c, unsigned seq, int max_inflight) {
   if (c->inflight >= (max_inflight < 1 ? 1 : max_inflight)) return 1;
   c->inflight++; { std::lock_guard<std::mutex> g(c->mx); c->q.push_back(seq); } c->cv.notify_one(); return 0;
 }
+NR_API int nr_ext_slots(nr_ctx* c, unsigned long long stride) {   // call right after nr_ext_open, before the first enqueue
+  if (!c || !c->s || stride + c->out_off + c->dst_size > c->flag_off) return 1;
+  c->stride = (size_t)stride; return 0;
+}
 NR_API int nr_ext_close(nr_ctx* c, int) {
   if (!c) return 0;
   if (c->th.joinable()) { { std::lock_guard<std::mutex> g(c->mx); c->stop = true; c->q.clear(); } c->cv.notify_all(); c->th.join(); }   // bounded: one poll <= kExtWaitMs
@@ -302,7 +306,7 @@ NR_API int nr_ext_close(nr_ctx* c, int) {
   if (c->ps) { hipStreamDestroy(c->ps); c->ps = nullptr; }
   if (c->hf) { hipHostFree(c->hf); c->hf = nullptr; }
   if (c->em_io) hipDestroyExternalMemory(c->em_io); if (c->em_sig) hipDestroyExternalMemory(c->em_sig);
-  c->em_io = c->em_sig = nullptr; c->io = c->sig = nullptr; c->stop = false; c->inflight = 0; return 0;
+  c->em_io = c->em_sig = nullptr; c->io = c->sig = nullptr; c->stop = false; c->inflight = 0; c->stride = 0; return 0;
 }
 
 NR_API void nr_destroy(nr_ctx* c) {

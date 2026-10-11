@@ -48,4 +48,5 @@ NR_API int nr_ext_open(nr_ctx*, void* io, unsigned long long io_alloc, unsigned 
 NR_API int nr_ext_enqueue(nr_ctx*, unsigned seq, int max_inflight);
 // Releases the stream from any pending wait (flag_in = 0xFFFFFFFF), waits <= timeout_ms for it to drain, frees the imports.
 // Called by nr_destroy too. Returns 0 when the stream drained.
+NR_API int nr_ext_slots(nr_ctx*, unsigned long long stride);   // pipeline: double-buffered io, job seq reads/writes slot (seq & 1) * stride
 NR_API int nr_ext_close(nr_ctx*, int timeout_ms);   // timeout unused: the poll thread is bounded by its own 500 ms wait
