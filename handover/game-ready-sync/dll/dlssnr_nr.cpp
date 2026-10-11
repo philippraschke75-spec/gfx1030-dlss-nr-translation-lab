@@ -539,7 +539,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
                 tr(D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COMMON); };
             if (s->pipe) {                                          // pipeline: input -> slot seq&1, a bounded wait for the previous job, exp shows the newest finished one
                 if (q == 0) { cmd->SetPipelineState(s->imp); cmd->Dispatch((F->W + 7) / 8, (F->H + 7) / 8, 1); cmd->ResourceBarrier(1, &uav); release(); }
-                cb[2] = q == 0 ? seq - 1 : s->seq; cb[3] = (UINT)g_pipeWaitMs * 6000u; cmd->SetComputeRoot32BitConstants(3, 15, cb, 0);   // waits (bounded) for the previous job; with FG set pipeline_wait_ms >= the network time so no frame repeats
+                cb[2] = q == 0 ? seq - 1 : s->seq; cb[3] = (UINT)g_pipeWaitMs * 6000u + 1; cmd->SetComputeRoot32BitConstants(3, 15, cb, 0);   // waits (bounded) for the previous job; with FG set pipeline_wait_ms >= the network time so no frame repeats
                 cmd->SetPipelineState(s->spin); cmd->Dispatch(1, 1, 1); cmd->ResourceBarrier(1, &uav);
             } else {
             if (q != 0) {                                           // fg, HIP busy: st[0] = 0 forces the reuse/native branch of exp
