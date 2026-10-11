@@ -14,7 +14,8 @@
 typedef struct nr_ctx nr_ctx;
 
 // vit_every: 1 = compute every frame (default); 2 = skip the ViT dispatches on odd frames and reuse the previous
-// result (needs data generated with VIT_OWN=1, else create fails). width/height must match the data dir.
+// result (needs data generated with VIT_OWN=1, else create fails).
+// vit_every = -N (N >= 2): reuse the whole low-res bottleneck (c512 encoder + ViT + c512 decoder) on N-1 of N frames. width/height must match the data dir.
 // Returns NULL on failure and writes a message into err.
 NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_every, char* err, int errlen);
 // in/out are width*height*8 bytes, RGBA16F, tightly packed (nr_bytes gives the size). Recurrent state persists
