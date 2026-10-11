@@ -14,7 +14,7 @@ man = [l.rstrip('\n').split('|') for l in open(src + '/manifest.txt') if l.strip
 ka = bytearray(open(src + '/kernargs.bin', 'rb').read())
 for t in man:
     o = int(t[2])
-    if t[1] in ('_Z8k_import12ImportParams', '_Z8k_export12ExportParams'): struct.pack_into('<i', ka, o + 0x28, 0)
+    if t[1] in ('_Z8k_import12ImportParams', '_Z8k_export12ExportParams'): struct.pack_into('<i', ka, o + 0x28, int(os.environ.get('IO_MODE', '0')))   # IO_MODE=1: keep proxy (Reinhard+sRGB) import/export
     if t[1] == '_Z22k_post_block_1h_32_fp810PostParams': struct.pack_into('<Q', ka, o + 0x40, 0)
     t[0] = 'kernels\\' + base(t[0])
 open(dst + '/kernargs.bin', 'wb').write(ka)
