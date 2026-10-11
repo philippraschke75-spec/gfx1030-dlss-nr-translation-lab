@@ -165,7 +165,7 @@ static const char* kSyncHlsl =
 "globallycoherent RWByteAddressBuffer st : register(u2);\n"
 "cbuffer C : register(b0) { uint W; uint H; uint seq; uint maxIt; uint outOff; uint flagOff; float gain; uint FWH; uint minSeq; float gLo; float gHi; uint gate; uint frame; uint maxAge;\n"
 "  uint mvOn; float mvSx; float mvSy; uint mWH; uint mBase; uint dWH; uint dBase; uint dFl; float mLo; float mHi;\n"
-"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; uint tmap; uint histOut; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
+"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
 "Texture2D<float4> mot : register(t1);\n"
 "Texture2D<float> dep : register(t2);\n"   // minSeq != 0: fg mode, reuse the edit captured from a frame >= minSeq;   // W,H model; FWH = frame W | H << 16
 "RWByteAddressBuffer ob : register(u3);\n"   // PACKED: frame-size R9G9B9E5 staging, copied into the output texture afterwards
@@ -251,7 +251,7 @@ static const char* kSyncHlsl =
 // ---- temporal history (history=1). hst: after the spin, keep this frame's NR output in proxy space P (+ depth) at st+256+2n.
 // hwp: before the HIP release, write the network's history input into io+histOff (PAD_W x PAD_H x RGB32F, pre-block +0x40): the kept P warped
 // by the game's vectors to this frame (previous = current + mv*mvScale, frame pixels), with colour/depth gates; current P where invalid or reset.
-"float3 Pf(float3 x) { x = max(x, 0.0); if (tmap == 0) return x; x = x / (1.0 + x); return lerp(1.055 * pow(x, 1.0 / 2.4) - 0.055, x * 12.92, step(x, 0.0031308)); }\n"   // the space k_import puts the colour in: mode 0 raw, else sRGB(x/(1+x))
+"float3 Pf(float3 x) { x = max(x, 0.0); if (tmap == 0.0) return x; x = max(tmap * x, 0.0); x = min(x / (1.0 + x), 1.0); return lerp(1.055 * pow(x, 1.0 / 2.4) - 0.055, x * 12.92, step(x, 0.0031308)); }\n"   // as k_import: mode 0 raw; else max(0, scale*x), x/(1+x) clamped, sRGB OETF (tmap = scale, 0 = mode 0)
 "[numthreads(8,8,1)] void hst(uint3 id : SV_DispatchThreadID) {\n"
 "  if (id.x >= W || id.y >= H) return; uint ok = st.Load(0);\n"
 "  if (id.x == 0 && id.y == 0) st.Store(12, ok ? frame : 0u);\n"   // frame whose output is kept (0 = none)
@@ -283,7 +283,7 @@ struct Sync {                                       // D3D12 side of the sync pa
     UINT64 ioAlloc = 0, ioSize = 0, sigAlloc = 0, sigSize = 0, outOff = 0, flagOff = 0;
     ID3D12RootSignature* rs = nullptr; ID3D12PipelineState *imp = nullptr, *spin = nullptr, *exp = nullptr, *cap = nullptr, *expPk = nullptr; ID3D12Resource* ob = nullptr; unsigned obW = 0, obH = 0; ID3D12DescriptorHeap* heap = nullptr; UINT incr = 0;
     unsigned seq = 0; unsigned busy = 0; unsigned ran = 0, rec = 0, reused = 0, minSeq = 1; unsigned frm = 0, frmOf[16] = {}, sinceNr = 0; bool warnedMv = false;
-    ID3D12PipelineState *hwp = nullptr, *hst = nullptr; UINT64 histOff = 0, histOut = 0; int impMode = 0;   // impMode: ponytail: release data is import mode 0 (raw); the runtime does not report it yet
+    ID3D12PipelineState *hwp = nullptr, *hst = nullptr; UINT64 histOff = 0, histOut = 0; float impScale = 0;   // k_import of the data dir: 0 = mode 0 (raw), else its +0x2c scale (mode != 0 tonemaps)
     unsigned padW = 0, padH = 0, lastNrFrm = 0xFFFFFFF0u; bool histOn = false;   // history=1   // fg: frame counter, frame of each in-flight seq (edit age)
 };
 struct Feature {
@@ -337,6 +337,7 @@ static void logStats(Feature* F) {
     logf("stats: model input mean %.4g p50 %.4g p99 %.4g max %.4g | network changes it by mean %.4f per channel (%zu samples, %d non-finite outputs)", m, v[v.size() / 2], v[v.size() * 99 / 100], v.back(), d / nd, v.size(), bad);
 }
 
+static float importScale(const std::string& dir);
 static void worker(Feature* F) {
     try {
         char err[512] = {0};
@@ -353,7 +354,7 @@ static void worker(Feature* F) {
             else { if (p_intensity && curIntensity() >= 0.f && p_intensity(F->ctx, curIntensity()) == 0) logf("worker: intensity %.2f", curIntensity());
                    if (g_hist) { unsigned pw = 0, ph = 0; int r = p_extHist && p_histLayout && p_extEnqueue2 ? p_histLayout(F->ctx, &pw, &ph) : -1; if (!r) r = p_extHist(F->ctx, F->sy->histOff, F->sy->histOut);
                        if (r || (UINT64)pw * ph * 12 > F->sy->histOut - F->sy->histOff || (unsigned)pw < F->W || (unsigned)ph < F->H) logf("history: unavailable (%s, code %d) - history off", p_extHist ? "this data dir / runtime cannot take it" : "nr_runtime.dll has no nr_ext_history", r);
-                       else { F->sy->padW = pw; F->sy->padH = ph; F->sy->histOn = true; logf("history: mode %d on (warped history io+%llu, runtime output io+%llu, %ux%u RGB32F, gate %.2f..%.2f)", g_hist, F->sy->histOff, F->sy->histOut, pw, ph, g_hLo, g_hHi); } }
+                       else { F->sy->padW = pw; F->sy->padH = ph; F->sy->histOn = true; F->sy->impScale = importScale(F->dir); logf("history: k_import scale %.3g (0 = mode 0, raw colour)", F->sy->impScale); logf("history: mode %d on (warped history io+%llu, runtime output io+%llu, %ux%u RGB32F, gate %.2f..%.2f)", g_hist, F->sy->histOff, F->sy->histOut, pw, ph, g_hLo, g_hHi); } }
                    logf("sync: D3D12<->HIP interop ready, same-frame NR (GPU wait bound %d ms, max %d frames in flight)", g_spinMs, g_maxInflight); F->state = S_SYNC; return; }   // the worker has nothing more to do
         }
         F->state = S_IDLE;
@@ -462,6 +463,14 @@ static Sync* makeSync(Feature* F) {
 // data dir (legacy). nr_port.ini model_res=WxH picks a step; auto (default) takes the step nearest in height to the size
 // the host creates the feature with (OptiScaler's Model resolution slider sets that size; a change recreates the feature).
 static bool readMeta(const std::string& dir, unsigned* w, unsigned* h);
+static float importScale(const std::string& dir) {   // k_import kernarg +0x28 mode, +0x2c scale, from manifest.txt + kernargs.bin. 0 = mode 0 / unknown
+    FILE* f = nullptr; fopen_s(&f, (dir + "\\manifest.txt").c_str(), "r"); if (!f) return 0; char l[1024]; size_t off = 0, len = 0; bool hit = false;
+    while (!hit && fgets(l, sizeof l, f)) { std::string t(l); size_t a = t.find('|'); if (a == std::string::npos || t.substr(a + 1, t.find('|', a + 1) - a - 1).find("k_import") == std::string::npos) continue;   // field 2 = symbol
+        size_t b = t.find('|', a + 1), c = t.find('|', b + 1); off = strtoull(t.c_str() + b + 1, nullptr, 10); len = strtoull(t.c_str() + c + 1, nullptr, 10); hit = len >= 0x30; }
+    fclose(f); if (!hit) return 0;
+    fopen_s(&f, (dir + "\\kernargs.bin").c_str(), "rb"); if (!f) return 0; int mode = 0; float sc = 0; _fseeki64(f, (long long)off + 0x28, SEEK_SET);
+    bool ok = fread(&mode, 4, 1, f) == 1 && fread(&sc, 4, 1, f) == 1; fclose(f); return ok && mode != 0 && sc > 0 && sc < 1e6f ? sc : 0;
+}
 static std::string pickModelDir(unsigned w, unsigned h) {
     unsigned mw, mh; if (readMeta(g_dataDir, &mw, &mh)) return g_dataDir;
     std::vector<std::pair<unsigned, unsigned>> st; WIN32_FIND_DATAA fd; HANDLE fh = FindFirstFileA((g_dataDir + "\\*x*").c_str(), &fd);
@@ -599,7 +608,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             D3D12_UNORDERED_ACCESS_VIEW_DESC uv = {}; uv.Format = e5 ? DXGI_FORMAT_R16G16B16A16_FLOAT : od.Format; uv.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D; F->dev->CreateUnorderedAccessView(e5 ? nullptr : out, nullptr, &uv, at(3));   // e5: null UAV, output goes through ob
             UINT cb[kCb] = { F->W, F->H, seq, (UINT)(g_fg ? g_fgWaitMs : g_spinMs) * 6000u /* ~0.16 us per poll on a 6900 XT */, (UINT)s->outOff, (UINT)s->flagOff, 0, w | (h << 16), reuseOn ? s->minSeq : 0u, 0, 0, (UINT)g_gate, s->frm,
                              (UINT)(g_fg ? (std::max)(g_fgMaxAge, g_nrEvery - 1) : g_nrEvery - 1), (UINT)mvOn, 0, 0, mW | (mH << 16), mBx | (mBy << 16), dW | (dH << 16), dBx | (dBy << 16), (UINT)dOn | (depthInv ? 2u : 0u), 0, 0,
-                             (UINT)s->histOff, s->padW | (s->padH << 16), (UINT)histOk, (UINT)hMv, 0, 0, (UINT)(s->impMode != 0), (UINT)s->histOut };
+                             (UINT)s->histOff, s->padW | (s->padH << 16), (UINT)histOk, (UINT)hMv, 0, 0, 0, (UINT)s->histOut }; memcpy(&cb[30], &s->impScale, 4);
             float gain = g_gain; memcpy(&cb[6], &gain, 4); memcpy(&cb[9], &g_gateLo, 4); memcpy(&cb[10], &g_gateHi, 4);   // gLo, gHi
             memcpy(&cb[15], &mvSx, 4); memcpy(&cb[16], &mvSy, 4); memcpy(&cb[22], &g_mvLo, 4); memcpy(&cb[23], &g_mvHi, 4); memcpy(&cb[28], &g_hLo, 4); memcpy(&cb[29], &g_hHi, 4);
             ID3D12DescriptorHeap* hp[] = { s->heap }; cmd->SetDescriptorHeaps(1, hp); cmd->SetComputeRootSignature(s->rs);
