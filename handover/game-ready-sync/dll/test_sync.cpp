@@ -208,8 +208,7 @@ int main(int argc, char** argv) {
         double s = 0, s2 = 0; for (double x : d) { s += x; s2 += x * x; } double av = s / d.size(), sd = sqrt(std::max(0.0, s2 / d.size() - av * av)); std::sort(d.begin(), d.end());
         for (int j = std::max(0, n - 2); j < n; j++) fgRead(j);
         if (fgc && !stall.empty()) { std::vector<double> v = stall; std::sort(v.begin(), v.end()); double sm = 0; for (double x : v) sm += x;
-            printf("fg consumer: %d frames, %d stale (same image as the previous frame) | queue held by NR avg %.2f ms p95 %.2f max %.2f
-", consumed, stale, sm / v.size(), v[v.size() * 95 / 100], v.back()); }
+            printf("fg consumer: %d frames, %d stale (same image as the previous frame) | queue held by NR avg %.2f ms p95 %.2f max %.2f\n", consumed, stale, sm / v.size(), v[v.size() * 95 / 100], v.back()); }
         unsigned n1, b1, r1; stats(f, &n1, &b1, &r1);
         printf("pace (%s, gpu load %.1f ms) ", pipe ? "pipeline" : "strict", gms);
         printf("pace (cpu %.1f ms/frame, %d frames): frame time avg %.2f ms (%.1f fps) sd %.2f p50 %.2f p95 %.2f p99 %.2f max %.2f | NR %u, reused %u, native %u\n",
