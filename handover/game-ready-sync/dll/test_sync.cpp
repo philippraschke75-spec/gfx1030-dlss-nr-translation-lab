@@ -51,7 +51,8 @@ typedef void* (*P_create)(const char*, int, int, int, char*, int); typedef int (
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IONBF, 0);
     if (getenv("NR_TEST_W")) { W = atoi(getenv("NR_TEST_W")); H = atoi(getenv("NR_TEST_H")); }
-    MW = W; MH = H; if (getenv("NR_TEST_UP")) { UP = atoi(getenv("NR_TEST_UP")); W = MW * UP; H = MH * UP; }
+    MW = W; MH = H; const bool fl = getenv("NR_TEST_FW") != nullptr; if (fl) { W = atoi(getenv("NR_TEST_FW")); H = atoi(getenv("NR_TEST_FH")); }   // flicker test: any frame size
+    if (getenv("NR_TEST_UP")) { UP = atoi(getenv("NR_TEST_UP")); W = MW * UP; H = MH * UP; }
     const bool r11 = getenv("NR_TEST_FMT") && !strcmp(getenv("NR_TEST_FMT"), "r11"); if (r11) { FMT = DXGI_FORMAT_R11G11B10_FLOAT; BPP = 4; }
     const bool e5 = getenv("NR_TEST_FMT") && !strcmp(getenv("NR_TEST_FMT"), "e5"); if (e5) { FMT = DXGI_FORMAT_R9G9B9E5_SHAREDEXP; BPP = 4; }
     auto pk5 = [](const uint16_t* h) {   // half4 -> R9G9B9E5 (reference encoder, as D3D)
@@ -170,6 +171,35 @@ int main(int argc, char** argv) {
         unsigned n1, b1, r1; stats(f, &n1, &b1, &r1);
         printf("pace (cpu %.1f ms/frame, %d frames): frame time avg %.2f ms (%.1f fps) sd %.2f p50 %.2f p95 %.2f p99 %.2f max %.2f | NR %u, reused %u, native %u\n",
                cpu, n, av, 1000 / av, sd, d[d.size() / 2], d[d.size() * 95 / 100], d[d.size() * 99 / 100], d.back(), n1 - n0, r1 - r0, b1 - b0);
+        release(f); return 0;
+    }
+    if (fl) {   // NR_TEST_FW/FH: flicker test at any frame size. Frame = base (model size) bilinear-resampled to the frame with a sub-pixel
+                // drift, x a fine frame-res texture, + bright HDR specks (NR_TEST_SPECK, default 20) that drift too. Counts "white" pixels:
+                // output far above input; "jump" = also far above the same pixel's output in the previous frame.
+        const float sv = getenv("NR_TEST_SPECK") ? (float)atof(getenv("NR_TEST_SPECK")) : 20.f; const int ns = 400; double ms = 0;
+        std::vector<float> fin((size_t)W * H * 3), fout((size_t)W * H * 3), prev((size_t)W * H * 3, 0.f); size_t tw = 0, tj = 0; double tmax = 0;
+        auto bs = [&](float u, float v, int c) { u = fmodf(u + 4.f * MW, (float)MW); v = std::min(std::max(v, 0.f), MH - 1.f); int x0 = (int)u, y0 = (int)v; float a = u - x0, b = v - y0; int x1 = (x0 + 1) % MW, y1 = std::min(y0 + 1, (int)MH - 1);
+            auto g = [&](int x, int y) { return (float)h2f(base[((size_t)y * MW + x) * 4 + c]); }; return (g(x0, y0) * (1 - a) + g(x1, y0) * a) * (1 - b) + (g(x0, y1) * (1 - a) + g(x1, y1) * a) * b; };
+        for (int k = 0; k < frames; k++) {
+            const float sx = k * 0.37f;   // frame px drift per frame
+            for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) {
+                float fx = x + sx, t = 0.85f + 0.15f * sinf(fx * 2.3f) * sinf(y * 1.9f);
+                for (int c = 0; c < 3; c++) fin[((size_t)y * W + x) * 3 + c] = std::max(0.f, bs((fx + 0.5f) * MW / W - 0.5f, (y + 0.5f) * MH / H - 0.5f, c)) * t; }
+            for (int i = 0; i < ns; i++) { int x = (int)((i * 7919u) % W + sx) % W, y = (int)((i * 104729u) % H); for (int c = 0; c < 3; c++) fin[((size_t)y * W + x) * 3 + c] = sv; }
+            for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { uint16_t h4[4]; float* p = &fin[((size_t)y * W + x) * 3]; for (int c = 0; c < 3; c++) h4[c] = f2h(p[c]); h4[3] = f2h(1.f);
+                if (r11) { uint32_t v; pack_r11g11b10(h4, &v); memcpy(upp + (size_t)y * pitch + x * 4, &v, 4); unpack_r11g11b10(v, h4); for (int c = 0; c < 3; c++) p[c] = (float)h2f(h4[c]); }
+                else memcpy(upp + (size_t)y * pitch + x * 8, h4, 8); }
+            int r = frame(k, true, &ms); if (r == -100) { printf("FAIL frame %d: GPU wait timed out\n", k); return 7; } if (r != 1) { printf("frame %d: evaluate returned %d\n", k, r); continue; }
+            size_t white = 0, jump = 0; double mx = 0;
+            for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { uint16_t o[4]; if (r11) unpack_r11g11b10(*(uint32_t*)(rbp + (size_t)y * pitch + x * 4), o); else memcpy(o, rbp + (size_t)y * opitch + x * 8, 8);
+                size_t i = ((size_t)y * W + x) * 3; float mi = 0, mo = 0, mp = 0;
+                for (int c = 0; c < 3; c++) { fout[i + c] = (float)h2f(o[c]); mi = std::max(mi, fin[i + c]); mo = std::max(mo, fout[i + c]); mp = std::max(mp, prev[i + c]); }
+                float d = mo - mi; mx = std::max(mx, (double)d);
+                if (d > 0.25f + 0.5f * mi) { white++; if (k > 0 && mo > mp + 0.25f + 0.5f * mp) jump++; } }
+            std::swap(prev, fout); if (k > 0) { tw += white; tj += jump; tmax = std::max(tmax, mx); }
+            if (k < 3 || k % 10 == 0) printf("frame %d: white %zu, white+jump %zu, max (out - in) %.3f\n", k, white, jump, mx);
+            if (getenv("NR_TEST_DUMP") && k == atoi(getenv("NR_TEST_DUMP"))) { FILE* df = fopen(getenv("NR_TEST_DUMPF") ? getenv("NR_TEST_DUMPF") : "flicker_dump.bin", "wb"); fwrite(fin.data(), 4, fin.size(), df); fwrite(prev.data(), 4, prev.size(), df); fclose(df); } }
+        printf("FLICKER %ux%u model %ux%u speck %.0f: white %zu, white+jump %zu over %d frames, max (out - in) %.3f\n", W, H, MW, MH, sv, tw, tj, frames - 1, tmax);
         release(f); return 0;
     }
     // baseline: the same list without evaluate
