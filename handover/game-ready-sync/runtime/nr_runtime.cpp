@@ -21,7 +21,7 @@
 #endif
 #include "nr_override.h"
 
-struct Step { hipFunction_t fn; std::vector<uint8_t> ka; unsigned gx, gy, gz, thr; bool pre = false;   // pre = k_pre_block (its kernarg holds the strength fields)
+struct Step { hipFunction_t fn; std::vector<uint8_t> ka; unsigned gx, gy, gz, thr; bool pre = false, post = false;   // pre = k_pre_block (its kernarg holds the strength fields)
               const NrOverride* ov = nullptr; std::vector<uint8_t> src; };   // ov: native replacement; src = original rebased kernarg it is built from
 struct nr_ctx {
   std::map<std::string, NrOverride> ovr;   // see OVERRIDES.md; empty -> unchanged behaviour
@@ -31,11 +31,13 @@ struct nr_ctx {
   // strength = the two f32 pairs of k_pre_block PreParams: +0x28 (LocalTone, LocalStructure) and +0x48 (a, b). Set from any thread, applied at the start of the next run.
   std::mutex mx; float str[4] = {0, 0, 1, 1}; float pend[4] = {0, 0, 1, 1}; bool dirty = false;
   // D3D12 interop (nr_ext_*): imported shared buffers, own non-blocking stream, one event per queued frame
-  hipExternalMemory_t em_io = nullptr, em_sig = nullptr; uint8_t *io = nullptr, *sig = nullptr; size_t out_off = 0, flag_off = 0, io_size = 0;
+  hipExternalMemory_t em_io = nullptr, em_sig = nullptr; uint8_t *io = nullptr, *sig = nullptr; size_t out_off = 0, flag_off = 0;
   // No GPU-side cross-API wait (hipStreamWaitValue32 hung the HIP queue forever when D3D12 never wrote flag_in -> TDR/PC freeze on 2026-10-08):
   // a CPU thread polls flag_in with a timeout and only then launches the frame.
-  hipStream_t s = nullptr, ps = nullptr; uint32_t* hf = nullptr; std::thread th; std::condition_variable cv; std::deque<unsigned> q;
+  hipStream_t s = nullptr, ps = nullptr; uint32_t* hf = nullptr; std::thread th; std::condition_variable cv; std::deque<std::pair<unsigned, int>> q;
   std::atomic<bool> stop{false}; std::atomic<int> inflight{0};
+  // temporal history (nr_run2 / nr_ext_enqueue2): own PAD_H x PAD_W x RGB32F buffer, pointed to by pre-block +0x40 and post-block +0x40 when valid
+  float* hist = nullptr; uint64_t netout = 0, hist_ptr = 0; unsigned ph = 0, pw = 0; bool have_prev = false; size_t io_size = 0, hin = 0, hout = 0;
   std::vector<hipEvent_t> prof; std::vector<std::string> names;   // NR_PROF only
 };
 static const size_t kStrOff0 = 0x28, kStrOff1 = 0x48;
@@ -152,7 +154,7 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
     if (t.size() != 7 && t.size() != 8) { fclose(f); FAIL("bad manifest line: %s", line); }
     t[0] = rel(c->dir, t[0]);
     if (!mods.count(t[0])) { hipModule_t m; hipError_t e = load_mod(c, t[0], &m); if (e != hipSuccess) { fclose(f); FAIL("hipModuleLoad %s: %s", t[0].c_str(), hipGetErrorString(e)); } mods[t[0]] = m; c->mods.push_back(m); }
-    Step st; st.pre = t[1].find("k_pre_block") != std::string::npos; hipError_t e = hipModuleGetFunction(&st.fn, mods[t[0]], t[1].c_str()); if (e != hipSuccess) { fclose(f); FAIL("no symbol %s", t[1].c_str()); }
+    Step st; st.pre = t[1].find("k_pre_block") != std::string::npos; st.post = t[1].find("k_post_block") != std::string::npos; hipError_t e = hipModuleGetFunction(&st.fn, mods[t[0]], t[1].c_str()); if (e != hipSuccess) { fclose(f); FAIL("no symbol %s", t[1].c_str()); }
     size_t off = strtoull(t[2].c_str(), nullptr, 10), len = strtoull(t[3].c_str(), nullptr, 10);
     if (off + len > kab.size()) { fclose(f); FAIL("kernarg out of range"); }
     st.ka.assign(kab.begin() + off, kab.begin() + off + len);
@@ -174,6 +176,7 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
       const auto& k = st.ov ? st.src : st.ka; memcpy(&c->str[0], k.data() + kStrOff0, 8); memcpy(&c->str[2], k.data() + kStrOff1, 8);
       memcpy(c->pend, c->str, sizeof c->str);
     }
+    if (st.post) { const auto& k = st.ov ? st.src : st.ka; memcpy(&c->netout, k.data() + 0x10, 8); memcpy(&c->ph, k.data() + 0x20, 4); memcpy(&c->pw, k.data() + 0x24, 4); }
     c->names.push_back(st.ov ? st.ov->sym : t[1]); c->steps.push_back(std::move(st));
   }
   fclose(f);
@@ -182,12 +185,35 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
     if (c->vit_lo < 0 || c->vit_hi >= (int)c->names.size() || c->names[c->vit_lo].find("ffwd2") == std::string::npos || c->names[c->vit_hi].find("swin") == std::string::npos)
       FAIL("bottleneck reuse: unexpected dispatch layout around %d..%d", c->vit_lo, c->vit_hi);
   }
+  if (c->pw) HK(hipMalloc(&c->hist, (size_t)c->pw * c->ph * 12));   // ~8 MB; filled after every frame so the first hist_valid frame already has history
   HK(hipEventCreate(&c->e0)); HK(hipEventCreate(&c->e1));
   if (getenv("NR_PROF")) { c->prof.resize(c->steps.size()); for (auto& e : c->prof) HK(hipEventCreate(&e)); }
   return c;
 }
 
 NR_API size_t nr_bytes(nr_ctx* c) { return c->src_size; }
+NR_API int nr_hist_layout(nr_ctx* c, unsigned* pad_w, unsigned* pad_h) { if (!c || !c->pw) return 1; if (pad_w) *pad_w = c->pw; if (pad_h) *pad_h = c->ph; return 0; }
+
+// History: before a frame, point pre/post +0x40 at the history buffer (valid) or null (= today's path, bit-exact); after it, keep the
+// post-block output rgb (P space) as the next frame's unwarped history and optionally hand it to the DLL at io+hout.
+static size_t hist_bytes(nr_ctx* c) { return (size_t)c->pw * c->ph * 12; }
+static bool hist_begin(nr_ctx* c, hipStream_t s, int valid, const uint8_t* src) {
+  bool v = valid && c->hist && (src || c->have_prev);
+  if (v && src && hipMemcpyAsync(c->hist, src, hist_bytes(c), hipMemcpyDeviceToDevice, s) != hipSuccess) return false;
+  uint64_t p = v ? (uint64_t)c->hist : 0;
+  if (p != c->hist_ptr) {
+    static const int mask = getenv("NR_HIST_MASK") ? atoi(getenv("NR_HIST_MASK")) : 3;   // debug: 1 = pre-block only, 2 = post-block only
+    for (auto& st : c->steps) if ((st.pre && (mask & 1)) || (st.post && (mask & 2))) { auto& k = st.ov ? st.src : st.ka; if (k.size() >= 0x48) { memcpy(k.data() + 0x40, &p, 8); if (st.ov) nr_apply_override(*st.ov, st.src, st.ka); } }
+    c->hist_ptr = p;
+  }
+  return true;
+}
+static bool hist_end(nr_ctx* c, hipStream_t s) {   // RGBA f32 (16 B/px) -> RGB f32 (12 B/px), same padded layout
+  if (!c->hist) return true;
+  bool ok = hipMemcpy2DAsync(c->hist, 12, (void*)c->netout, 16, 12, (size_t)c->pw * c->ph, hipMemcpyDeviceToDevice, s) == hipSuccess;
+  if (ok && c->io && c->hout) ok = hipMemcpy2DAsync(c->io + c->hout, 12, (void*)c->netout, 16, 12, (size_t)c->pw * c->ph, hipMemcpyDeviceToDevice, s) == hipSuccess;
+  c->have_prev = ok; return ok;
+}
 
 static void apply_strength(nr_ctx* c) {                    // between frames, from the run thread: patch the pre-block kernarg copies
   std::lock_guard<std::mutex> g(c->mx); if (!c->dirty) return;
@@ -221,14 +247,17 @@ static bool launch_all(nr_ctx* c, hipStream_t st) {         // the network's dis
   return true;
 }
 
-NR_API int nr_run(nr_ctx* c, const void* in, void* out, float* gpu_ms) {
+NR_API int nr_run(nr_ctx* c, const void* in, void* out, float* gpu_ms) { return nr_run2(c, in, out, gpu_ms, 0); }
+NR_API int nr_run2(nr_ctx* c, const void* in, void* out, float* gpu_ms, int hist_valid) {
   apply_strength(c);
+  if (!hist_begin(c, nullptr, hist_valid, nullptr)) return 5;
   if (hipMemcpy(c->d + PAD + c->off_src, in, c->src_size, hipMemcpyHostToDevice) != hipSuccess) return 1;
   // k_export reads the previous contents of its destination (it behaves like a max/accumulate on many pixels): without clearing it, every frame after
   // the first carries bright single-pixel specks from the previous result (measured: 2010 vs 26 spikes>0.15 per frame). Always start from zeros, as frame 0 does.
   if (hipMemset(c->d + PAD + c->off_dst, 0, c->dst_size) != hipSuccess) return 1;
   hipEventRecord(c->e0);
   if (!launch_all(c, nullptr)) return 2;
+  if (!hist_end(c, nullptr)) return 5;
   hipEventRecord(c->e1);
   if (hipEventSynchronize(c->e1) != hipSuccess) return 3;   // ponytail: no timeout like net_run's SWIN_TIMEOUT; add if a hang matters
   if (gpu_ms) hipEventElapsedTime(gpu_ms, c->e0, c->e1);
@@ -240,7 +269,7 @@ NR_API int nr_run(nr_ctx* c, const void* in, void* out, float* gpu_ms) {
   c->frame++; return 0;
 }
 
-NR_API int nr_reset(nr_ctx* c) { c->frame = 0; return upload_arena(c) ? 0 : 1; }
+NR_API int nr_reset(nr_ctx* c) { c->frame = 0; c->have_prev = false; return upload_arena(c) ? 0 : 1; }
 
 static void ext_thread(nr_ctx* c);
 #ifdef _WIN32
@@ -271,8 +300,8 @@ NR_API int nr_ext_open(nr_ctx* c, void* io, unsigned long long io_alloc, unsigne
 static const int kExtWaitMs = 500;   // flag_in wait bound; longer than the D3D12 spin bound, so a late frame is dropped on both sides
 static void ext_thread(nr_ctx* c) {
   for (;;) {
-    unsigned seq;
-    { std::unique_lock<std::mutex> g(c->mx); c->cv.wait(g, [&] { return c->stop || !c->q.empty(); }); if (c->stop) return; seq = c->q.front(); c->q.pop_front(); }
+    unsigned seq; int hv;
+    { std::unique_lock<std::mutex> g(c->mx); c->cv.wait(g, [&] { return c->stop || !c->q.empty(); }); if (c->stop) return; seq = c->q.front().first; hv = c->q.front().second; c->q.pop_front(); }
     bool ready = false;
 #ifdef _WIN32
     DWORD t0 = GetTickCount();
@@ -285,8 +314,9 @@ static void ext_thread(nr_ctx* c) {
     if (ready) {   // late/never-executed frame: skip it; D3D12's bounded spin shows the native frame
       apply_strength(c); hipStream_t s = c->s;
       bool ok = hipMemcpyAsync(c->d + PAD + c->off_src, c->io, c->src_size, hipMemcpyDeviceToDevice, s) == hipSuccess &&
+                hist_begin(c, s, hv, hv && c->hin ? c->io + c->hin : nullptr) &&
                 hipMemsetAsync(c->d + PAD + c->off_dst, 0, c->dst_size, s) == hipSuccess &&   // k_export accumulates into its destination, see nr_run
-                launch_all(c, s) &&
+                launch_all(c, s) && hist_end(c, s) &&
                 hipMemcpyAsync(c->io + c->out_off, c->d + PAD + c->off_dst, c->dst_size, hipMemcpyDeviceToDevice, s) == hipSuccess &&
                 hipStreamWriteValue32(s, c->io + c->flag_off, seq, 0) == hipSuccess;
       hipStreamSynchronize(s); c->frame++;
@@ -295,26 +325,17 @@ static void ext_thread(nr_ctx* c) {
     c->inflight--;
   }
 }
-// Temporal history: point the pre-block's second colour source (kernarg +0x40, null by default = current colour) at io + hist_off.
-// The caller writes PAD_H x PAD_W x RGB32F there (proxy space, row pitch PAD_W*12) before it releases flag_in. Works with any data dir:
-// the pre-block reads +0x40 directly, no arena ctx+0x118 needed. Call after nr_ext_open, before the first enqueue. 0 = ok, *pw/*ph = PAD_W/PAD_H, *import_mode = k_import +0x28.
-NR_API int nr_ext_history(nr_ctx* c, unsigned long long hist_off, int* pw, int* ph, int* import_mode) {
-  if (!c || !c->io) return 1;
-  if (import_mode) { *import_mode = -1; for (size_t i = 0; i < c->steps.size(); i++) if (c->names[i].find("k_import") != std::string::npos && c->steps[i].ka.size() >= 0x2c) memcpy(import_mode, c->steps[i].ka.data() + 0x28, 4); }   // the history must be in the space k_import produces (mode 0: raw, else sRGB(x/(1+x)))
-  for (auto& st : c->steps) if (st.pre) {
-    auto& k = st.ov ? st.src : st.ka; if (k.size() < 0x48) return 2;
-    int H, W; memcpy(&H, k.data() + 0x18, 4); memcpy(&W, k.data() + 0x1c, 4);
-    if (H <= 0 || W <= 0 || hist_off % 4 || hist_off + (size_t)H * W * 12 > c->io_size) return 3;
-    std::lock_guard<std::mutex> g(c->mx); uint64_t p = (uint64_t)(c->io + hist_off); memcpy(k.data() + 0x40, &p, 8);
-    if (st.ov && !nr_apply_override(*st.ov, st.src, st.ka)) return 4;
-    if (pw) *pw = W; if (ph) *ph = H; return 0;
-  }
-  return 2;   // no k_pre_block step
+NR_API int nr_ext_enqueue(nr_ctx* c, unsigned seq, int max_inflight) { return nr_ext_enqueue2(c, seq, max_inflight, 0); }
+NR_API int nr_ext_history(nr_ctx* c, unsigned long long hist_in_off, unsigned long long hist_out_off) {
+  if (!c || !c->io || !c->pw) return 1;
+  size_t n = hist_bytes(c);
+  for (unsigned long long o : {hist_in_off, hist_out_off}) if (o && (o < c->src_size || o + n > c->io_size || o % 4)) return 2;
+  c->hin = hist_in_off; c->hout = hist_out_off; return 0;
 }
-NR_API int nr_ext_enqueue(nr_ctx* c, unsigned seq, int max_inflight) {
+NR_API int nr_ext_enqueue2(nr_ctx* c, unsigned seq, int max_inflight, int hist_valid) {
   if (!c || !c->s) return -1;
   if (c->inflight >= (max_inflight < 1 ? 1 : max_inflight)) return 1;
-  c->inflight++; { std::lock_guard<std::mutex> g(c->mx); c->q.push_back(seq); } c->cv.notify_one(); return 0;
+  c->inflight++; { std::lock_guard<std::mutex> g(c->mx); c->q.push_back({seq, hist_valid}); } c->cv.notify_one(); return 0;
 }
 NR_API int nr_ext_close(nr_ctx* c, int) {
   if (!c) return 0;
@@ -322,10 +343,8 @@ NR_API int nr_ext_close(nr_ctx* c, int) {
   if (c->s) { hipStreamSynchronize(c->s); hipStreamDestroy(c->s); c->s = nullptr; }
   if (c->ps) { hipStreamDestroy(c->ps); c->ps = nullptr; }
   if (c->hf) { hipHostFree(c->hf); c->hf = nullptr; }
-  for (auto& st : c->steps) if (st.pre && c->io) { auto& k = st.ov ? st.src : st.ka; uint64_t p = 0;   // history pointed into io: back to null before io goes away
-    if (k.size() >= 0x48) { memcpy(&p, k.data() + 0x40, 8); if (p >= (uint64_t)c->io && p < (uint64_t)c->io + c->io_size) { p = 0; memcpy(k.data() + 0x40, &p, 8); if (st.ov) nr_apply_override(*st.ov, st.src, st.ka); } } }
   if (c->em_io) hipDestroyExternalMemory(c->em_io); if (c->em_sig) hipDestroyExternalMemory(c->em_sig);
-  c->em_io = c->em_sig = nullptr; c->io = c->sig = nullptr; c->stop = false; c->inflight = 0; return 0;
+  c->em_io = c->em_sig = nullptr; c->io = c->sig = nullptr; c->hin = c->hout = 0; c->stop = false; c->inflight = 0; return 0;
 }
 
 NR_API void nr_destroy(nr_ctx* c) {
@@ -333,5 +352,6 @@ NR_API void nr_destroy(nr_ctx* c) {
   if (nr_ext_close(c, 2000)) return;   // GPU still busy with our memory: leak the context instead of freeing under it
   for (auto m : c->mods) hipModuleUnload(m);
   if (c->d) hipFree(c->d);
+  if (c->hist) hipFree(c->hist);
   delete c;
 }
