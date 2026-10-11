@@ -67,7 +67,8 @@ int main(int argc, char** argv) {
     auto up5 = [](uint32_t v, uint16_t* o) { float d = exp2f((float)((int)(v >> 27) - 24)); for (int i = 0; i < 3; i++) o[i] = f2h((float)((v >> (9 * i)) & 511) * d); o[3] = f2h(1.f); };
     if (argc < 3) { puts("usage: test_sync color.bin dll_dir [frames]"); return 1; }
     const int frames = argc > 3 ? atoi(argv[3]) : 300; std::string dir = argv[2]; SetDllDirectoryA(dir.c_str());
-    std::vector<uint16_t> base((size_t)MW * MH * 4); { FILE* f = fopen(argv[1], "rb"); if (!f || fread(base.data(), 8, (size_t)MW * MH, f) != (size_t)MW * MH) { puts("cannot read color.bin"); return 1; } fclose(f); }
+    const UINT SW = getenv("NR_TEST_SW") ? atoi(getenv("NR_TEST_SW")) : MW, SH = getenv("NR_TEST_SH") ? atoi(getenv("NR_TEST_SH")) : MH;   // flicker mode: source texture size (default model size)
+    std::vector<uint16_t> base((size_t)SW * SH * 4); { FILE* f = fopen(argv[1], "rb"); if (!f || fread(base.data(), 8, (size_t)SW * SH, f) != (size_t)SW * SH) { puts("cannot read color.bin"); return 1; } fclose(f); }
     char dd[1024]; GetPrivateProfileStringA("nr", "data_dir", "", dd, sizeof dd, (dir + "\\nr_port.ini").c_str());
     if (GetFileAttributesA((std::string(dd) + "\\meta.txt").c_str()) == INVALID_FILE_ATTRIBUTES) snprintf(dd + strlen(dd), sizeof dd - strlen(dd), "\\%ux%u", MW, MH);   // step dirs: nr_data\<W>x<H>
 
@@ -118,11 +119,16 @@ int main(int argc, char** argv) {
             if (r11) { uint32_t v; pack_r11g11b10(s, &v); memcpy(upp + (size_t)y * pitch + x * 4, &v, 4); unpack_r11g11b10(v, d); }
             else if (e5) { uint32_t v = pk5(s); memcpy(upp + (size_t)y * pitch + x * 4, &v, 4); up5(v, d); }
             else { memcpy(d, s, 8); memcpy(upp + (size_t)y * pitch + x * 8, s, 8); } } };
+    ID3D12Resource *fmv = nullptr, *fdp = nullptr, *fmu = nullptr, *fdu = nullptr; bool ffirst = true;   // flicker mode: motion/depth textures, their upload buffers (mvp/dpp)
     auto frame = [&](int k, bool exec, double* ms) -> int {   // one game frame; returns evaluate's result, -100 on GPU timeout
         al->Reset(); cl->Reset(al, nullptr);
+        if (fmv) { for (int g = 0; g < 2; g++) { ID3D12Resource* t = g ? fdp : fmv; DXGI_FORMAT fm = g ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R16G16_FLOAT;
+            bar(t, ffirst ? D3D12_RESOURCE_STATE_COMMON : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+            D3D12_TEXTURE_COPY_LOCATION s0 = {}; s0.pResource = g ? fdu : fmu; s0.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; s0.PlacedFootprint.Footprint = {fm, W, H, 1, gpitch};
+            auto d0 = ts(t); cl->CopyTextureRegion(&d0, 0, 0, 0, &s0, nullptr); bar(t, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); } ffirst = false; }
         bar(color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST); { auto d = ts(color), s = fp(up, pitch, FMT); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
         bar(color, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        int r = k < 0 ? 1 : eval(cl, f, nullptr, color, nullptr, nullptr, out, W, H, W, H, W, H, 0, 0, 0, 0, 0, k == 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1.f, 1.f);
+        int r = k < 0 ? 1 : eval(cl, f, nullptr, color, fdp, fmv, out, W, H, W, H, W, H, 0, 0, 0, 0, fmv ? 1 : 0, k == 0, 1.f, 0, 1.f, 1.f, 1.f, 0, fmv ? (float)W : 1.f, fmv ? (float)H : 1.f);
         bar(out, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE); { auto d = fp(rb, opitch, OFMT), s = ts(out); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
         bar(out, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); cl->Close();
         if (!exec) return r;                                  // the host dropped this list
@@ -215,33 +221,68 @@ int main(int argc, char** argv) {
                cpu, n, av, 1000 / av, sd, d[d.size() / 2], d[d.size() * 95 / 100], d[d.size() * 99 / 100], d.back(), n1 - n0, r1 - r0, b1 - b0);
         release(f); return 0;
     }
-    if (fl) {   // NR_TEST_FW/FH: flicker test at any frame size. Frame = base (model size) bilinear-resampled to the frame with a sub-pixel
-                // drift, x a fine frame-res texture, + bright HDR specks (NR_TEST_SPECK, default 20) that drift too. Counts "white" pixels:
-                // output far above input; "jump" = also far above the same pixel's output in the previous frame.
-        const float sv = getenv("NR_TEST_SPECK") ? (float)atof(getenv("NR_TEST_SPECK")) : 20.f; const int ns = 400; double ms = 0;
-        std::vector<float> fin((size_t)W * H * 3), fout((size_t)W * H * 3), prev((size_t)W * H * 3, 0.f); size_t tw = 0, tj = 0; double tmax = 0;
-        auto bs = [&](float u, float v, int c) { u = fmodf(u + 4.f * MW, (float)MW); v = std::min(std::max(v, 0.f), MH - 1.f); int x0 = (int)u, y0 = (int)v; float a = u - x0, b = v - y0; int x1 = (x0 + 1) % MW, y1 = std::min(y0 + 1, (int)MH - 1);
-            auto g = [&](int x, int y) { return (float)h2f(base[((size_t)y * MW + x) * 4 + c]); }; return (g(x0, y0) * (1 - a) + g(x1, y0) * a) * (1 - b) + (g(x0, y1) * (1 - a) + g(x1, y1) * a) * b; };
+    if (fl) {   // NR_TEST_FW/FH: temporal flicker test at any frame size (frame W x H, network MW x MH). See HARNESS.md (handover/temporal-2026-10-11).
+        // Sequence (a game-like camera): the source texture (argv[1], NR_TEST_SW x NR_TEST_SH, default the model size) bilinear-resampled to the
+        // frame with a pan of NR_TEST_VX/VY frame px per frame (default 0.37, 0.13), TAA-like sub-pixel jitter (Halton 2,3, amplitude NR_TEST_JIT px,
+        // default 0.25), per-pixel per-frame noise (relative sigma NR_TEST_NOISE, default 0.01) and optional bright specks (NR_TEST_SPECK value, 0 = none).
+        // Motion vectors (RG16F uv, previous = current + mv, mvScale W,H) and depth (R32F 0.1, inverted) match the motion and go to evaluate.
+        // Metric, frames k >= 1, interior (8 px + motion margin), values clamped to [0,1] (display): inst = mean over RGB of |x_k - warp(x_{k-1})|
+        // (warp = bilinear fetch at the exact known motion) for output and input; excess = inst_out - inst_in (0 = as stable as the input).
+        // "white jumps": pixels whose luma rises against the warped previous output by > 3/255 more than the input's own rise; "visible": |that excess change| > 2/255 (either sign).
+        // NR_TEST_REF=1: the same metric for the network alone (nr_run, model-size sequence clamped to [0,1]); NR_TEST_DUMPDIR=dir: writes
+        // that sequence's model-size input/output (float32 RGB, f%03d_in.bin / f%03d_out.bin) for the PyTorch reference (temporal/flicker_torch.py).
+        auto envf = [](const char* n, float d) { return getenv(n) ? (float)atof(getenv(n)) : d; };
+        const float vx = envf("NR_TEST_VX", 0.37f), vy = envf("NR_TEST_VY", 0.13f), jit = envf("NR_TEST_JIT", 0.25f), nsg = envf("NR_TEST_NOISE", 0.01f), sv = envf("NR_TEST_SPECK", 0.f);
+        const bool doRef = getenv("NR_TEST_REF") != nullptr; const char* dumpDir = getenv("NR_TEST_DUMPDIR"); double ms = 0;
+        auto halton = [](int i, int b) { float f = 1, r = 0; for (i++; i > 0; i /= b) { f /= b; r += f * (i % b); } return r; };
+        auto shift = [&](int k, float* s) { s[0] = k * vx + jit * 2 * (halton(k % 8, 2) - .5f); s[1] = k * vy + jit * 2 * (halton(k % 8, 3) - .5f); };   // frame px
+        auto src = [&](float u, float v, int c) { u = fmodf(fmodf(u, (float)SW) + SW, (float)SW); v = std::min(std::max(v, 0.f), SH - 1.001f); int x0 = (int)u, y0 = (int)v; float a = u - x0, b = v - y0; int x1 = (x0 + 1) % SW;
+            auto g = [&](int x, int y) { return std::max(0.f, (float)h2f(base[((size_t)y * SW + x) * 4 + c])); }; return (g(x0, y0) * (1 - a) + g(x1, y0) * a) * (1 - b) + (g(x0, y0 + 1) * (1 - a) + g(x1, y0 + 1) * a) * b; };
+        auto gn = [](uint32_t x, uint32_t y, uint32_t k) { float s = 0; for (uint32_t i = 0; i < 4; i++) { uint32_t h = x * 0x8DA6B343u ^ y * 0xD8163841u ^ (k * 4 + i + 1) * 0xCB1AB31Fu;
+            h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16; s += (h >> 8) * (1.f / 16777216.f); } return (s - 2.f) * 1.7320508f; };   // ~N(0,1)
+        auto gen = [&](std::vector<float>& o, UINT w, UINT h, int k) { float s[2]; shift(k, s); const float sc = (float)w / W;   // frame k at w x h (same aspect as the frame)
+            for (UINT y = 0; y < h; y++) for (UINT x = 0; x < w; x++) { const float n = 1 + nsg * gn(x, y, k);
+                for (int c = 0; c < 3; c++) o[((size_t)y * w + x) * 3 + c] = n * src((x + .5f + s[0] * sc) * SW / w - .5f, (y + .5f + s[1] * sc) * SH / h - .5f, c); }
+            if (sv > 0) for (int i = 0; i < 400; i++) { int x = (int)fmodf((i * 7919u) % w - s[0] * sc + 4.f * w, (float)w), y = (int)((i * 104729u) % h); for (int c = 0; c < 3; c++) o[((size_t)y * w + x) * 3 + c] = sv; } };
+        struct Fr { double o = 0, i = 0; size_t j = 0, v = 0, n = 0; };
+        auto measure = [&](const std::vector<float>& ci, const std::vector<float>& co, const std::vector<float>& pi, const std::vector<float>& po, UINT w, UINT h, int k) {
+            float a[2], b[2]; shift(k, a); shift(k - 1, b); const float sc = (float)w / W, dx = (a[0] - b[0]) * sc, dy = (a[1] - b[1]) * sc;   // warp(prev)(x) = prev(x + d)
+            auto cl1 = [](float v) { return std::min(std::max(v, 0.f), 1.f); };
+            auto bil = [&](const std::vector<float>& p, float u, float v, int c) { int x0 = (int)floorf(u), y0 = (int)floorf(v); float fa = u - x0, fb = v - y0;
+                auto g = [&](int x, int y) { return cl1(p[((size_t)y * w + x) * 3 + c]); }; return (g(x0, y0) * (1 - fa) + g(x0 + 1, y0) * fa) * (1 - fb) + (g(x0, y0 + 1) * (1 - fa) + g(x0 + 1, y0 + 1) * fa) * fb; };
+            const int m = 8 + (int)ceilf(std::max(fabsf(dx), fabsf(dy))); Fr r;
+            for (int y = m; y < (int)h - m; y++) for (int x = m; x < (int)w - m; x++) { const size_t i = ((size_t)y * w + x) * 3; float lo = 0, lpo = 0, li = 0, lpi = 0;
+                for (int c = 0; c < 3; c++) { const float wl = c == 0 ? .2126f : c == 1 ? .7152f : .0722f, wo = bil(po, x + dx, y + dy, c), wi = bil(pi, x + dx, y + dy, c), o = cl1(co[i + c]), in_ = cl1(ci[i + c]);
+                    r.o += fabsf(o - wo); r.i += fabsf(in_ - wi); lo += wl * o; lpo += wl * wo; li += wl * in_; lpi += wl * wi; }
+                const float d = (lo - lpo) - (li - lpi); r.j += d > 3 / 255.f; r.v += fabsf(d) > 2 / 255.f; r.n++; }
+            r.o /= 3.0 * r.n; r.i /= 3.0 * r.n; return r; };
+        auto report = [&](const char* tag, const Fr& t, int nf, UINT w, UINT h) {
+            printf("%s %ux%u (model %ux%u): inst out %.5f in %.5f excess %+.5f (x%.2f) | white jumps %.1f/frame (%.3f%% of px), visible flicker %.3f%% of px, over %d frames\n", tag, w, h, MW, MH, t.o / nf, t.i / nf, (t.o - t.i) / nf,
+                   t.i > 0 ? t.o / t.i : 0, (double)t.j / nf, 100.0 * t.j / std::max<size_t>(t.n, 1), 100.0 * t.v / std::max<size_t>(t.n, 1), nf); };
+        fmv = tex(D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON, DXGI_FORMAT_R16G16_FLOAT); fdp = tex(D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON, DXGI_FORMAT_R32_FLOAT);
+        fmu = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ); fdu = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ);
+        if (!fmv || !fdp || !fmu || !fdu) { puts("FAIL guide resources"); return 1; } fmu->Map(0, nullptr, (void**)&mvp); fdu->Map(0, nullptr, (void**)&dpp);
+        std::vector<float> fin((size_t)W * H * 3), fout(fin.size()), pin(fin.size()), pout(fin.size()), mi((size_t)MW * MH * 3), mo(mi.size()), pmi(mi.size()), pmo(mi.size());
+        Fr tot, rtot; int nf = 0;
         for (int k = 0; k < frames; k++) {
-            const float sx = k * 0.37f;   // frame px drift per frame
-            for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) {
-                float fx = x + sx, t = 0.85f + 0.15f * sinf(fx * 2.3f) * sinf(y * 1.9f);
-                for (int c = 0; c < 3; c++) fin[((size_t)y * W + x) * 3 + c] = std::max(0.f, bs((fx + 0.5f) * MW / W - 0.5f, (y + 0.5f) * MH / H - 0.5f, c)) * t; }
-            for (int i = 0; i < ns; i++) { int x = (int)((i * 7919u) % W + sx) % W, y = (int)((i * 104729u) % H); for (int c = 0; c < 3; c++) fin[((size_t)y * W + x) * 3 + c] = sv; }
-            for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { uint16_t h4[4]; float* p = &fin[((size_t)y * W + x) * 3]; for (int c = 0; c < 3; c++) h4[c] = f2h(p[c]); h4[3] = f2h(1.f);
-                if (r11) { uint32_t v; pack_r11g11b10(h4, &v); memcpy(upp + (size_t)y * pitch + x * 4, &v, 4); unpack_r11g11b10(v, h4); for (int c = 0; c < 3; c++) p[c] = (float)h2f(h4[c]); }
-                else memcpy(upp + (size_t)y * pitch + x * 8, h4, 8); }
-            int r = frame(k, true, &ms); if (r == -100) { printf("FAIL frame %d: GPU wait timed out\n", k); return 7; } if (r != 1) { printf("frame %d: evaluate returned %d\n", k, r); continue; }
-            size_t white = 0, jump = 0; double mx = 0;
+            gen(fin, W, H, k); float a[2], b[2]; shift(k, a); shift(k - 1, b); const uint16_t hv[2] = { f2h((a[0] - b[0]) / W), f2h((a[1] - b[1]) / H) }; const float dv = 0.1f;
+            for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { memcpy(mvp + (size_t)y * gpitch + x * 4, hv, 4); memcpy(dpp + (size_t)y * gpitch + x * 4, &dv, 4);
+                uint16_t h4[4]; float* p = &fin[((size_t)y * W + x) * 3]; for (int c = 0; c < 3; c++) h4[c] = f2h(p[c]); h4[3] = f2h(1.f);
+                if (r11) { uint32_t v; pack_r11g11b10(h4, &v); memcpy(upp + (size_t)y * pitch + x * 4, &v, 4); unpack_r11g11b10(v, h4); }
+                else memcpy(upp + (size_t)y * pitch + x * 8, h4, 8);
+                for (int c = 0; c < 3; c++) p[c] = (float)h2f(h4[c]); }   // what the network really gets
+            int r = frame(k, true, &ms); if (r == -100) { printf("FAIL frame %d: GPU wait timed out\n", k); return 7; } if (r != 1) { printf("FAIL frame %d: evaluate returned %d\n", k, r); return 7; }
             for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { uint16_t o[4]; if (r11) unpack_r11g11b10(*(uint32_t*)(rbp + (size_t)y * pitch + x * 4), o); else memcpy(o, rbp + (size_t)y * opitch + x * 8, 8);
-                size_t i = ((size_t)y * W + x) * 3; float mi = 0, mo = 0, mp = 0;
-                for (int c = 0; c < 3; c++) { fout[i + c] = (float)h2f(o[c]); mi = std::max(mi, fin[i + c]); mo = std::max(mo, fout[i + c]); mp = std::max(mp, prev[i + c]); }
-                float d = mo - mi; mx = std::max(mx, (double)d);
-                if (d > 0.25f + 0.5f * mi) { white++; if (k > 0 && mo > mp + 0.25f + 0.5f * mp) jump++; } }
-            std::swap(prev, fout); if (k > 0) { tw += white; tj += jump; tmax = std::max(tmax, mx); }
-            if (k < 3 || k % 10 == 0) printf("frame %d: white %zu, white+jump %zu, max (out - in) %.3f\n", k, white, jump, mx);
-            if (getenv("NR_TEST_DUMP") && k == atoi(getenv("NR_TEST_DUMP"))) { FILE* df = fopen(getenv("NR_TEST_DUMPF") ? getenv("NR_TEST_DUMPF") : "flicker_dump.bin", "wb"); fwrite(fin.data(), 4, fin.size(), df); fwrite(prev.data(), 4, prev.size(), df); fclose(df); } }
-        printf("FLICKER %ux%u model %ux%u speck %.0f: white %zu, white+jump %zu over %d frames, max (out - in) %.3f\n", W, H, MW, MH, sv, tw, tj, frames - 1, tmax);
+                for (int c = 0; c < 3; c++) { double v = h2f(o[c]); fout[((size_t)y * W + x) * 3 + c] = v == v ? (float)v : 0.f; } }
+            if (doRef) { gen(mi, MW, MH, k); for (size_t i = 0; i < (size_t)MW * MH; i++) { for (int c = 0; c < 3; c++) { in[i * 4 + c] = f2h(std::min(std::max(mi[i * 3 + c], 0.f), 1.f)); mi[i * 3 + c] = (float)h2f(in[i * 4 + c]); } in[i * 4 + 3] = f2h(1.f); }
+                float gms; if (rrun(ref, in.data(), refo.data(), &gms)) { puts("FAIL reference nr_run"); return 6; }
+                for (size_t i = 0; i < (size_t)MW * MH; i++) for (int c = 0; c < 3; c++) { uint16_t v = refo[i * 4 + c]; mo[i * 3 + c] = (v & 0x7C00) == 0x7C00 ? 0.f : (float)h2f(v); }
+                if (dumpDir) { char fn[1024]; for (int q = 0; q < 2; q++) { snprintf(fn, sizeof fn, "%s\\f%03d_%s.bin", dumpDir, k, q ? "out" : "in"); FILE* df = fopen(fn, "wb"); if (df) { fwrite(q ? mo.data() : mi.data(), 4, mi.size(), df); fclose(df); } } } }
+            if (k > 0) { Fr e = measure(fin, fout, pin, pout, W, H, k); tot.o += e.o; tot.i += e.i; tot.j += e.j; tot.v += e.v; tot.n += e.n; nf++; Fr er;
+                if (doRef) { er = measure(mi, mo, pmi, pmo, MW, MH, k); rtot.o += er.o; rtot.i += er.i; rtot.j += er.j; rtot.v += er.v; rtot.n += er.n; }
+                if (k < 4 || k % 10 == 0) printf("frame %d: inst out %.5f in %.5f, white jumps %zu%s\n", k, e.o, e.i, e.j, doRef ? (std::string(" | network alone: inst out ") + std::to_string(er.o) + " in " + std::to_string(er.i) + ", jumps " + std::to_string(er.j)).c_str() : ""); }
+            std::swap(fin, pin); std::swap(fout, pout); std::swap(mi, pmi); std::swap(mo, pmo); }
+        report("FLICKER frame", tot, nf, W, H); if (doRef) report("FLICKER network-alone", rtot, nf, MW, MH);
         release(f); return 0;
     }
     // baseline: the same list without evaluate
