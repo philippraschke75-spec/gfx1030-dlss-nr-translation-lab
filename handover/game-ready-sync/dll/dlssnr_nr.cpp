@@ -78,7 +78,7 @@ static void loadSettings() {
     g_nrEvery = (int)GetPrivateProfileIntA("nr", "nr_every", 1, narrow(ini).c_str()); g_nrEvery = g_nrEvery < 1 ? 1 : g_nrEvery > 8 ? 8 : g_nrEvery;
     GetPrivateProfileStringA("nr", "mv_gate_lo", "0.05", b, sizeof b, narrow(ini).c_str()); g_mvLo = (float)atof(b);
     GetPrivateProfileStringA("nr", "mv_gate_hi", "0.25", b, sizeof b, narrow(ini).c_str()); g_mvHi = (float)atof(b);
-    g_hist = (int)GetPrivateProfileIntA("nr", "history", 0, narrow(ini).c_str());
+    g_hist = (int)GetPrivateProfileIntA("nr", "history", 0, narrow(ini).c_str()); g_hist = g_hist < 0 ? 0 : g_hist > 2 ? 2 : g_hist;   // 1 = history into pre- and post-block, 2 = post-block lerp only (runtime hist_valid)
     GetPrivateProfileStringA("nr", "history_gate_lo", "0.08", b, sizeof b, narrow(ini).c_str()); g_hLo = (float)atof(b);
     GetPrivateProfileStringA("nr", "history_gate_hi", "0.25", b, sizeof b, narrow(ini).c_str()); g_hHi = (float)atof(b);
     g_maxInflight = (int)GetPrivateProfileIntA("nr", "max_inflight", g_fg ? 1 : 3, narrow(ini).c_str()); g_maxInflight = g_maxInflight < 1 ? 1 : g_maxInflight > 8 ? 8 : g_maxInflight;
@@ -105,8 +105,8 @@ typedef int (*P_intensity)(nr_ctx*, float);
 static P_create p_create; static P_run p_run; static P_destroy p_destroy; static P_intensity p_intensity;
 typedef int (*P_extOpen)(nr_ctx*, void*, unsigned long long, unsigned long long, unsigned long long, unsigned long long, void*, unsigned long long, unsigned long long, char*, int);
 typedef int (*P_extEnqueue)(nr_ctx*, unsigned, int);
-typedef int (*P_extHist)(nr_ctx*, unsigned long long, int*, int*, int*);
-static P_extOpen p_extOpen; static P_extEnqueue p_extEnqueue; static P_extHist p_extHist;   // p_extHist: absent in an old runtime -> history off   // absent in an old nr_runtime.dll -> async path
+typedef int (*P_extHist)(nr_ctx*, unsigned long long, unsigned long long); typedef int (*P_histLayout)(nr_ctx*, unsigned*, unsigned*); typedef int (*P_extEnqueue2)(nr_ctx*, unsigned, int, int);
+static P_extOpen p_extOpen; static P_extEnqueue p_extEnqueue; static P_extHist p_extHist; static P_histLayout p_histLayout; static P_extEnqueue2 p_extEnqueue2;   // p_extHist: absent in an old runtime -> history off   // absent in an old nr_runtime.dll -> async path
 static bool loadRuntime() {
     if (p_create) return true;
     std::wstring p = g_dir + L"nr_runtime.dll";
@@ -114,7 +114,7 @@ static bool loadRuntime() {
     if (!m) { seterr("cannot load nr_runtime.dll (error %lu) - is the HIP runtime (amdhip64_*.dll) on PATH or beside it?", GetLastError()); return false; }
     p_create = (P_create)GetProcAddress(m, "nr_create"); p_run = (P_run)GetProcAddress(m, "nr_run"); p_destroy = (P_destroy)GetProcAddress(m, "nr_destroy");
     if (!p_create || !p_run || !p_destroy) { p_create = nullptr; seterr("nr_runtime.dll lacks nr_create/nr_run/nr_destroy"); return false; }
-    p_extOpen = (P_extOpen)GetProcAddress(m, "nr_ext_open"); p_extEnqueue = (P_extEnqueue)GetProcAddress(m, "nr_ext_enqueue"); p_extHist = (P_extHist)GetProcAddress(m, "nr_ext_history");
+    p_extOpen = (P_extOpen)GetProcAddress(m, "nr_ext_open"); p_extEnqueue = (P_extEnqueue)GetProcAddress(m, "nr_ext_enqueue"); p_extHist = (P_extHist)GetProcAddress(m, "nr_ext_history"); p_histLayout = (P_histLayout)GetProcAddress(m, "nr_hist_layout"); p_extEnqueue2 = (P_extEnqueue2)GetProcAddress(m, "nr_ext_enqueue2");
     p_intensity = (P_intensity)GetProcAddress(m, "nr_set_intensity");            // absent in an old nr_runtime.dll: the baked strength stays
     if (!p_intensity && curIntensity() >= 0.f) logf("nr_runtime.dll has no nr_set_intensity (old runtime): intensity is ignored");
     return true;
@@ -165,7 +165,7 @@ static const char* kSyncHlsl =
 "globallycoherent RWByteAddressBuffer st : register(u2);\n"
 "cbuffer C : register(b0) { uint W; uint H; uint seq; uint maxIt; uint outOff; uint flagOff; float gain; uint FWH; uint minSeq; float gLo; float gHi; uint gate; uint frame; uint maxAge;\n"
 "  uint mvOn; float mvSx; float mvSy; uint mWH; uint mBase; uint dWH; uint dBase; uint dFl; float mLo; float mHi;\n"
-"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; uint tmap; uint hp1; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
+"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; uint tmap; uint histOut; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
 "Texture2D<float4> mot : register(t1);\n"
 "Texture2D<float> dep : register(t2);\n"   // minSeq != 0: fg mode, reuse the edit captured from a frame >= minSeq;   // W,H model; FWH = frame W | H << 16
 "RWByteAddressBuffer ob : register(u3);\n"   // PACKED: frame-size R9G9B9E5 staging, copied into the output texture afterwards
@@ -267,7 +267,9 @@ static const char* kSyncHlsl =
 "    if (hMv) { uint2 mn = uint2(mWH & 0xFFFF, mWH >> 16); m = mot[uint2(mBase & 0xFFFF, mBase >> 16) + min((uint2)(uv * mn), mn - 1)].xy * float2(mvSx, mvSy) / float2(FW, FH); }\n"   // UV towards the previous frame
 "    float2 q = uv + m;\n"
 "    if (all(m == m) && all(abs(m) < 0.25) && all(q >= 0.0) && all(q <= 1.0)) {\n"   // off screen / NaN / absurd vector: current
-"      float4 h = stAt(q * float2(W, H), 256 + 2 * W * H * 8); float3 a = abs(h.rgb - cur);\n"
+"      float2 p = clamp(q * float2(W, H) - 0.5, 0.0, float2(W - 1, H - 1)); uint2 a0 = (uint2)p, b0 = min(a0 + 1, uint2(W - 1, H - 1)); float2 t = p - a0;\n"   // bilinear in the runtime's P_{t-1} (io+histOut, PW stride)
+"      float3 v00 = asfloat(io.Load3(histOut + (a0.y * PW + a0.x) * 12)), v10 = asfloat(io.Load3(histOut + (a0.y * PW + b0.x) * 12)), v01 = asfloat(io.Load3(histOut + (b0.y * PW + a0.x) * 12)), v11 = asfloat(io.Load3(histOut + (b0.y * PW + b0.x) * 12));\n"
+"      float4 h = float4(lerp(lerp(v00, v10, t.x), lerp(v01, v11, t.x), t.y), stAt(q * float2(W, H), 256 + 2 * W * H * 8).a); float3 a = abs(h.rgb - cur);\n"
 "      float w = 1.0 - smoothstep(hLo, hHi, max(a.r, max(a.g, a.b)));\n"   // colour disocclusion / wrong vector
 "      if (dFl & 1) { float dn = depAt(uv); w *= 1.0 - smoothstep(0.05, 0.2, abs(dn - h.a) / max(max(dn, h.a), 1e-6)); }\n"   // depth disocclusion (as mv reuse)
 "      res = lerp(cur, h.rgb, w); } }\n"
@@ -281,7 +283,8 @@ struct Sync {                                       // D3D12 side of the sync pa
     UINT64 ioAlloc = 0, ioSize = 0, sigAlloc = 0, sigSize = 0, outOff = 0, flagOff = 0;
     ID3D12RootSignature* rs = nullptr; ID3D12PipelineState *imp = nullptr, *spin = nullptr, *exp = nullptr, *cap = nullptr, *expPk = nullptr; ID3D12Resource* ob = nullptr; unsigned obW = 0, obH = 0; ID3D12DescriptorHeap* heap = nullptr; UINT incr = 0;
     unsigned seq = 0; unsigned busy = 0; unsigned ran = 0, rec = 0, reused = 0, minSeq = 1; unsigned frm = 0, frmOf[16] = {}, sinceNr = 0; bool warnedMv = false;
-    ID3D12PipelineState *hwp = nullptr, *hst = nullptr; UINT64 histOff = 0; int impMode = 1; unsigned padW = 0, padH = 0, lastNrFrm = 0xFFFFFFF0u; bool histOn = false;   // history=1   // fg: frame counter, frame of each in-flight seq (edit age)
+    ID3D12PipelineState *hwp = nullptr, *hst = nullptr; UINT64 histOff = 0, histOut = 0; int impMode = 0;   // impMode: ponytail: release data is import mode 0 (raw); the runtime does not report it yet
+    unsigned padW = 0, padH = 0, lastNrFrm = 0xFFFFFFF0u; bool histOn = false;   // history=1   // fg: frame counter, frame of each in-flight seq (edit age)
 };
 struct Feature {
     unsigned W = 0, H = 0, pitch = 0;
@@ -348,9 +351,9 @@ static void worker(Feature* F) {
             if (!p_extOpen || !p_extEnqueue) logf("sync: nr_runtime.dll has no nr_ext_* (old runtime) - async path");
             else if (p_extOpen(F->ctx, F->sy->hIo, F->sy->ioAlloc, F->sy->ioSize, F->sy->outOff, F->sy->flagOff, F->sy->hSig, F->sy->sigAlloc, F->sy->sigSize, err, sizeof err)) logf("sync: nr_ext_open failed (%s) - async path", err);
             else { if (p_intensity && curIntensity() >= 0.f && p_intensity(F->ctx, curIntensity()) == 0) logf("worker: intensity %.2f", curIntensity());
-                   if (g_hist) { int pw = 0, ph = 0, im = -1, r = p_extHist ? p_extHist(F->ctx, F->sy->histOff, &pw, &ph, &im) : -1;
-                       if (r || (UINT64)pw * ph * 12 > F->sy->ioSize - F->sy->histOff || (unsigned)pw < F->W || (unsigned)ph < F->H) logf("history: unavailable (%s, code %d) - history off", p_extHist ? "this data dir / runtime cannot take it" : "nr_runtime.dll has no nr_ext_history", r);
-                       else { F->sy->padW = pw; F->sy->padH = ph; F->sy->histOn = true; F->sy->impMode = im; logf("history: on (pre-block +0x40 <- io+%llu, %dx%d RGB32F, import mode %d, gate %.2f..%.2f)", F->sy->histOff, pw, ph, im, g_hLo, g_hHi); } }
+                   if (g_hist) { unsigned pw = 0, ph = 0; int r = p_extHist && p_histLayout && p_extEnqueue2 ? p_histLayout(F->ctx, &pw, &ph) : -1; if (!r) r = p_extHist(F->ctx, F->sy->histOff, F->sy->histOut);
+                       if (r || (UINT64)pw * ph * 12 > F->sy->histOut - F->sy->histOff || (unsigned)pw < F->W || (unsigned)ph < F->H) logf("history: unavailable (%s, code %d) - history off", p_extHist ? "this data dir / runtime cannot take it" : "nr_runtime.dll has no nr_ext_history", r);
+                       else { F->sy->padW = pw; F->sy->padH = ph; F->sy->histOn = true; logf("history: mode %d on (warped history io+%llu, runtime output io+%llu, %ux%u RGB32F, gate %.2f..%.2f)", g_hist, F->sy->histOff, F->sy->histOut, pw, ph, g_hLo, g_hHi); } }
                    logf("sync: D3D12<->HIP interop ready, same-frame NR (GPU wait bound %d ms, max %d frames in flight)", g_spinMs, g_maxInflight); F->state = S_SYNC; return; }   // the worker has nothing more to do
         }
         F->state = S_IDLE;
@@ -429,7 +432,7 @@ static Sync* makeSync(Feature* F) {
     auto* s = new Sync; ID3D12Device* d = F->dev;
     const UINT64 n = (UINT64)F->W * F->H * 8, a = (n + 65535) & ~65535ull;
     s->outOff = a; s->flagOff = 2 * a; s->ioSize = 2 * a + 65536; s->sigSize = 65536;
-    if (g_hist) { s->histOff = s->ioSize; s->ioSize += ((UINT64)((F->W + 127) & ~127u) * ((F->H + 127) & ~127u) * 12 + 65535) & ~65535ull; }   // + history slot (PAD_W x PAD_H RGB32F; PAD = 128-aligned, checked by nr_ext_history)
+    if (g_hist) { const UINT64 hb = ((UINT64)((F->W + 127) & ~127u) * ((F->H + 127) & ~127u) * 12 + 65535) & ~65535ull; s->histOff = s->ioSize; s->histOut = s->ioSize + hb; s->ioSize += 2 * hb; }   // + history slot (PAD_W x PAD_H RGB32F; PAD = 128-aligned, checked by nr_ext_history)
     s->io = sharedBuffer(d, s->ioSize, D3D12_HEAP_FLAG_SHARED, &s->ioAlloc); s->sig = sharedBuffer(d, s->sigSize, D3D12_HEAP_FLAG_SHARED, &s->sigAlloc); s->st = sharedBuffer(d, 256 + (g_hist ? 3 : 2) * n, D3D12_HEAP_FLAG_NONE, nullptr);   // status words | fg edit | its model input (half4, model size each)
     if (!s->io || !s->sig || !s->st) { logf("sync: cannot create shared buffers"); freeSync(s); return nullptr; }
     if (FAILED(d->CreateSharedHandle(s->io, nullptr, GENERIC_ALL, nullptr, &s->hIo)) || FAILED(d->CreateSharedHandle(s->sig, nullptr, GENERIC_ALL, nullptr, &s->hSig))) { logf("sync: CreateSharedHandle failed"); freeSync(s); return nullptr; }
@@ -568,10 +571,10 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             if (FAILED(cmd->QueryInterface(IID_PPV_ARGS(&c2)))) { if (!s->busy++) logf("sync: host list has no WriteBufferImmediate (ID3D12GraphicsCommandList2) - native frame"); return passThrough(cmd, color, out, w, h); }
             c2->Release();                                          // the host holds the list; we only need the interface for this call
             if (reset == 1) s->minSeq = s->seq + 1;                 // fg: no edit from before a camera cut is reused
-            const unsigned seq = s->seq + 1; ++s->frm;
+            const unsigned seq = s->seq + 1; ++s->frm; const bool histOk = s->histOn && reset != 1 && s->lastNrFrm + 1 == s->frm;   // history mode 1/2 needs the previous frame's NR output
             const bool reuseOn = g_fg || g_mv || g_nrEvery > 1;   // cap the edit on NR frames, reuse it on the others
             const bool skip = g_nrEvery > 1 && reset != 1 && s->sinceNr + 1 < (unsigned)g_nrEvery && (int)(s->seq - s->minSeq) >= 0;   // nr_every: reuse frame (an edit since the last reset exists)
-            int q = skip ? 1 : p_extEnqueue(F->ctx, seq, g_maxInflight);   // HIP: wait flag_in >= seq, run, flag_out = seq (queued now, runs when the list below executes)
+            int q = skip ? 1 : (s->histOn ? p_extEnqueue2(F->ctx, seq, g_maxInflight, histOk ? g_hist : 0) : p_extEnqueue(F->ctx, seq, g_maxInflight));   // HIP: wait flag_in >= seq, run, flag_out = seq (queued now, runs when the list below executes)
             if (q < 0) { seterr("nr_ext_enqueue failed (%d)", q); F->state = S_FAILED; return 0; }
             s->sinceNr = q == 0 ? 0 : s->sinceNr + 1;
             if (q != 0 && !g_fg && !skip) { if (s->busy++ < 5 || s->busy % 100 == 0) logf("sync: frame not queued (HIP still busy with older frames, %u so far) - native frame", s->busy); return passThrough(cmd, color, out, w, h); }
@@ -596,7 +599,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             D3D12_UNORDERED_ACCESS_VIEW_DESC uv = {}; uv.Format = e5 ? DXGI_FORMAT_R16G16B16A16_FLOAT : od.Format; uv.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D; F->dev->CreateUnorderedAccessView(e5 ? nullptr : out, nullptr, &uv, at(3));   // e5: null UAV, output goes through ob
             UINT cb[kCb] = { F->W, F->H, seq, (UINT)(g_fg ? g_fgWaitMs : g_spinMs) * 6000u /* ~0.16 us per poll on a 6900 XT */, (UINT)s->outOff, (UINT)s->flagOff, 0, w | (h << 16), reuseOn ? s->minSeq : 0u, 0, 0, (UINT)g_gate, s->frm,
                              (UINT)(g_fg ? (std::max)(g_fgMaxAge, g_nrEvery - 1) : g_nrEvery - 1), (UINT)mvOn, 0, 0, mW | (mH << 16), mBx | (mBy << 16), dW | (dH << 16), dBx | (dBy << 16), (UINT)dOn | (depthInv ? 2u : 0u), 0, 0,
-                             (UINT)s->histOff, s->padW | (s->padH << 16), (UINT)(s->histOn && reset != 1 && s->lastNrFrm + 1 == s->frm), (UINT)hMv, 0, 0, (UINT)(s->impMode != 0), 0 };
+                             (UINT)s->histOff, s->padW | (s->padH << 16), (UINT)histOk, (UINT)hMv, 0, 0, (UINT)(s->impMode != 0), (UINT)s->histOut };
             float gain = g_gain; memcpy(&cb[6], &gain, 4); memcpy(&cb[9], &g_gateLo, 4); memcpy(&cb[10], &g_gateHi, 4);   // gLo, gHi
             memcpy(&cb[15], &mvSx, 4); memcpy(&cb[16], &mvSy, 4); memcpy(&cb[22], &g_mvLo, 4); memcpy(&cb[23], &g_mvHi, 4); memcpy(&cb[28], &g_hLo, 4); memcpy(&cb[29], &g_hHi, 4);
             ID3D12DescriptorHeap* hp[] = { s->heap }; cmd->SetDescriptorHeaps(1, hp); cmd->SetComputeRootSignature(s->rs);
