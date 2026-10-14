@@ -67,6 +67,12 @@ NR_API int nr_run2(nr_ctx*, const void* in, void* out, float* gpu_ms, int hist_v
 // Call after nr_ext_open. Returns 0 ok, 1 not open, 2 bad offsets.
 NR_API int nr_ext_history(nr_ctx*, unsigned long long hist_in_off, unsigned long long hist_out_off);
 NR_API int nr_ext_enqueue2(nr_ctx*, unsigned seq, int max_inflight, int hist_valid);
+// Split jobs (ABI v3, additive): part 1 = dispatches [0, k) after input + history, part 2 = [k, n) + history out + output; flag_out = seq after each
+// part. Part 2 waits for its own flag_in too, so the D3D12 side places each half in a frame of its own. part 0 = whole frame (= enqueue2).
+// nr_ext_split must be called first (once, before any enqueue): *k_full / *k_skip > 0 fix the split point, <= 0 measure it (half the GPU time;
+// k_skip for frames that skip dispatches with vit_every > 1). ms (nullable, 4 floats): measured part 1 / part 2 ms for full and skipping frames.
+NR_API int nr_ext_split(nr_ctx*, int* k_full, int* k_skip, float* ms);
+NR_API int nr_ext_enqueue3(nr_ctx*, unsigned seq, int max_inflight, int hist_valid, int part);
 // Debug only: run the first n dispatches of each frame (0 = all); read arena bytes (offsets as in meta.json placements).
 NR_API int nr_dbg_steps(nr_ctx*, int n);
 NR_API int nr_dbg_read(nr_ctx*, unsigned long long off, unsigned long long size, void* dst);

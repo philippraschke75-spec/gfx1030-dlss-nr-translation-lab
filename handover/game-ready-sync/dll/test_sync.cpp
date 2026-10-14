@@ -1,4 +1,4 @@
-// test_sync <color.bin RGBA16F WxH> <dll dir> [frames]
+﻿// test_sync <color.bin RGBA16F WxH> <dll dir> [frames]
 // Plays the host for the sync path: one D3D12 direct queue; per frame ONE command list = upload this frame's colour ->
 // evaluate_v2 -> copy `output` to readback (the consumer sits in the same list, after evaluate, as in the game).
 // Every frame gets a different input (the base image shifted by 13 px per frame), so a stale or skipped result cannot match.
@@ -112,11 +112,11 @@ int main(int argc, char** argv) {
     auto makeFrame = [&](int k) {   // shifted base image -> texture format bytes in upload, and the exact half4 the network sees in `in`
         const int sx = (int)(((long long)k * DX % MW + MW) % MW), sy = (int)(((long long)k * DY % MH + MH) % MH);
         for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) {
-            const UINT bx = x / UP, by = y / UP; const bool ob = inObj(k, bx, by);
+            const UINT bx = x * MW / W, by = y * MH / H; const bool ob = inObj(k, bx, by);   // frame -> model-size source (any frame size)
             const uint16_t* s = OBJ ? (ob ? &base[((size_t)(by - oy + MH / 2) * MW + (bx - objX(k) + MW / 2)) * 4] : &base[((size_t)by * MW + bx) * 4])
                                     : &base[((size_t)((by + sy) % MH) * MW + (bx + sx) % MW) * 4];
-            { float mv[2] = { OBJ ? (ob ? (float)DX : 0.f) : (float)DX, OBJ ? 0.f : (float)DY }; uint16_t hv[2] = { f2h(mv[0] / W), f2h(mv[1] / H) }; memcpy(mvp + (size_t)y * gpitch + x * 4, hv, 4);
-              float dv = OBJ && ob ? 0.5f : 0.1f; memcpy(dpp + (size_t)y * gpitch + x * 4, &dv, 4); } uint16_t* d = &in[((size_t)(y / UP) * MW + x / UP) * 4];
+            { float mv[2] = { OBJ ? (ob ? (float)DX : 0.f) : (float)DX, OBJ ? 0.f : (float)DY }; uint16_t hv[2] = { f2h(mv[0] / MW), f2h(mv[1] / MH) }; memcpy(mvp + (size_t)y * gpitch + x * 4, hv, 4);
+              float dv = OBJ && ob ? 0.5f : 0.1f; memcpy(dpp + (size_t)y * gpitch + x * 4, &dv, 4); } uint16_t* d = &in[((size_t)by * MW + bx) * 4];
             if (r11) { uint32_t v; pack_r11g11b10(s, &v); memcpy(upp + (size_t)y * pitch + x * 4, &v, 4); unpack_r11g11b10(v, d); }
             else if (e5) { uint32_t v = pk5(s); memcpy(upp + (size_t)y * pitch + x * 4, &v, 4); up5(v, d); }
             else if (NOISE > 0) { uint16_t t[4]; for (int c = 0; c < 4; c++) { uint32_t hsh = (uint32_t)(k * 73856093) ^ (x * 19349663u) ^ (y * 83492791u) ^ (c * 2654435761u); hsh ^= hsh >> 13; hsh *= 0x5bd1e995u; hsh ^= hsh >> 15;
@@ -218,7 +218,8 @@ int main(int argc, char** argv) {
             if (OBJ) printf("ghost object region (object now or one frame ago): %.5f (live %.5f)\n", cr ? er / cr : 0, cr ? erl / cr : 0);
         }
         std::vector<double> d; for (size_t i = 10; i < done.size(); i++) d.push_back(done[i] - done[i - 1]);   // skip warm-up
-        double s = 0, s2 = 0; for (double x : d) { s += x; s2 += x * x; } double av = s / d.size(), sd = sqrt(std::max(0.0, s2 / d.size() - av * av)); std::sort(d.begin(), d.end());
+        double s = 0, s2 = 0, oe[2] = {}; for (size_t i = 0; i < d.size(); i++) { s += d[i]; s2 += d[i] * d[i]; oe[(i + 11) & 1] += d[i]; } double av = s / d.size(), sd = sqrt(std::max(0.0, s2 / d.size() - av * av));
+        printf("pace odd/even: frame time odd %.2f even %.2f |diff| %.2f ms\n", oe[1] / (d.size() / 2), oe[0] / ((d.size() + 1) / 2), fabs(oe[1] / (d.size() / 2) - oe[0] / ((d.size() + 1) / 2))); std::sort(d.begin(), d.end());
         unsigned n1, b1, r1; stats(f, &n1, &b1, &r1);
         printf("pace (gpu load %.1f ms) ", gms);
         printf("pace (cpu %.1f ms/frame, %d frames): frame time avg %.2f ms (%.1f fps) sd %.2f p50 %.2f p95 %.2f p99 %.2f max %.2f | NR %u, reused %u, native %u\n",
@@ -319,7 +320,8 @@ int main(int argc, char** argv) {
             for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { uint16_t o[4]; if (r11) unpack_r11g11b10(*(uint32_t*)(rbp + (size_t)y * pitch + x * 4), o); else memcpy(o, rbp + (size_t)y * opitch + x * 8, 8);
                 for (int c = 0; c < 3; c++) { double v = h2f(o[c]); fout[((size_t)y * W + x) * 3 + c] = v == v ? (float)v : 0.f; } }
             { double e = 0; for (size_t i = 0; i < fin.size(); i += 3) for (int c = 0; c < 3; c++) e += (c == 0 ? .2126 : c == 1 ? .7152 : .0722) * (std::min(std::max(fout[i + c], 0.f), 1.f) - std::min(std::max(fin[i + c], 0.f), 1.f));
-              for (float v : fout) { uint32_t b; memcpy(&b, &v, 4); hsh = (hsh ^ b) * 1099511628211ull; }   // output hash over all frames (bit-exactness between builds)
+              uint64_t fh = 1469598103934665603ull; for (float v : fout) { uint32_t b; memcpy(&b, &v, 4); hsh = (hsh ^ b) * 1099511628211ull; fh = (fh ^ b) * 1099511628211ull; }   // output hash over all frames (bit-exactness between builds)
+              if (k >= frames - 4) printf("FHASH %d %016llx\n", k, (unsigned long long)fh);   // per frame (static sequences: split vs non-split once settled)
               if (k > 0) pulse[k & 1] += e / (fin.size() / 3), npulse[k & 1]++; }   // odd/even pulsing: mean luma edit (out - in, display) per frame parity
             if (doRef) { gen(mi, MW, MH, k); for (size_t i = 0; i < (size_t)MW * MH; i++) { for (int c = 0; c < 3; c++) { in[i * 4 + c] = f2h(std::min(std::max(mi[i * 3 + c], 0.f), 1.f)); mi[i * 3 + c] = (float)h2f(in[i * 4 + c]); } in[i * 4 + 3] = f2h(1.f); }
                 float gms; if (rrun(ref, in.data(), refo.data(), &gms)) { puts("FAIL reference nr_run"); return 6; }
