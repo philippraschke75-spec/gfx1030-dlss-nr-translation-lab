@@ -258,13 +258,21 @@ static const char* kSyncHlsl =
 "  if (ok == 0) return; uint2 r = io.Load2(outOff + (id.y * W + id.x) * 8);\n"
 "  float3 p = Pf(float3(san(f16tof32(r.x & 0xFFFF)), san(f16tof32(r.x >> 16)), san(f16tof32(r.y & 0xFFFF))));\n"
 "  st.Store2(256 + 2 * W * H * 8 + (id.y * W + id.x) * 8, uint2(pk(p.r, p.g), pk(p.b, depAt((id.xy + 0.5) / float2(W, H))))); }\n"
-"[numthreads(8,8,1)] void hwp(uint3 id : SV_DispatchThreadID) {\n"
+"float2 accAt(float2 q, uint f) {\n"   // nearest fetch of frame f's accumulated uv offset to the last NR frame (st, ping-pong by frame parity)
+"  uint2 p = (uint2)clamp(q * float2(W, H), 0.0, float2(W - 1, H - 1)); return asfloat(st.Load2(256 + (3 + (f & 1)) * W * H * 8 + (p.y * W + p.x) * 8)); }\n"
+"[numthreads(8,8,1)] void acc(uint3 id : SV_DispatchThreadID) {\n"   // in-between frame: acc_f(x) = m_f(x) + acc_{f-1}(x + m_f(x)) (acc of the NR frame itself = 0); histOk = 1 when f-1 was the NR frame
+"  if (id.x >= W || id.y >= H) return; uint FW = FWH & 0xFFFF, FH = FWH >> 16; float2 uv = (id.xy + 0.5) / float2(W, H), m = 0;\n"
+"  if (hMv) { uint2 mn = uint2(mWH & 0xFFFF, mWH >> 16); m = mot[uint2(mBase & 0xFFFF, mBase >> 16) + min((uint2)(uv * mn), mn - 1)].xy * float2(mvSx, mvSy) / float2(FW, FH); }\n"
+"  if (histOk > 1) m += accAt(uv + m, frame - 1);\n"
+"  st.Store2(256 + (3 + (frame & 1)) * W * H * 8 + (id.y * W + id.x) * 8, asuint(m)); }\n"
+"void hwpB(uint3 id, uint age) {\n"
 "  uint PW = hPWH & 0xFFFF, PH = hPWH >> 16; if (id.x >= PW || id.y >= PH) return; uint o = histOff + (id.y * PW + id.x) * 12;\n"
 "  if (id.x >= W || id.y >= H) { io.Store3(o, uint3(0, 0, 0)); return; }\n"   // padding
 "  uint2 r = io.Load2((id.y * W + id.x) * 8); float3 cur = Pf(float3(f16tof32(r.x & 0xFFFF), f16tof32(r.x >> 16), f16tof32(r.y & 0xFFFF))), res = cur;\n"
-"  if (histOk != 0 && st.Load(12) == frame - 1) {\n"
+"  if (histOk != 0 && st.Load(12) == frame - age) {\n"
 "    uint FW = FWH & 0xFFFF, FH = FWH >> 16; float2 uv = (id.xy + 0.5) / float2(W, H), m = 0;\n"
 "    if (hMv) { uint2 mn = uint2(mWH & 0xFFFF, mWH >> 16); m = mot[uint2(mBase & 0xFFFF, mBase >> 16) + min((uint2)(uv * mn), mn - 1)].xy * float2(mvSx, mvSy) / float2(FW, FH); }\n"   // UV towards the previous frame
+"    if (age > 1) m += accAt(uv + m, frame - 1);\n"   // older NR output (nr_every > 1): + the offsets accumulated over the in-between frames
 "    float2 q = uv + m;\n"
 "    if (all(m == m) && all(abs(m) < 0.25) && all(q >= 0.0) && all(q <= 1.0)) {\n"   // off screen / NaN / absurd vector: current
 "      float2 p = clamp(q * float2(W, H) - 0.5, 0.0, float2(W - 1, H - 1)); uint2 a0 = (uint2)p, b0 = min(a0 + 1, uint2(W - 1, H - 1)); float2 t = p - a0;\n"   // bilinear in the runtime's P_{t-1} (io+histOut, PW stride)
@@ -273,7 +281,9 @@ static const char* kSyncHlsl =
 "      float w = 1.0 - smoothstep(hLo, hHi, max(a.r, max(a.g, a.b)));\n"   // colour disocclusion / wrong vector
 "      if (dFl & 1) { float dn = depAt(uv); w *= 1.0 - smoothstep(0.05, 0.2, abs(dn - h.a) / max(max(dn, h.a), 1e-6)); }\n"   // depth disocclusion (as mv reuse)
 "      res = lerp(cur, h.rgb, w); } }\n"
-"  io.Store3(o, asuint(res)); }\n";
+"  io.Store3(o, asuint(res)); }\n"
+"[numthreads(8,8,1)] void hwp(uint3 id : SV_DispatchThreadID) { hwpB(id, 1); }\n"   // previous frame was NR (bit-exact to the one-frame history)
+"[numthreads(8,8,1)] void hwp2(uint3 id : SV_DispatchThreadID) { hwpB(id, histOk); }\n";   // older NR output (nr_every > 1): histOk = its age in frames
 static const int kSyncRing = 16, kCb = 32;                                     // descriptor pairs (colour SRV, output UAV) in flight
 
 // ---------------------------------------------------------------- feature
@@ -283,8 +293,8 @@ struct Sync {                                       // D3D12 side of the sync pa
     UINT64 ioAlloc = 0, ioSize = 0, sigAlloc = 0, sigSize = 0, outOff = 0, flagOff = 0;
     ID3D12RootSignature* rs = nullptr; ID3D12PipelineState *imp = nullptr, *spin = nullptr, *exp = nullptr, *cap = nullptr, *expPk = nullptr; ID3D12Resource* ob = nullptr; unsigned obW = 0, obH = 0; ID3D12DescriptorHeap* heap = nullptr; UINT incr = 0;
     unsigned seq = 0; unsigned busy = 0; unsigned ran = 0, rec = 0, reused = 0, minSeq = 1; unsigned frm = 0, frmOf[16] = {}, sinceNr = 0; bool warnedMv = false;
-    ID3D12PipelineState *hwp = nullptr, *hst = nullptr; UINT64 histOff = 0, histOut = 0; float impScale = 0;   // k_import of the data dir: 0 = mode 0 (raw), else its +0x2c scale (mode != 0 tonemaps)
-    unsigned padW = 0, padH = 0, lastNrFrm = 0xFFFFFFF0u; bool histOn = false;   // history=1   // fg: frame counter, frame of each in-flight seq (edit age)
+    ID3D12PipelineState *hwp = nullptr, *hst = nullptr, *acc = nullptr, *hwp2 = nullptr; UINT64 histOff = 0, histOut = 0; float impScale = 0;   // k_import of the data dir: 0 = mode 0 (raw), else its +0x2c scale (mode != 0 tonemaps)
+    unsigned padW = 0, padH = 0, lastNrFrm = 0xFFFFFFF0u, accFrm = 0xFFFFFFF0u; bool histOn = false;   // history=1   // fg: frame counter, frame of each in-flight seq (edit age)
 };
 struct Feature {
     unsigned W = 0, H = 0, pitch = 0;
@@ -415,7 +425,7 @@ static bool makeDelta(Feature* F) {
 
 static void freeSync(Sync* s) {
     if (!s) return;
-    for (IUnknown* u : std::initializer_list<IUnknown*>{s->io, s->sig, s->st, s->rs, s->imp, s->spin, s->exp, s->cap, s->expPk, s->ob, s->heap, s->hwp, s->hst}) if (u) u->Release();
+    for (IUnknown* u : std::initializer_list<IUnknown*>{s->io, s->sig, s->st, s->rs, s->imp, s->spin, s->exp, s->cap, s->expPk, s->ob, s->heap, s->hwp, s->hst, s->acc, s->hwp2}) if (u) u->Release();
     if (s->hIo) CloseHandle(s->hIo); if (s->hSig) CloseHandle(s->hSig); delete s;
 }
 static ID3D12Resource* sharedBuffer(ID3D12Device* d, UINT64 size, D3D12_HEAP_FLAGS hf, UINT64* alloc) {
@@ -434,7 +444,7 @@ static Sync* makeSync(Feature* F) {
     const UINT64 n = (UINT64)F->W * F->H * 8, a = (n + 65535) & ~65535ull;
     s->outOff = a; s->flagOff = 2 * a; s->ioSize = 2 * a + 65536; s->sigSize = 65536;
     if (g_hist) { const UINT64 hb = ((UINT64)((F->W + 127) & ~127u) * ((F->H + 127) & ~127u) * 12 + 65535) & ~65535ull; s->histOff = s->ioSize; s->histOut = s->ioSize + hb; s->ioSize += 2 * hb; }   // + history slot (PAD_W x PAD_H RGB32F; PAD = 128-aligned, checked by nr_ext_history)
-    s->io = sharedBuffer(d, s->ioSize, D3D12_HEAP_FLAG_SHARED, &s->ioAlloc); s->sig = sharedBuffer(d, s->sigSize, D3D12_HEAP_FLAG_SHARED, &s->sigAlloc); s->st = sharedBuffer(d, 256 + (g_hist ? 3 : 2) * n, D3D12_HEAP_FLAG_NONE, nullptr);   // status words | fg edit | its model input (half4, model size each)
+    s->io = sharedBuffer(d, s->ioSize, D3D12_HEAP_FLAG_SHARED, &s->ioAlloc); s->sig = sharedBuffer(d, s->sigSize, D3D12_HEAP_FLAG_SHARED, &s->sigAlloc); s->st = sharedBuffer(d, 256 + (g_hist ? 5 : 2) * n, D3D12_HEAP_FLAG_NONE, nullptr);   // status words | fg edit | its model input (half4, model size each)
     if (!s->io || !s->sig || !s->st) { logf("sync: cannot create shared buffers"); freeSync(s); return nullptr; }
     if (FAILED(d->CreateSharedHandle(s->io, nullptr, GENERIC_ALL, nullptr, &s->hIo)) || FAILED(d->CreateSharedHandle(s->sig, nullptr, GENERIC_ALL, nullptr, &s->hSig))) { logf("sync: CreateSharedHandle failed"); freeSync(s); return nullptr; }
     D3D12_DESCRIPTOR_RANGE rg[2] = {}; rg[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; rg[0].NumDescriptors = 3; rg[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; rg[1].NumDescriptors = 1; rg[1].OffsetInDescriptorsFromTableStart = 3;   // colour, motion, depth | output
@@ -444,8 +454,8 @@ static Sync* makeSync(Feature* F) {
     D3D12_ROOT_SIGNATURE_DESC rsd = {}; rsd.NumParameters = 5; rsd.pParameters = rp; ID3DBlob *sb = nullptr, *er = nullptr;
     if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sb, &er)) || FAILED(d->CreateRootSignature(0, sb->GetBufferPointer(), sb->GetBufferSize(), IID_PPV_ARGS(&s->rs)))) { logf("sync: root signature failed"); freeSync(s); return nullptr; }
     sb->Release();
-    ID3D12PipelineState** pso[7] = {&s->imp, &s->spin, &s->exp, &s->cap, &s->expPk, &s->hwp, &s->hst}; const char* ep[7] = {"imp", "spin", "exp", "cap", "exp", "hwp", "hst"};
-    for (int i = 0; i < (g_hist ? 7 : 5); i++) {
+    ID3D12PipelineState** pso[9] = {&s->imp, &s->spin, &s->exp, &s->cap, &s->expPk, &s->hwp, &s->hst, &s->acc, &s->hwp2}; const char* ep[9] = {"imp", "spin", "exp", "cap", "exp", "hwp", "hst", "acc", "hwp2"};
+    for (int i = 0; i < (g_hist ? 9 : 5); i++) {
         ID3DBlob* cs = nullptr; er = nullptr; const char* mac[6] = {}; int nm = 0;   // D3D_SHADER_MACRO[], null-terminated
         if (i == 4) { mac[nm++] = "PACKED"; mac[nm++] = "1"; }                     // expPk
         if (!g_ldrIn) { mac[nm++] = "HDR_IN"; mac[nm++] = "1"; }
@@ -580,7 +590,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             if (FAILED(cmd->QueryInterface(IID_PPV_ARGS(&c2)))) { if (!s->busy++) logf("sync: host list has no WriteBufferImmediate (ID3D12GraphicsCommandList2) - native frame"); return passThrough(cmd, color, out, w, h); }
             c2->Release();                                          // the host holds the list; we only need the interface for this call
             if (reset == 1) s->minSeq = s->seq + 1;                 // fg: no edit from before a camera cut is reused
-            const unsigned seq = s->seq + 1; ++s->frm; const bool histOk = s->histOn && reset != 1 && s->lastNrFrm + 1 == s->frm;   // history mode 1/2 needs the previous frame's NR output
+            const unsigned seq = s->seq + 1; ++s->frm; const unsigned age = s->frm - s->lastNrFrm; const unsigned histOk = s->histOn && reset != 1 && (age == 1 || (age <= 8 && s->accFrm + 1 == s->frm)) ? age : 0;   // frames since the last NR output; > 1 needs an unbroken offset chain (acc) over the in-between frames
             const bool reuseOn = g_fg || g_mv || g_nrEvery > 1;   // cap the edit on NR frames, reuse it on the others
             const bool skip = g_nrEvery > 1 && reset != 1 && s->sinceNr + 1 < (unsigned)g_nrEvery && (int)(s->seq - s->minSeq) >= 0;   // nr_every: reuse frame (an edit since the last reset exists)
             int q = skip ? 1 : (s->histOn ? p_extEnqueue2(F->ctx, seq, g_maxInflight, histOk ? g_hist : 0) : p_extEnqueue(F->ctx, seq, g_maxInflight));   // HIP: wait flag_in >= seq, run, flag_out = seq (queued now, runs when the list below executes)
@@ -624,9 +634,11 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             if (q != 0) {                                           // reuse frame: st[0] = 0 forces the reuse/native branch of exp
                 cb[3] = 0; cb[2] = s->seq + 1; cmd->SetComputeRoot32BitConstants(3, kCb, cb, 0);   // spin with 0 polls: flag < seq+1 -> st[0] = 0
                 cmd->SetPipelineState(s->spin); cmd->Dispatch(1, 1, 1); cmd->ResourceBarrier(1, &uav);
+                if (s->histOn && skip && histOk) {          // two+-frame history: accumulate this frame's vectors onto the offsets to the last NR frame
+                    cb[26] = histOk; cmd->SetComputeRoot32BitConstants(3, kCb, cb, 0); cmd->SetPipelineState(s->acc); cmd->Dispatch((F->W + 7) / 8, (F->H + 7) / 8, 1); cmd->ResourceBarrier(1, &uav); s->accFrm = s->frm; }
             } else {
                 cmd->SetPipelineState(s->imp); cmd->Dispatch((F->W + 7) / 8, (F->H + 7) / 8, 1); cmd->ResourceBarrier(1, &uav);
-                if (s->histOn) { cmd->SetPipelineState(s->hwp); cmd->Dispatch((s->padW + 7) / 8, (s->padH + 7) / 8, 1); cmd->ResourceBarrier(1, &uav); s->lastNrFrm = s->frm; }   // history slot for the network
+                if (s->histOn) { cmd->SetPipelineState(histOk > 1 ? s->hwp2 : s->hwp); cmd->Dispatch((s->padW + 7) / 8, (s->padH + 7) / 8, 1); cmd->ResourceBarrier(1, &uav); s->lastNrFrm = s->frm; }   // history slot for the network
                 auto tr = [&](D3D12_RESOURCE_STATES a, D3D12_RESOURCE_STATES b) { D3D12_RESOURCE_BARRIER t = {}; t.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION; t.Transition.pResource = s->sig; t.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES; t.Transition.StateBefore = a; t.Transition.StateAfter = b; cmd->ResourceBarrier(1, &t); };
                 tr(D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
                 D3D12_WRITEBUFFERIMMEDIATE_PARAMETER wp = { s->sig->GetGPUVirtualAddress(), seq }; D3D12_WRITEBUFFERIMMEDIATE_MODE wm = D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
