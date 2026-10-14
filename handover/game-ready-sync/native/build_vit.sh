@@ -1,5 +1,7 @@
 #!/bin/sh
-# builds native_vit.co (k_vit_expand_n, k_vit_contract_n, k_vit_qkv_n with the swizzled LDS layout) into $1
+# builds native_vit.co (k_vit_expand_n, k_vit_contract_n, k_vit_qkv_n with the swizzled LDS layout) into $1.
+# k_vit_contract_n now needs 512 threads: use the line in overrides_vit_ks.txt in place of the release contract line.
+#
 # (default: this dir) and reports registers / LDS / scratch
 R="/c/Program Files/AMD/ROCm/6.4"
 cd "$(dirname "$0")"; O="${1:-.}"
