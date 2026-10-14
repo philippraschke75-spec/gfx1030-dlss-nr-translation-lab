@@ -5,11 +5,14 @@
 //  W[k][n]  : 4tx+e -> (e>>1)*32 + 2tx + (e&1), ^ (((k>>1)&3)<<2)   write 4-way -> 1-way, read b128 2-way -> 1-way
 #include "nk_common.h"
 
+// thread index within a 256-thread GEMM group (k_vit_contract_n runs two groups, one per K half)
+#define LT ((int)(threadIdx.x & 255))
+
 struct WPiece { const uint8_t* src; size_t step; int wn[4], wk[4]; };
 
 template <int K, int INNER>
 __device__ __forceinline__ WPiece wpiece_std(const uint8_t* Wr, int n0) {
-  const int tid = threadIdx.x, q = tid & 31, ntl = tid >> 5 & 3, kgl = tid >> 7, nt = (n0 >> 4) + ntl;
+  const int tid = LT, q = tid & 31, ntl = tid >> 5 & 3, kgl = tid >> 7, nt = (n0 >> 4) + ntl;
   WPiece w;
   w.src = Wr + (size_t)(((nt / INNER) * (K / 32) + kgl) * INNER + nt % INNER) * 512 + q * 16;
   w.step = (size_t)2 * INNER * 512;
@@ -23,7 +26,7 @@ __device__ __forceinline__ WPiece wpiece_std(const uint8_t* Wr, int n0) {
 }
 
 __device__ __forceinline__ WPiece wpiece_qkv3(const uint8_t* rec, int which, int n0) {
-  const int tid = threadIdx.x, s = tid >> 6, rtl = s & 1, ktl = s >> 1, u = tid & 63;
+  const int tid = LT, s = tid >> 6, rtl = s & 1, ktl = s >> 1, u = tid & 63;
   const int tile = ((n0 >> 5) + rtl) | (ktl << 5);
   WPiece w;
   w.src = rec + 128 + (size_t)(3 * tile + which) * 1024 + u * 16;
@@ -37,13 +40,13 @@ __device__ __forceinline__ WPiece wpiece_qkv3(const uint8_t* rec, int which, int
   return w;
 }
 
-__device__ __forceinline__ int lin_tile(int tile0, int T) { const int t = tile0 + (threadIdx.x >> 6); return t < T ? t : -1; }
+__device__ __forceinline__ int lin_tile(int tile0, int T) { const int t = tile0 + (LT >> 6); return t < T ? t : -1; }
 __device__ __forceinline__ int swz(int k) { return ((k >> 1) & 3) << 2; }
 __device__ __forceinline__ int sA(int k, int c) { return k * 64 + (c ^ swz(k)); }
 __device__ __forceinline__ int sW(int k, int c) { return k * 64 + (((c & 2) * 16 + (c >> 2) * 2 + (c & 1)) ^ swz(k)); }
 
 __device__ __forceinline__ void mma16s(const uint2* As, const uint2* Ws, float acc[4][4]) {
-  const int ty = threadIdx.x >> 4, tx = threadIdx.x & 15;
+  const int ty = LT >> 4, tx = LT & 15;
 #pragma unroll 4
   for (int kd = 0; kd < 16; kd++) {
     const int ao = kd * 64 + ((ty * 4) ^ swz(kd)), wo = kd * 64 + ((tx * 2) ^ swz(kd));
@@ -58,10 +61,12 @@ __device__ __forceinline__ void mma16s(const uint2* As, const uint2* Ws, float a
   }
 }
 
+// chunks c0..c1-1 of the K/64 64-wide k chunks (default: all)
 template <int K>
-__device__ __forceinline__ void gemm64(const uint8_t* __restrict__ X, int atile, const WPiece& wp, float acc[4][4], uint2* lds) {
-  constexpr int NC = K / 64;
-  const int tid = threadIdx.x, tt = tid >> 6, sa = (tid >> 5) & 1, q = tid & 31;
+__device__ __forceinline__ void gemm64(const uint8_t* __restrict__ X, int atile, const WPiece& wp, float acc[4][4], uint2* lds,
+                                       int c0 = 0, int c1 = K / 64) {
+  const int NC = c1;
+  const int tid = LT, tt = tid >> 6, sa = (tid >> 5) & 1, q = tid & 31;
   auto loadA = [&](int c) -> uint4 {
     if (atile < 0) return make_uint4(0, 0, 0, 0);
     return *(const uint4*)(X + (size_t)atile * (K * 16) + sa * 512 + q * 16 + (size_t)c * 1024);
@@ -76,9 +81,9 @@ __device__ __forceinline__ void gemm64(const uint8_t* __restrict__ X, int atile,
   for (int i = 0; i < 4; i++)
 #pragma unroll
     for (int e = 0; e < 4; e++) acc[i][e] = 0.f;
-  uint4 ra = loadA(0);
-  uint4 rw = *(const uint4*)wp.src;
-  for (int c = 0; c < NC; c++) {
+  uint4 ra = loadA(c0);
+  uint4 rw = *(const uint4*)(wp.src + (size_t)c0 * wp.step);
+  for (int c = c0; c < NC; c++) {
     uint2* As = lds + (c & 1) * 2048;
     uint2* Ws = As + 1024;
     const uint32_t av[4] = {ra.x, ra.y, ra.z, ra.w}, wv[4] = {rw.x, rw.y, rw.z, rw.w};
@@ -120,12 +125,28 @@ extern "C" __global__ void __launch_bounds__(256) k_vit_expand_n(ExpandParams P)
   }
 }
 
+// 512 threads: group h = tid >> 8 runs K half h on its own 32 KB of LDS; group 1 hands its f32 sums to group 0
+// through LDS, which adds them (lo + hi) and runs the epilogue. Not bit-exact (one f32 reassociation per output),
+// but deterministic. Why: the 64x64-tile grid is only 3 x 16 = 48 workgroups on 80 CUs, one per CU, each a
+// 64-chunk serial chain; two groups per workgroup halve the chain and double the waves per CU.
 template <int K>
 __device__ __forceinline__ void vit_contract(const ContractParams& P, uint2* lds) {
-  const int tile0 = blockIdx.x * 4, n0 = blockIdx.y * 64, T = gridDim.x * 4;
-  float acc[4][4];
-  gemm64<K>(P.x, lin_tile(tile0, T), wpiece_std<K, 64>(P.w, n0), acc, lds);
-  const int ty = threadIdx.x >> 4, r = n0 + (threadIdx.x & 15) * 4;
+  const int tile0 = blockIdx.x * 4, n0 = blockIdx.y * 64, T = gridDim.x * 4, h = threadIdx.x >> 8, ns = blockDim.x >> 8;
+  float acc[4][4];   // ns = 1 (256-thread launch, the old override line): one group, all of K, bit-exact as before
+  gemm64<K>(P.x, lin_tile(tile0, T), wpiece_std<K, 64>(P.w, n0), acc, lds + h * 4096, h * (K / 64) / ns, (h + 1) * (K / 64) / ns);
+  if (ns > 1) {
+    __syncthreads();
+    float* red = (float*)lds;
+    if (h) {
+#pragma unroll
+      for (int j = 0; j < 16; j++) red[j * 256 + LT] = acc[j >> 2][j & 3];
+    }
+    __syncthreads();
+    if (h) return;
+#pragma unroll
+    for (int j = 0; j < 16; j++) acc[j >> 2][j & 3] = __fadd_rn(acc[j >> 2][j & 3], red[j * 256 + LT]);
+  }
+  const int ty = LT >> 4, r = n0 + (LT & 15) * 4;
   const _Float16* gain = (const _Float16*)(P.w + 1024 * K);
   float g[4];
 #pragma unroll
@@ -142,8 +163,8 @@ __device__ __forceinline__ void vit_contract(const ContractParams& P, uint2* lds
     *(uint32_t*)(P.out + off) = o;
   }
 }
-extern "C" __global__ void __launch_bounds__(256) k_vit_contract_n(ContractParams P) {
-  __shared__ uint2 lds[4096];
+extern "C" __global__ void __launch_bounds__(512) k_vit_contract_n(ContractParams P) {   // 512 threads (override)
+  __shared__ uint2 lds[8192];
   if (blockIdx.y >= 16) return;
   if (P.K == 4096) vit_contract<4096>(P, lds);
   else if (P.K == 1024) vit_contract<1024>(P, lds);

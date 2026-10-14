@@ -1,0 +1,1 @@
+_Z11k_contract212ConvParams1d|kernels\native_vit.co|k_vit_contract_n|=|16|=|512|424|0<-0:424
