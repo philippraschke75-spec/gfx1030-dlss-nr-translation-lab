@@ -307,7 +307,7 @@ int main(int argc, char** argv) {
         fmu = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ); fdu = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ);
         if (!fmv || !fdp || !fmu || !fdu) { puts("FAIL guide resources"); return 1; } fmu->Map(0, nullptr, (void**)&mvp); fdu->Map(0, nullptr, (void**)&dpp);
         std::vector<float> fin((size_t)W * H * 3), fout(fin.size()), pin(fin.size()), pout(fin.size()), mi((size_t)MW * MH * 3), mo(mi.size()), pmi(mi.size()), pmo(mi.size());
-        Fr tot, rtot; int nf = 0;
+        Fr tot, rtot; int nf = 0; double pulse[2] = {}; int npulse[2] = {}; uint64_t hsh = 1469598103934665603ull;
         for (int k = 0; k < frames; k++) {
             gen(fin, W, H, k); float a[2], b[2]; shift(k, a); shift(k - 1, b); const uint16_t hv[2] = { f2h((a[0] - b[0]) / W), f2h((a[1] - b[1]) / H) }; const float dv = 0.1f;
             for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { memcpy(mvp + (size_t)y * gpitch + x * 4, hv, 4); memcpy(dpp + (size_t)y * gpitch + x * 4, &dv, 4);
@@ -318,6 +318,9 @@ int main(int argc, char** argv) {
             int r = frame(k, true, &ms); if (r == -100) { printf("FAIL frame %d: GPU wait timed out\n", k); return 7; } if (r != 1) { printf("FAIL frame %d: evaluate returned %d\n", k, r); return 7; }
             for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { uint16_t o[4]; if (r11) unpack_r11g11b10(*(uint32_t*)(rbp + (size_t)y * pitch + x * 4), o); else memcpy(o, rbp + (size_t)y * opitch + x * 8, 8);
                 for (int c = 0; c < 3; c++) { double v = h2f(o[c]); fout[((size_t)y * W + x) * 3 + c] = v == v ? (float)v : 0.f; } }
+            { double e = 0; for (size_t i = 0; i < fin.size(); i += 3) for (int c = 0; c < 3; c++) e += (c == 0 ? .2126 : c == 1 ? .7152 : .0722) * (std::min(std::max(fout[i + c], 0.f), 1.f) - std::min(std::max(fin[i + c], 0.f), 1.f));
+              for (float v : fout) { uint32_t b; memcpy(&b, &v, 4); hsh = (hsh ^ b) * 1099511628211ull; }   // output hash over all frames (bit-exactness between builds)
+              if (k > 0) pulse[k & 1] += e / (fin.size() / 3), npulse[k & 1]++; }   // odd/even pulsing: mean luma edit (out - in, display) per frame parity
             if (doRef) { gen(mi, MW, MH, k); for (size_t i = 0; i < (size_t)MW * MH; i++) { for (int c = 0; c < 3; c++) { in[i * 4 + c] = f2h(std::min(std::max(mi[i * 3 + c], 0.f), 1.f)); mi[i * 3 + c] = (float)h2f(in[i * 4 + c]); } in[i * 4 + 3] = f2h(1.f); }
                 float gms; if (rrun(ref, in.data(), refo.data(), &gms)) { puts("FAIL reference nr_run"); return 6; }
                 for (size_t i = 0; i < (size_t)MW * MH; i++) for (int c = 0; c < 3; c++) { uint16_t v = refo[i * 4 + c]; mo[i * 3 + c] = (v & 0x7C00) == 0x7C00 ? 0.f : (float)h2f(v); }
@@ -326,6 +329,8 @@ int main(int argc, char** argv) {
                 if (doRef) { er = measure(mi, mo, pmi, pmo, MW, MH, k); rtot.o += er.o; rtot.i += er.i; rtot.j += er.j; rtot.v += er.v; rtot.n += er.n; }
                 if (k < 4 || k % 10 == 0) printf("frame %d: inst out %.5f in %.5f, white jumps %zu%s\n", k, e.o, e.i, e.j, doRef ? (std::string(" | network alone: inst out ") + std::to_string(er.o) + " in " + std::to_string(er.i) + ", jumps " + std::to_string(er.j)).c_str() : ""); }
             std::swap(fin, pin); std::swap(fout, pout); std::swap(mi, pmi); std::swap(mo, pmo); }
+        printf("OUTHASH %016llx\n", (unsigned long long)hsh);
+        printf("PULSE mean luma edit odd %+.5f even %+.5f |diff| %.5f\n", pulse[1] / std::max(npulse[1], 1), pulse[0] / std::max(npulse[0], 1), fabs(pulse[1] / std::max(npulse[1], 1) - pulse[0] / std::max(npulse[0], 1)));
         report("FLICKER frame", tot, nf, W, H); if (doRef) report("FLICKER network-alone", rtot, nf, MW, MH);
         release(f); return 0;
     }
