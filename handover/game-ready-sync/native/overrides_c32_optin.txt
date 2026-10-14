@@ -1,3 +1,5 @@
-# Opt-in and LOSSY. To use it, append this line to the data dir's overrides.txt and copy native_swin32.co (built by build_native.sh) to kernels\.
-# It saves ~1.8 ms of GPU time per frame at 1280x720, but the end-to-end output is only ~34 dB PSNR against the release kernels. Not enabled by default.
+# Native c32 (non-bit-exact). Append this line to the data dir's overrides.txt and copy native_swin32.co (built by build_native.sh) to kernels\.
+# After the q/k-normalise LDS race fix (2026-10-14), validated against the v0.2.3 skip data, shipped config (history=1, vit_every=2, reuse=bottleneck), flicker harness 2560x1440, 60 frames:
+#   960x540:  46.3 dB mean / 44.8 dB worst, pace 23.32 -> 22.38 ms, flicker x1.11 (same), white jumps 0.201% vs 0.228%
+#   1280x720: 47.3 dB mean / 46.2 dB worst, pace 31.99 -> 30.23 ms, flicker x1.08 (same), white jumps 0.207% vs 0.232%
 _Z10k_swin_varILi32ELb0EEv9VarParams|kernels\native_swin32.co|k_swin_c32|=|=|=|=|424|0<-0:424

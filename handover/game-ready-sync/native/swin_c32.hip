@@ -202,15 +202,20 @@ extern "C" __global__ __launch_bounds__(256) __attribute__((amdgpu_waves_per_eu(
       }
   }
   __syncthreads();
-  if (tid < 128) {   // L2-normalise q (with the head scale) and k
-    const int t = tid & 63, w = tid >> 6;
-    float v[32];
+  {   // L2-normalise q (with the head scale) and k. qn/kn alias qb/kbuf across waves: read all, barrier, then write.
+    const int t = tid & 63, w = (tid >> 6) & 1;
+    float v[32], sc = 0.f;
+    if (tid < 128) {
 #pragma unroll
-    for (int d = 0; d < 32; d++) v[d] = (w ? kbuf : qb)[d * 65 + t];
-    float sc = norm_scale(v);
-    if (w == 0) sc = __fmul_rn(sc, hsc[0]);
+      for (int d = 0; d < 32; d++) v[d] = (w ? kbuf : qb)[d * 65 + t];
+      sc = norm_scale(v);
+      if (w == 0) sc = __fmul_rn(sc, hsc[0]);
+    }
+    __syncthreads();
+    if (tid < 128) {
 #pragma unroll
-    for (int d = 0; d < 32; d += 2) (w ? kn : qn)[(d >> 1) * 64 + t] = pk(q8(__fmul_rn(v[d], sc)), q8(__fmul_rn(v[d + 1], sc)));
+      for (int d = 0; d < 32; d += 2) (w ? kn : qn)[(d >> 1) * 64 + t] = pk(q8(__fmul_rn(v[d], sc)), q8(__fmul_rn(v[d + 1], sc)));
+    }
   }
   __syncthreads();
   {   // logits -> exponent-ramp numerators, Pm[key pair][query]
