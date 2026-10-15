@@ -57,11 +57,11 @@ struct VarParams {
   const uint8_t* in;      // 0x00 block input act(C, h, w)
   uint8_t* out;           // 0x08 block output act(C, h, w)
   const uint8_t* w;       // 0x10 the block's record
-  int32_t h, w_;          // 0x18 level extent
-  int32_t org0, org1;     // 0x20 window origin, (oy, ox) of the cycle (0,0) (-4,-4) (-4,0) (0,-4) by block index
+  int32_t H, W;           // 0x18 level extent
+  int32_t X0, Y0;         // 0x20 window origin by block index: (0,0) (-4,-4) (0,-4) (-4,0)
   uint32_t flags;         // 0x28 1 first encoder block, 4 last encoder block (also writes p38 = pooled 2C, h/2),
                           //      8 first decoder block (upsamples p30, concat with skip `in`), 2 last decoder block
-  uint32_t _pad2c;
+  uint32_t pad0;
   const uint8_t* p30;     // 0x30 flag 8: the coarser level's output act(2C, h/2, w/2); else null
   uint8_t* p38;           // 0x38 flag 4: pooled output; other blocks get the level's pool buffer (unused)
   uint64_t _r40[12];      // 0x40..0x9f zero
@@ -72,22 +72,22 @@ static_assert(sizeof(VarParams) == 0xa8, "VarParams");
 // --- C_mid stage (split Swin, 4 dispatches per block). T = ceil(h/4)*ceil(w/4) tiles. ---
 struct Ffwd2Params {      // step 1, record layer0
   const uint8_t* x;       // 0x00 block input (null on the stage's first encoder block)
-  const uint8_t* x_first; // 0x08 stage input on the first encoder block, else null
+  const uint8_t* xp;      // 0x08 stage input (planes) on the first encoder block, else null
   uint8_t* out;           // 0x10
   const uint8_t* w;       // 0x18 layer0
-  int32_t h, w_, tiles;   // 0x20
+  int32_t H, W, T;        // 0x20 extent, tiles
   int32_t _pad2c;
 };
 static_assert(sizeof(Ffwd2Params) == 0x30, "Ffwd2Params");
 
 struct Conv2Params {      // steps 2 and 4 (residual 1x1 conv), records layer1 / layer3
-  const uint8_t* a;       // 0x00 branch input
-  const uint8_t* res;     // 0x08 residual (block input), null when res_first is used
-  const uint8_t* res_first; // 0x10 residual on the stage's first encoder block (step 2), else null
+  const uint8_t* x;       // 0x00 branch input (tiles)
+  const uint8_t* res;     // 0x08 residual (block input, tiles), null when resp is used
+  const uint8_t* resp;    // 0x10 residual (planes) on the stage's first encoder block (step 2), else null
   uint8_t* out;           // 0x18
-  uint8_t* out2;          // 0x20 optional second copy of out (last decoder block: the decoder's input), else null
+  uint8_t* out2;          // 0x20 optional planes copy of out (last decoder block: the decoder's input), else null
   const uint8_t* w;       // 0x28
-  int32_t h, w_, tiles;   // 0x30
+  int32_t H, W, T;        // 0x30
   int32_t _pad3c;
 };
 static_assert(sizeof(Conv2Params) == 0x40, "Conv2Params");
@@ -96,8 +96,8 @@ struct AttnParams {       // step 3, windowed attention, record layer2; grid z =
   const uint8_t* x;       // 0x00
   uint8_t* out;           // 0x08
   const uint8_t* w;       // 0x10
-  int32_t h, w_;          // 0x18
-  int32_t ox, oy;         // 0x20 window origin, same cycle as VarParams
+  int32_t H, W;           // 0x18
+  int32_t ox, oy;         // 0x20 window origin, cycle (0,0) (-4,-4) (-4,0) (0,-4)
 };
 static_assert(sizeof(AttnParams) == 0x28, "AttnParams");
 
@@ -136,15 +136,16 @@ static_assert(sizeof(ExpandParams) == 0x18, "ExpandParams");
 
 struct ConvParams1d {     // contract (records layer1, layer4)
   const uint8_t* x;       // 0x00
-  const uint8_t* res;     // 0x08 residual
+  const uint8_t* skip;    // 0x08 residual
   uint8_t* out;           // 0x10
   const uint8_t* w;       // 0x18
-  int32_t k, kn;          // 0x20 inner width, inner*C_vit (hidden or C_vit)
-  int32_t _r28, _pad2c;   // 0x28 4
+  int32_t K, KN;          // 0x20 inner width, inner*C_vit (hidden or C_vit)
+  int32_t four, _pad2c;   // 0x28 4
 };
 static_assert(sizeof(ConvParams1d) == 0x30, "ConvParams1d");
+typedef ConvParams1d ContractParams;
 
-struct QkvParams { const uint8_t* x; uint8_t* q; uint8_t* k; uint8_t* v; const uint8_t* w; };   // record layer2
+struct QkvParams { const uint8_t* x; uint8_t* out[3]; const uint8_t* w; };   // out = q, k, v; record layer2
 static_assert(sizeof(QkvParams) == 0x28, "QkvParams");
 
 struct AttnParams1d {     // global attention over the tokens
@@ -157,11 +158,11 @@ struct AttnParams1d {     // global attention over the tokens
 static_assert(sizeof(AttnParams1d) == 0x28, "AttnParams1d");
 
 struct DecUpParams {      // ViT result -> C_mid decoder stage (single-record block between ViT and decoder)
-  const uint8_t* vit;     // 0x00 ViT result (tiles)
+  const uint8_t* x;       // 0x00 ViT result (tiles)
   const uint8_t* skip;    // 0x08 C_mid encoder output
   uint8_t* out;           // 0x10 C_mid decoder stage input
   const uint8_t* w;       // 0x18
-  int32_t h, w_;          // 0x20 C_mid extent
+  int32_t H5, W5;         // 0x20 C_mid extent
 };
 static_assert(sizeof(DecUpParams) == 0x28, "DecUpParams");
 

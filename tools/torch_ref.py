@@ -6,8 +6,10 @@
 Input: E:/dlss-runtime/color_WxH.bin with RGB clamped to [0,1] (the data runs import/export mode 0, so both sides get
 the same linear values; as handover/game-ready-sync/temporal/flicker_torch.py). Prints PSNR (peak 1) ours vs PyTorch.
 """
-import sys
+import os, sys
 import numpy as np
+HIST = int(os.environ.get('HIST', '0'))   # 1: compare frame 1 of a static history sequence
+BLEND = 0.7397
 
 
 def frame(W, H):
@@ -23,7 +25,8 @@ def ours(dlldir, data, W, H, out):
     lib.nr_run2.argtypes = [C.c_void_p, C.c_void_p, C.c_void_p, C.c_void_p, C.c_int]
     err = C.create_string_buffer(512); c = lib.nr_create(data.encode(), W, H, 1, err, 512); assert c, err.value
     x = np.ascontiguousarray(frame(W, H).astype(np.float16).view(np.uint16)); y = np.empty_like(x)
-    assert lib.nr_run2(c, x.ctypes.data, y.ctypes.data, None, 0) == 0
+    for k in range(1 + HIST):   # HIST: a static 2-frame sequence, frame 1 with the runtime's history (= frame 0's output)
+        assert lib.nr_run2(c, x.ctypes.data, y.ctypes.data, None, int(k > 0)) == 0
     np.save(out, y.view(np.float16)[..., :3].astype(np.float32))
 
 
@@ -37,8 +40,26 @@ def torch_ref(dll, W, H, ours_npy):
     ci = frame(W, H)[..., :3]
     t = torch.from_numpy(np.ascontiguousarray(ci.transpose(2, 0, 1)))
     rows, cols = _mirror(torch.arange(net.padding.height), H), _mirror(torch.arange(net.padding.width), W)
+    pad = lambda img: torch.from_numpy(np.ascontiguousarray(img.transpose(2, 0, 1)))[:, rows][:, :, cols].unsqueeze(0).contiguous()
+    run = lambda: _main(net.run(pad(ci), Controls(seed=0))[len(net.plan) - 1])[0, :, :H, :W].clamp(0, 1).permute(1, 2, 0).numpy()
     with torch.no_grad():
-        ref = _main(net.run(t[:, rows][:, :, cols].unsqueeze(0).contiguous(), Controls(seed=0))[len(net.plan) - 1])[0, :, :H, :W].clamp(0, 1).permute(1, 2, 0).numpy()
+        ref = run()
+        if HIST:   # frame 1 with history = frame 0's output, as flicker_torch.py 'hist' (pre lanes 7-9 + post lerp), mirrored padding
+            from dlssnr.layers import pre_post
+            hp = pad(ref); feats = pre_post.PreBlock.features
+            pl = next(l for l in net.layers if isinstance(l, pre_post.PostBlock)); s = pl.spec
+            head_a = w.f16(s.block, s.layer, 'out_project', 16, pre_post.CHANNELS)[3]
+
+            def features(self, image):
+                f = feats(self, image).clone(); f[:, 7:10] = pre_post._centred_colour(hp); return f
+
+            def post_forward(self, x, skip, fr):
+                wide = pre_post.swin_core(self.params, self.blend(x, skip), self.spec.shift_x, self.spec.shift_y)
+                res = pre_post.compose(fr, torch.einsum('rc,bchw->brhw', self.project, wide), self.controls.intensity)
+                a = torch.einsum('c,bchw->bhw', head_a, wide)[:, None]
+                return res + (BLEND * torch.sigmoid(a)).clamp(0, 1) * (hp - res)
+            pre_post.PreBlock.features, pre_post.PostBlock.forward = features, post_forward
+            ref = run()
     o = np.clip(np.load(ours_npy), 0, 1)
     psnr = lambda a, b: 10 * np.log10(1 / max(float(((a - b) ** 2).mean()), 1e-12))
     print('%dx%d: ours vs PyTorch %.2f dB (input vs PyTorch %.2f dB), edit correlation %.3f' % (

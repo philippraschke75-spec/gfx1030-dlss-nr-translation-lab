@@ -161,6 +161,7 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
   FILE* f = fopen((c->dir + "/manifest.txt").c_str(), "r"); if (!f) FAIL("no manifest.txt");
   { std::string m; if (!nr_load_overrides(c->dir + "/manifest.txt", c->ovr, m)) { fclose(f); FAIL("%s", m.c_str()); } }
   std::map<std::string, hipModule_t> mods; char line[1024];
+  const int pre_i = kv.count("pre_step") ? (int)num("pre_step") : -1, post_i = kv.count("post_step") ? (int)num("post_step") : -1;
   while (fgets(line, sizeof line, f)) {
     if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
     std::string s(line); while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
@@ -169,7 +170,8 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
     if (t.size() != 7 && t.size() != 8) { fclose(f); FAIL("bad manifest line: %s", line); }
     t[0] = rel(c->dir, t[0]);
     if (!mods.count(t[0])) { hipModule_t m; hipError_t e = load_mod(c, t[0], &m); if (e != hipSuccess) { fclose(f); FAIL("hipModuleLoad %s: %s", t[0].c_str(), hipGetErrorString(e)); } mods[t[0]] = m; c->mods.push_back(m); }
-    Step st; st.pre = t[1].find("k_pre_block") != std::string::npos; st.post = t[1].find("k_post_block") != std::string::npos; hipError_t e = hipModuleGetFunction(&st.fn, mods[t[0]], t[1].c_str()); if (e != hipSuccess) { fclose(f); FAIL("no symbol %s", t[1].c_str()); }
+    Step st; const int si = (int)c->steps.size();   // pre/post: by step index from meta (pre_step/post_step, tools/build_plan.py), else by symbol name
+    st.pre = pre_i >= 0 ? si == pre_i : t[1].find("k_pre_block") != std::string::npos; st.post = post_i >= 0 ? si == post_i : t[1].find("k_post_block") != std::string::npos; hipError_t e = hipModuleGetFunction(&st.fn, mods[t[0]], t[1].c_str()); if (e != hipSuccess) { fclose(f); FAIL("no symbol %s", t[1].c_str()); }
     size_t off = strtoull(t[2].c_str(), nullptr, 10), len = strtoull(t[3].c_str(), nullptr, 10);
     if (off + len > kab.size()) { fclose(f); FAIL("kernarg out of range"); }
     st.ka.assign(kab.begin() + off, kab.begin() + off + len);
@@ -196,9 +198,14 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
   }
   fclose(f);
   if (bn) {   // bottleneck reuse: also skip the c512 encoder stage + k_final_head before the ViT and k_dec_upsample + c512 decoder stage after it
-    c->vit_lo -= 33; c->vit_hi += 33;   // (32 dispatches each side + 1). Their outputs live in own arena buffers that nothing later overwrites.
+    if (kv.count("bn_lo") && kv.count("bn_hi")) {   // the plan says where the bottleneck is (gen_runtime_data/new-model-pipeline and build_plan.py data)
+      c->vit_lo = (int)num("bn_lo"); c->vit_hi = (int)num("bn_hi");
+      if (c->vit_lo < 0 || c->vit_lo >= c->vit_hi || c->vit_hi >= (int)c->names.size()) FAIL("bottleneck reuse: bad bn_lo/bn_hi %d..%d", c->vit_lo, c->vit_hi);
+    } else {   // older data dirs: 310.8 layout, 32 dispatches each side + 1
+    c->vit_lo -= 33; c->vit_hi += 33;   // Their outputs live in own arena buffers that nothing later overwrites.
     if (c->vit_lo < 0 || c->vit_hi >= (int)c->names.size() || c->names[c->vit_lo].find("ffwd2") == std::string::npos || c->names[c->vit_hi].find("swin") == std::string::npos)
       FAIL("bottleneck reuse: unexpected dispatch layout around %d..%d", c->vit_lo, c->vit_hi);
+    }
   }
   if (c->pw) HK(hipMalloc(&c->hist, (size_t)c->pw * c->ph * 12));   // ~8 MB; filled after every frame so the first hist_valid frame already has history
   HK(hipEventCreate(&c->e0)); HK(hipEventCreate(&c->e1));

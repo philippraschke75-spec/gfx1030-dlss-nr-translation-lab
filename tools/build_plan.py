@@ -189,8 +189,8 @@ def translated_ok(op, A, C):
 
 
 def choose(op, A, C, grid, kdir, cache):
-    """-> (manifest module, manifest sym, grid, threads, override or None). pre/post stay on the translated symbol
-    (nr_runtime tags them by the names k_pre_block/k_post_block) with the native kernel as an override line."""
+    """-> (manifest module, manifest sym, grid, threads, override or None). Natives go straight into the
+    manifest; nr_runtime (own-plan or later) finds pre/post by meta pre_step/post_step, so no override lines are emitted."""
     syms = lambda f: cache.setdefault(f, module_syms(kdir / f))
     ts = tsym(op, A, C); tfile = ts + '.co'
     t_ok = (syms(tfile) and ts.encode() in syms(tfile)) and translated_ok(op, A, C) is None
@@ -198,9 +198,6 @@ def choose(op, A, C, grid, kdir, cache):
     for mod, sym, g, thr, why in native_candidates(op, A, C, grid):
         if why: tried.append('native %s (%s)' % (sym, why)); continue
         if sym.encode() not in syms(mod): tried.append('native %s (not in %s)' % (sym, kdir / mod)); continue
-        if op in ('pre', 'post'):
-            if not t_ok: tried.append('%s needs the translated %s as its manifest anchor' % (sym, tfile)); continue
-            return 'kernels\\' + tfile, ts, grid, 256, (ts, 'kernels\\' + mod, sym, thr, 0x50)
         return 'kernels\\' + mod, sym, g, thr, None
     if t_ok: return 'kernels\\' + tfile, ts, grid, 256, None
     tried.append('translated %s (%s)' % (ts, translated_ok(op, A, C) or 'not in %s' % kdir))
@@ -251,7 +248,7 @@ def plan(A, W, H, kdir, structs):
         for i, b in enumerate(blocks):
             ox, oy = MODES[i % 4]; last = i == len(blocks) - 1
             flags = ((8 if i == 0 else 0) | (2 if last else 0)) if dec else ((1 if i == 0 else 0) | (4 if last else 0))
-            f = dict(**{'in': inp if i == 0 else pp[(i + 1) % 2]}, out=pp[i % 2], w=wl(b, 0), h=h, w_=w, org0=oy, org1=ox, flags=flags)
+            f = dict(**{'in': inp if i == 0 else pp[(i + 1) % 2]}, out=pp[i % 2], w=wl(b, 0), H=h, W=w, X0=oy, Y0=ox, flags=flags)   # (X0, Y0) = (oy, ox) of MODES
             if dec and i == 0: f['p30'] = prev
             else: f['p38'] = pool
             S('var', 'VarParams', f, ((w - ox + 7) // 8, (h - oy + 7) // 8), C)
@@ -268,14 +265,14 @@ def plan(A, W, H, kdir, structs):
         g4, g8 = (-(-T5 // 4), 4), (-(-T5 // 4), 8)
         for i, b in enumerate(blocks):
             first = enc and i == 0
-            S('ffwd2', 'Ffwd2Params', dict(x=None if first else work[0], x_first=first_in if first else None, out=work[1], w=wl(b, 0), h=H5, w_=W5, tiles=T5), g8)
-            S('conv2', 'Conv2Params', dict(a=work[1], res=None if first else work[0], res_first=first_in if first else None, out=work[2], w=wl(b, 1), h=H5, w_=W5, tiles=T5), g4)
+            S('ffwd2', 'Ffwd2Params', dict(x=None if first else work[0], xp=first_in if first else None, out=work[1], w=wl(b, 0), H=H5, W=W5, T=T5), g8)
+            S('conv2', 'Conv2Params', dict(x=work[1], res=None if first else work[0], resp=first_in if first else None, out=work[2], w=wl(b, 1), H=H5, W=W5, T=T5), g4)
             ox, oy = MODES[i % 4]
-            S('attn', 'AttnParams', dict(x=work[2], out=work[3], w=wl(b, 2), h=H5, w_=W5, ox=ox, oy=oy), ((W5 + 7 - ox) >> 3, (H5 + 7 - oy) >> 3, A['heads']))
+            S('attn', 'AttnParams', dict(x=work[2], out=work[3], w=wl(b, 2), H=H5, W=W5, ox=ox, oy=oy), ((W5 + 7 - ox) >> 3, (H5 + 7 - oy) >> 3, A['heads']))
             if enc and b == blocks[-1]:
                 S('convpl', 'ConvPlParams', dict(a=work[3], res2=work[2], out=work[0], w=wl(b, 3), h=H5, w_=W5, pooled=pooled, ph=H6, pw=W6), (-(-NM // 16384), 1))
             else:
-                S('conv2', 'Conv2Params', dict(a=work[3], res=work[2], out=work[0], out2=decin if (not enc and b == blocks[-1]) else None, w=wl(b, 3), h=H5, w_=W5, tiles=T5), g4)
+                S('conv2', 'Conv2Params', dict(x=work[3], res=work[2], out=work[0], out2=decin if (not enc and b == blocks[-1]) else None, w=wl(b, 3), H=H5, W=W5, T=T5), g4)
     bn_lo = len(steps)
     mid(A['c1'], m1, stage_in, True)
     S('head', 'HeadParams', dict(pooled=pooled, out=headb, w=wl(A['c1'][-1], 4)), (T6, 1))
@@ -286,14 +283,14 @@ def plan(A, W, H, kdir, structs):
     gy32, gy8 = (NTOK // 64, 32), (NTOK // 64, 8)
     for b in A['vit']:
         S('expand', 'ExpandParams', dict(x=vin, out=B260, w=wl(b, 0)), gy32)
-        S('contract', 'ConvParams1d', dict(x=B260, res=vin, out=B268, w=wl(b, 1), k=A['hid'], kn=A['hid'] * A['c_vit'], _r28=4), gy8)
-        S('qkv', 'QkvParams', dict(x=B268, q=B270, k=B278, v=B280, w=wl(b, 2)), gy32)
+        S('contract', 'ConvParams1d', dict(x=B260, skip=vin, out=B268, w=wl(b, 1), K=A['hid'], KN=A['hid'] * A['c_vit'], four=4), gy8)
+        S('qkv', 'QkvParams', dict(x=B268, out=[B270, B278, B280], w=wl(b, 2)), gy32)
         S('attn1d', 'AttnParams1d', dict(q=B270, k=B278, v=B280, out=B288, ntok=NTOK, nreal=H6 * W6), gy32)
-        S('contract', 'ConvParams1d', dict(x=B288, res=B268, out=vout, w=wl(b, 4), k=A['c_vit'], kn=A['c_vit'] * A['c_vit'], _r28=4), gy8)
+        S('contract', 'ConvParams1d', dict(x=B288, skip=B268, out=vout, w=wl(b, 4), K=A['c_vit'], KN=A['c_vit'] * A['c_vit'], four=4), gy8)
         vin, vout = vout, vin
     S('repack', 'RepackParams', dict(src=vin, dst=vitres, h=H6, w_=W6, ntok=NTOK, to_tokens=0), (256, 1))
     vit_hi = len(steps)
-    S('decup', 'DecUpParams', dict(vit=vitres, skip=m1[0], out=m2[0], w=wl(A['decup'], 0), h=H5, w_=W5), (T5, 1))
+    S('decup', 'DecUpParams', dict(x=vitres, skip=m1[0], out=m2[0], w=wl(A['decup'], 0), H5=H5, W5=W5), (T5, 1))
     mid(A['c2'], m2, None, False)
     bn_hi = len(steps)
     stage_in = decin
@@ -323,7 +320,7 @@ def plan(A, W, H, kdir, structs):
         blob += ka; mods.add(mod)
         if ov: ovr[ov[0]] = '%s|%s|%s|=|=|=|%d|%d|0<-0:%d' % (ov[0], ov[1], ov[2], ov[3], ov[4], ov[4]); mods.add(ov[1])
     meta = dict(width=W, height=H, base=BASE, arena_size=arena, off_src=src, src_size=W * H * 8, off_dst=dst, dst_size=W * H * 8, skip=0,
-                vit_lo=vit_lo, vit_hi=vit_hi, bn_lo=bn_lo, bn_hi=bn_hi, pad_w=PW, pad_h=PH, n_steps=len(steps), off_vitres=vitres, off_headb=headb,
+                vit_lo=vit_lo, vit_hi=vit_hi, bn_lo=bn_lo, bn_hi=bn_hi, pre_step=next(i for i, t in enumerate(steps) if t[0] == 'pre'), post_step=next(i for i, t in enumerate(steps) if t[0] == 'post'), pad_w=PW, pad_h=PH, n_steps=len(steps), off_vitres=vitres, off_headb=headb,
                 placements=[list(b) for b in bufs])
     return dict(lines=lines, kernargs=bytes(blob), overrides=list(ovr.values()), meta=meta, wofs=wofs, modules=mods)
 
@@ -339,9 +336,12 @@ def pack(structs, st, f, grid):
     for k, v in f.items():
         if k not in fields: raise PlanError('nr_params.h %s has no field %s' % (st, k))
         o, fmt, cnt, ptr = fields[k]
-        if ptr: v = 0 if v is None else BASE + v   # pointer: arena offset -> virtual address, None = null
-        elif v is None: v = 0   # pointer fields: arena offset -> virtual address
-        struct.pack_into('<' + fmt, ka, o, v)
+        vs = v if isinstance(v, list) else [v]
+        if len(vs) > cnt: raise PlanError('%s.%s takes %d values' % (st, k, cnt))
+        for j, v in enumerate(vs):
+            if ptr: v = 0 if v is None else BASE + v   # pointer: arena offset -> virtual address, None = null
+            elif v is None: v = 0
+            struct.pack_into('<' + fmt, ka, o + j * struct.calcsize(fmt), v)
     h = (size + 7) // 8 * 8      # HIP hidden arguments
     struct.pack_into('<IIIHHH', ka, h, grid[0], grid[1], grid[2], 256, 1, 1)
     struct.pack_into('<H', ka, h + 64, 3 if grid[2] > 1 else 2)
