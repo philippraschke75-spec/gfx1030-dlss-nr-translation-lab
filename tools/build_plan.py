@@ -131,10 +131,10 @@ def derive(size):
 def flex_check(dll, A):
     """Cross-check against the MIT reference (dlssnr-pytorch-flex Arch.from_weights). Skipped if its venv is missing."""
     if not FLEX_PY.exists(): print('flex: venv not found, cross-check skipped'); return
-    code = ('import json,sys,contextlib,io\nfrom dlssnr.extract import extract\nfrom dlssnr.plan import Arch\n'
+    code = ('import json,sys,contextlib,io\nimport dlssnr.extract as ex\nex.RESOURCE_NAME = sys.argv[2]\nfrom dlssnr.extract import extract\nfrom dlssnr.plan import Arch\n'
             'with contextlib.redirect_stdout(io.StringIO()): w = extract(sys.argv[1], None)\n'
             'a = Arch.from_weights(w); print(json.dumps([a.levels, a.split_channels, a.split_blocks, a.vit_channels, a.vit_hidden, a.vit_blocks]))')
-    r = subprocess.run([str(FLEX_PY), '-c', code, str(dll)], cwd=FLEX, capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=str(FLEX), DLSSNR_TRITON='0'))
+    r = subprocess.run([str(FLEX_PY), '-c', code, str(Path(dll).resolve()), RES], cwd=FLEX, capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=str(FLEX), DLSSNR_TRITON='0'))
     if r.returncode: raise PlanError('dlssnr-pytorch-flex could not read the weights:\n' + r.stderr[-2000:])
     lv, sc, sb, vc, vh, vb = json.loads(r.stdout.strip().splitlines()[-1])
     mine = [[[c // 32 or 1, c, len(s)] for c, s in A['enc']], A['c_mid'], len(A['c1']), A['c_vit'], A['hid'], len(A['vit'])]
@@ -365,6 +365,10 @@ def write_dir(P, out, kdir, mm, recs):
     (out / 'kernargs.bin').write_bytes(P['kernargs'])
     (out / 'overrides.txt').write_text(''.join(l + '\n' for l in P['overrides']))
     m = P['meta']
+    mid = 0xcbf29ce484222325   # model id (runtime/model_id.py, weights_ht.h nr_model_id): FNV-1a over record names + u64 sizes
+    for nm, (_, n) in recs.items():
+        for x in nm.encode() + b'\0' + struct.pack('<Q', n): mid = ((mid ^ x) * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+    m = dict(m, model_id='%016x' % mid, weights_res=RES)
     (out / 'meta.json').write_text(json.dumps(m, indent=1))
     (out / 'meta.txt').write_text(''.join('%s=%s\n' % (k, v) for k, v in m.items() if k != 'placements'))
     for mod in P['modules']: shutil.copy2(kdir / mod.split('\\')[-1], out / 'kernels')
