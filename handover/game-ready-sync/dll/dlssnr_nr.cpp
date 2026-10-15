@@ -128,6 +128,7 @@ static bool loadRuntime() {
     p_extOpen = (P_extOpen)GetProcAddress(m, "nr_ext_open"); p_extEnqueue = (P_extEnqueue)GetProcAddress(m, "nr_ext_enqueue"); p_extHist = (P_extHist)GetProcAddress(m, "nr_ext_history"); p_histLayout = (P_histLayout)GetProcAddress(m, "nr_hist_layout"); p_extEnqueue2 = (P_extEnqueue2)GetProcAddress(m, "nr_ext_enqueue2");
     p_extEnqueue3 = (P_extEnqueue3)GetProcAddress(m, "nr_ext_enqueue3"); p_extSplit = (P_extSplit)GetProcAddress(m, "nr_ext_split");
     p_intensity = (P_intensity)GetProcAddress(m, "nr_set_intensity");            // absent in an old nr_runtime.dll: the baked strength stays
+    if (auto sl = (void (*)(void (*)(const char*)))GetProcAddress(m, "nr_set_log")) sl([](const char* s) { logf("%s", s); });   // hardware line + output self-check
     if (!p_intensity && curIntensity() >= 0.f) logf("nr_runtime.dll has no nr_set_intensity (old runtime): intensity is ignored");
     return true;
 }
@@ -557,11 +558,26 @@ __declspec(dllexport) void dlssnr_call_set_float_slot(int) {}
 __declspec(dllexport) void dlssnr_call_probe_float(void*, const char*, float, int) {}
 __declspec(dllexport) void dlssnr_call_set_extras(void*, float, ID3D12Resource*, ID3D12Resource*, ID3D12Resource*, unsigned, unsigned, unsigned, unsigned) {}
 
+// Once per process: our build, the game exe and the calling host module (OptiScaler under its proxy name) with its file version.
+#pragma comment(lib, "version.lib")
+#include <intrin.h>
+static void logHost(void* caller) {
+    static bool done = false; if (done) return; done = true;
+    wchar_t exe[MAX_PATH] = L"", host[MAX_PATH] = L"?"; GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    HMODULE hm = nullptr; if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)caller, &hm)) GetModuleFileNameW(hm, host, MAX_PATH);
+    char ver[64] = "?"; DWORD z = 0, n = GetFileVersionInfoSizeW(host, &z); std::vector<uint8_t> vi(n);
+    VS_FIXEDFILEINFO* ff = nullptr; UINT fl = 0;
+    if (n && GetFileVersionInfoW(host, 0, n, vi.data()) && VerQueryValueW(vi.data(), L"\\", (void**)&ff, &fl) && ff)
+        snprintf(ver, sizeof ver, "%u.%u.%u.%u", HIWORD(ff->dwFileVersionMS), LOWORD(ff->dwFileVersionMS), HIWORD(ff->dwFileVersionLS), LOWORD(ff->dwFileVersionLS));
+    logf("host: dlssnr_nr build %s %s | game %ls | host module %ls (version %s)", __DATE__, __TIME__, exe, host, ver);
+}
+
 __declspec(dllexport) void* dlssnr_call_create(const wchar_t* snippet, const wchar_t*, ID3D12Device* dev, ID3D12GraphicsCommandList*, void*,
         unsigned w, unsigned h, int, float, int, float, float, float, int, int) {
     try {
         if (!g_log) loadSettings();
         logf("create: snippet=%ls dev=%p %ux%u", snippet ? snippet : L"", (void*)dev, w, h);
+        logHost(_ReturnAddress());
         dlssnr_call_last_create = 0;
         if (!dev) { seterr("create: no D3D12 device"); return nullptr; }
         unsigned mw = 0, mh = 0; const std::string dir = pickModelDir(w, h);
