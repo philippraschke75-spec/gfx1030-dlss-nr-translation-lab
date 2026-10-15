@@ -22,7 +22,8 @@ open(dst + '/manifest.txt', 'w').write(''.join('|'.join(t) + '\n' for t in man))
 ovr = [l.rstrip('\n').split('|') for l in open(kref + '/overrides.txt') if l.strip()]
 for t in ovr: t[1] = 'kernels\\' + base(t[1])
 open(dst + '/overrides.txt', 'w').write(''.join('|'.join(t) + '\n' for t in ovr))
-for k in {t[0] for t in man} | {t[1] for t in ovr}: shutil.copy2(kref + '/kernels/' + base(k), dst + '/' + k.replace('\\', '/'))
+for k in {t[0] for t in man if t[1] not in {o[0] for o in ovr}} | {t[1] for t in ovr}:   # overridden manifest modules are not shipped
+ shutil.copy2(kref + '/kernels/' + base(k), dst + '/' + k.replace('\\', '/'))
 for f in ('meta.txt', 'meta.json'): shutil.copy2(src + '/' + f, dst + '/' + f)
 
 # weights: find every WEIGHTS_HT record inside the placements (wmap.py), map by name, zero them
