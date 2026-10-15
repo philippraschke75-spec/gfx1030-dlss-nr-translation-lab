@@ -43,7 +43,7 @@ static struct ExitHook { ExitHook() { atexit([] { g_exiting = true; }); } } g_ex
 static int g_apply = 1, g_gate = 1, g_ldrIn = 1, g_hdr = 2; static float g_hdrFrac = 0.125f, g_gain = 1.0f, g_gateLo = 0.03f, g_gateHi = 0.15f;   // apply=1: out = current frame + gain * (NR(old frame) - old frame) (no lag); apply=0: copy the finished (stale) NR image
 static int g_sync = 1, g_spinMs = 250, g_maxInflight = 3, g_fg = 0, g_fgWaitMs = 4, g_fgMaxAge = 3, g_mv = 0, g_nrEvery = 1; static float g_mvLo = 0.05f, g_mvHi = 0.25f;
 static int g_busy = 0, g_busyWaitMs = 100;   // busy_mode: 0 wait (CPU waits, bounded, for a free HIP slot), 1 reuse (last NR edit, warped) - never a native frame once NR ran
-static float g_pass2Gain = 0.5f; static std::atomic<int> g_live{0};   // OptiScaler "2 passes": a later pass (a second feature on pass 1's output) adds its edit at gain * pass2_gain
+static float g_pass2Gain = 0.5f; static std::atomic<int> g_live{0}; static UINT g_hdrP0 = 0; static ID3D12Resource* g_hl = nullptr;   // OptiScaler "2 passes": a later pass (a second feature on pass 1's output) adds its edit at gain * pass2_gain
 static int g_split = 0, g_splitK[2] = {0, 0}; static int g_hist = 0; static float g_hLo = 0.08f, g_hHi = 0.25f;   // history=1: temporal history (previous NR output warped by the game's MVs) into the pre-block's +0x40, see handover/temporal-2026-10-11/DLL.md   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
 
 static void logf(const char* fmt, ...) {
@@ -178,10 +178,11 @@ static const char* kSyncHlsl =
 "globallycoherent RWByteAddressBuffer st : register(u2);\n"
 "cbuffer C : register(b0) { uint W; uint H; uint seq; uint maxIt; uint outOff; uint flagOff; float gain; uint FWH; uint minSeq; float gLo; float gHi; uint gate; uint frame; uint maxAge;\n"
 "  uint mvOn; float mvSx; float mvSy; uint mWH; uint mBase; uint dWH; uint dBase; uint dFl; float mLo; float mHi;\n"
-"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
+"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; float hk; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
 "Texture2D<float4> mot : register(t1);\n"
 "Texture2D<float> dep : register(t2);\n"   // minSeq != 0: fg mode, reuse the edit captured from a frame >= minSeq;   // W,H model; FWH = frame W | H << 16
-"RWByteAddressBuffer ob : register(u3);\n"   // PACKED: frame-size R9G9B9E5 staging, copied into the output texture afterwards
+"RWByteAddressBuffer ob : register(u3);\n"
+"globallycoherent RWByteAddressBuffer hl : register(u4);\n"   // process-global HDR latch: pass 0 publishes its st[16], extra passes (hdrM 3) follow it   // PACKED: frame-size R9G9B9E5 staging, copied into the output texture afterwards
 "uint e5(float3 c) {\n"   // float3 -> R9G9B9E5_SHAREDEXP (N=9, B=15)
 "  c = clamp(c, 0.0, 65408.0); float m = max(c.r, max(c.g, c.b)); int e = max(-16, (int)floor(log2(max(m, 1e-30)))) + 16;\n"
 "  float d = exp2(e - 24); if (floor(m / d + 0.5) >= 512.0) { d *= 2.0; e++; } uint3 q = (uint3)floor(c / d + 0.5);\n"
@@ -204,11 +205,11 @@ static const char* kSyncHlsl =
 // hdr_mode: scene-linear HDR colour (RE Engine) goes to the network as T(x) = sRGB(x / (1 + x)) (the network's own mode-1 proxy at scale 1)
 // and comes back as Ti(T(live) + gain * edit). hdrM 0 off, 1 on, 2 auto: on once lat has latched st[16] (imp counts pixels > 1 into st[20]; lat latches when one frame had >= hdrM >> 2 of them, then resets the count).
 // Off, every path below is the old LDR code (bit-exact).
-"bool hd() { return hdrM == 1 || ((hdrM & 3) == 2 && st.Load(16) != 0); }\n"
+"bool hd() { return hdrM == 1 || ((hdrM & 3) == 2 && st.Load(16) != 0) || ((hdrM & 3) == 3 && hl.Load(0) != 0); }\n"
 "float3 T(float3 x) { x = max(x, 0.0); x = x / (1.0 + x); return lerp(1.055 * pow(x, 1.0 / 2.4) - 0.055, x * 12.92, step(x, 0.0031308)); }\n"
 "float3 Ti(float3 y) { y = saturate(y); float3 z = lerp(pow((y + 0.055) / 1.055, 2.4), y / 12.92, step(y, 0.04045)); z = min(z, 0.999); return z / (1.0 - z); }\n"   // <= 999: finite for e5 / half
 "float3 L(float4 c) { return hd() ? T(sn(c).rgb) : sn(c).rgb; }\n"   // live colour in network space (gates)
-"float3 cmp(float4 c, float3 d) { return hd() ? min(Ti(T(sn(c).rgb) + d), 2.0 * max(sn(c).rgb, 0.0) + 0.1) : max(c.rgb + d, 0.0); }\n"   // live colour + network-space edit; HDR: at most 2x + 0.1 brighter (Ti is steep near 1, a small edit must not blow a highlight out)
+"float3 cmp(float4 c, float3 d) { return hd() ? min(Ti(T(sn(c).rgb) + d), (1.0 + hk) * max(sn(c).rgb, 0.0) + 0.1 * hk) : max(c.rgb + d, 0.0); }\n"   // live colour + network-space edit; HDR: at most (1+hk)x + 0.1hk brighter (pass 0 hk 1 = 2x + 0.1; extra pass hk pass2_gain, so passes cannot compound to 4x) (Ti is steep near 1, a small edit must not blow a highlight out)
 "float4 ld(float4 v) { v = sn(v); if (hd()) return float4(T(v.rgb), v.a);\n"
 "#ifdef HDR_IN\n"
 "  return v; }\n"
@@ -228,7 +229,7 @@ static const char* kSyncHlsl =
 "  float4 c = (FW == W && FH == H) ? (hd() ? ld(col[id.xy]) : col[id.xy]) : colAt((id.xy + 0.5) * float2(FW, FH) / float2(W, H));\n"
 "  if ((hdrM & 3) == 2) { float3 r = sn(col[min((uint2)((id.xy + 0.5) * float2(FW, FH) / float2(W, H)), uint2(FW - 1, FH - 1))]).rgb; if (max(r.r, max(r.g, r.b)) > 1.0) st.InterlockedAdd(20, 1); }\n"   // auto: scene-linear HDR evidence (an LDR frame has a few % of specks above 1, HDR much more)
 "  io.Store2((id.y * W + id.x) * 8, uint2(pk(c.r, c.g), pk(c.b, c.a))); }\n"
-"[numthreads(1,1,1)] void lat() { if (st.Load(20) >= (hdrM >> 2)) st.Store(16, 1u); st.Store(20, 0u); }\n"   // hdr_mode auto: latch HDR at the start of a frame (sticky for the feature)
+"[numthreads(1,1,1)] void lat() { if (st.Load(20) >= (hdrM >> 2)) st.Store(16, 1u); st.Store(20, 0u); hl.Store(0, st.Load(16)); }\n"   // hdr_mode auto: latch HDR at the start of a frame (sticky for the feature)
 "[numthreads(1,1,1)] void spin() {\n"
 "  uint v = 0; for (uint i = 0; i < maxIt; i++) { io.InterlockedOr(flagOff, 0, v); if ((int)(v - seq) >= 0) break; }\n"
 "  st.Store(0, (int)(v - seq) >= 0 ? 1u : 0u); }\n"
@@ -319,7 +320,7 @@ static const char* kSyncHlsl =
 "  io.Store3(o, asuint(res)); }\n"
 "[numthreads(8,8,1)] void hwp(uint3 id : SV_DispatchThreadID) { hwpB(id, 1); }\n"   // previous frame was NR (bit-exact to the one-frame history)
 "[numthreads(8,8,1)] void hwp2(uint3 id : SV_DispatchThreadID) { hwpB(id, histOk); }\n";   // older NR output (nr_every > 1): histOk = its age in frames
-static const int kSyncRing = 16, kCb = 34;                                     // descriptor pairs (colour SRV, output UAV) in flight
+static const int kSyncRing = 16, kCb = 35;                                     // descriptor pairs (colour SRV, output UAV) in flight
 
 // ---------------------------------------------------------------- feature
 enum { S_LOADING = 0, S_IDLE = 1, S_WAIT_COPY = 2, S_RUNNING = 3, S_FAILED = 4, S_SYNC = 5 };
@@ -488,10 +489,10 @@ static Sync* makeSync(Feature* F) {
     if (!s->io || !s->sig || !s->st) { logf("sync: cannot create shared buffers"); freeSync(s); return nullptr; }
     if (FAILED(d->CreateSharedHandle(s->io, nullptr, GENERIC_ALL, nullptr, &s->hIo)) || FAILED(d->CreateSharedHandle(s->sig, nullptr, GENERIC_ALL, nullptr, &s->hSig))) { logf("sync: CreateSharedHandle failed"); freeSync(s); return nullptr; }
     D3D12_DESCRIPTOR_RANGE rg[2] = {}; rg[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; rg[0].NumDescriptors = 3; rg[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; rg[1].NumDescriptors = 1; rg[1].OffsetInDescriptorsFromTableStart = 3;   // colour, motion, depth | output
-    D3D12_ROOT_PARAMETER rp[5] = {}; rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; rp[0].DescriptorTable.NumDescriptorRanges = 2; rp[0].DescriptorTable.pDescriptorRanges = rg;
+    D3D12_ROOT_PARAMETER rp[6] = {}; rp[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV; rp[5].Descriptor.ShaderRegister = 4; rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; rp[0].DescriptorTable.NumDescriptorRanges = 2; rp[0].DescriptorTable.pDescriptorRanges = rg;
     rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV; rp[1].Descriptor.ShaderRegister = 1; rp[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV; rp[2].Descriptor.ShaderRegister = 2;
     rp[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; rp[3].Constants.Num32BitValues = kCb; rp[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV; rp[4].Descriptor.ShaderRegister = 3;
-    D3D12_ROOT_SIGNATURE_DESC rsd = {}; rsd.NumParameters = 5; rsd.pParameters = rp; ID3DBlob *sb = nullptr, *er = nullptr;
+    D3D12_ROOT_SIGNATURE_DESC rsd = {}; rsd.NumParameters = 6; rsd.pParameters = rp; ID3DBlob *sb = nullptr, *er = nullptr;
     if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sb, &er)) || FAILED(d->CreateRootSignature(0, sb->GetBufferPointer(), sb->GetBufferSize(), IID_PPV_ARGS(&s->rs)))) { logf("sync: root signature failed"); freeSync(s); return nullptr; }
     sb->Release();
     ID3D12PipelineState** pso[10] = {&s->imp, &s->spin, &s->exp, &s->cap, &s->expPk, &s->lat, &s->hwp, &s->hst, &s->acc, &s->hwp2}; const char* ep[10] = {"imp", "spin", "exp", "cap", "exp", "lat", "hwp", "hst", "acc", "hwp2"};
@@ -686,10 +687,14 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
                              (UINT)(g_fg ? (std::max)(g_fgMaxAge, g_nrEvery - 1) : 0x7FFF /* busy reuse: no age limit, no fade (the colour gate guards) */), (UINT)mvOn, 0, 0, mW | (mH << 16), mBx | (mBy << 16), dW | (dH << 16), dBx | (dBy << 16), (UINT)dOn | (depthInv ? 2u : 0u), 0, 0,
                              (UINT)s->histOff, s->padW | (s->padH << 16), (UINT)histOk, (UINT)hMv, 0, 0, 0, (UINT)s->histOut }; memcpy(&cb[30], &s->impScale, 4);
             cb[33] = g_hdr == 1 ? 1u : g_hdr == 2 && (cd.Format == DXGI_FORMAT_R16G16B16A16_FLOAT || cd.Format == DXGI_FORMAT_R9G9B9E5_SHAREDEXP) ? 2u | ((UINT)(g_hdrFrac * F->W * F->H) << 2) : 0u;   // hdrM | auto threshold << 2
+            if (!F->pass) g_hdrP0 = cb[33] & 3; else if (g_hdr == 2) cb[33] = g_hdrP0 == 2 ? 3u : g_hdrP0;   // extra pass: its input is pass 0's output after the host's ClampProxy (saturated to [0,1]), it cannot detect HDR itself -> pass 0's decision (3 = follow hl)
+            { const float hk = F->pass ? g_pass2Gain : 1.f; memcpy(&cb[34], &hk, 4); }
             float gain = F->pass ? g_gain * g_pass2Gain : g_gain; memcpy(&cb[6], &gain, 4); memcpy(&cb[9], &g_gateLo, 4); memcpy(&cb[10], &g_gateHi, 4);   // gLo, gHi
             memcpy(&cb[15], &mvSx, 4); memcpy(&cb[16], &mvSy, 4); memcpy(&cb[22], &g_mvLo, 4); memcpy(&cb[23], &g_mvHi, 4); memcpy(&cb[28], &g_hLo, 4); memcpy(&cb[29], &g_hHi, 4);
             ID3D12DescriptorHeap* hp[] = { s->heap }; cmd->SetDescriptorHeaps(1, hp); cmd->SetComputeRootSignature(s->rs);
             cmd->SetComputeRootDescriptorTable(0, gpu); cmd->SetComputeRootUnorderedAccessView(1, s->io->GetGPUVirtualAddress()); cmd->SetComputeRootUnorderedAccessView(2, s->st->GetGPUVirtualAddress());
+            if (!g_hl) g_hl = sharedBuffer(F->dev, 65536, D3D12_HEAP_FLAG_NONE, nullptr);   // ponytail: one process-global latch, never freed; one device assumed
+            cmd->SetComputeRootUnorderedAccessView(5, (g_hl ? g_hl : s->st)->GetGPUVirtualAddress());
             cmd->SetComputeRootUnorderedAccessView(4, s->st->GetGPUVirtualAddress());   // ob slot: unused unless e5; bound so the root signature is complete
             D3D12_RESOURCE_BARRIER uav = {}; uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;   // null resource = all UAV writes
             if ((cb[33] & 3) == 2) { cmd->SetComputeRoot32BitConstants(3, kCb, cb, 0); cmd->SetPipelineState(s->lat); cmd->Dispatch(1, 1, 1); cmd->ResourceBarrier(1, &uav); }   // hdr auto: latch before anything reads it
