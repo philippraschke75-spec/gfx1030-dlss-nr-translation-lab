@@ -1,0 +1,12 @@
+white 1  p1      white-out (lin) 0.134%, white-out (display) 0.080%, mean |dP| 0.01429, max luma 24.4 | skin: white-out 0.000%, mean luma out/in 0.993
+white 1  p2raw   white-out (lin) 0.451%, white-out (display) 0.666%, mean |dP| 0.02126, max luma 36.4 | skin: white-out 0.000%, mean luma out/in 0.990
+white 1  p2clamp white-out (lin) 0.269%, white-out (display) 0.696%, mean |dP| 0.03158, max luma 1.5 | skin: white-out 0.000%, mean luma out/in 0.992
+white 4  p1      white-out (lin) 0.208%, white-out (display) 0.061%, mean |dP| 0.01538, max luma 107.0 | skin: white-out 0.000%, mean luma out/in 0.941
+white 4  p2raw   white-out (lin) 0.534%, white-out (display) 0.603%, mean |dP| 0.02262, max luma 159.5 | skin: white-out 0.003%, mean luma out/in 0.927
+white 4  p2clamp white-out (lin) 0.171%, white-out (display) 0.447%, mean |dP| 0.06993, max luma 1.5 | skin: white-out 0.000%, mean luma out/in 0.524
+white 15 p1      white-out (lin) 0.272%, white-out (display) 0.106%, mean |dP| 0.02292, max luma 398.2 | skin: white-out 0.000%, mean luma out/in 0.840
+white 15 p2raw   white-out (lin) 0.668%, white-out (display) 0.830%, mean |dP| 0.03417, max luma 596.3 | skin: white-out 0.099%, mean luma out/in 0.777
+white 15 p2clamp white-out (lin) 0.011%, white-out (display) 0.176%, mean |dP| 0.14858, max luma 1.5 | skin: white-out 0.000%, mean luma out/in 0.133
+white 36 p1      white-out (lin) 0.396%, white-out (display) 0.166%, mean |dP| 0.02737, max luma 929.4 | skin: white-out 0.000%, mean luma out/in 0.947
+white 36 p2raw   white-out (lin) 1.363%, white-out (display) 0.807%, mean |dP| 0.03932, max luma 999.0 | skin: white-out 0.300%, mean luma out/in 0.946
+white 36 p2clamp white-out (lin) 0.000%, white-out (display) 0.002%, mean |dP| 0.21140, max luma 1.5 | skin: white-out 0.000%, mean luma out/in 0.056
