@@ -299,14 +299,30 @@ int main(int argc, char** argv) {
             if (e5) { uint32_t v = pk5(h4); memcpy(upp + (size_t)y * pitch + x * 4, &v, 4); up5(v, h4); } else if (r11) { uint32_t v; pack_r11g11b10(h4, &v); memcpy(upp + (size_t)y * pitch + x * 4, &v, 4); unpack_r11g11b10(v, h4); }
             else memcpy(upp + (size_t)y * pitch + x * 8, h4, 8);
             for (int c = 0; c < 3; c++) p[c] = (float)h2f(h4[c]); }   // what the DLL really gets
+        // passes 2: the second pass is a second feature (f2), as janblade's passFeature[pass]; NR_TEST_P2CLAMP=1 feeds it through the host's ClampProxy (CPU copy of it)
+        if (passes > 1 && !f2) { puts("FAIL passes 2 needs NR_TEST_PASSES=2 at create"); return 3; }
+        const bool clampP2 = getenv("NR_TEST_P2CLAMP") && atoi(getenv("NR_TEST_P2CLAMP"));
         ID3D12Resource* out2 = passes > 1 ? tex(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, OFMT) : nullptr;
+        ID3D12Resource *p2in = clampP2 ? tex(D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, OFMT) : nullptr, *p2up = clampP2 ? buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)opitch * H, D3D12_RESOURCE_STATE_GENERIC_READ) : nullptr;
+        uint8_t* p2u = nullptr; if (p2up) p2up->Map(0, nullptr, (void**)&p2u);
         for (int k = 0; k < n; k++) {
             al->Reset(); cl->Reset(al, nullptr);
             bar(color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST); { auto d = ts(color), s = fp(up, pitch, FMT); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
             bar(color, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             int r = eval(cl, f, nullptr, color, nullptr, nullptr, out, W, H, W, H, W, H, 0, 0, 0, 0, 0, k == 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1.f, 1.f); ID3D12Resource* last = out;
-            if (passes > 1) { bar(out, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-                r &= eval(cl, f, nullptr, out, nullptr, nullptr, out2, W, H, W, H, W, H, 0, 0, 0, 0, 0, 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1.f, 1.f);
+            if (passes > 1 && clampP2) {   // host ClampProxy (janblade dlssnr.hlsl mode 12, PassFeedback 1): next = saturate(P + saturate(alpha) * (raw - P)), alpha fits raw - P into the unit cube, P = pass 1 input
+                bar(out, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE); { auto d = fp(rb, opitch, OFMT), s = ts(out); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
+                bar(out, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); cl->Close();
+                { ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); } if (!wait(5000)) { printf("FAIL frame %d: GPU wait timed out\n", k); return 7; }
+                for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { uint16_t o[4]; memcpy(o, rbp + (size_t)y * opitch + x * 8, 8); const float* pp = &hin[((size_t)y * W + x) * 3]; float d[3], a = 1.f;
+                    for (int c = 0; c < 3; c++) { float v = h2f(o[c]); d[c] = (v == v && fabsf(v) < 1e30f ? v : 0.5f) - pp[c]; if (d[c] > 1e-6f) a = std::min(a, (1.f - pp[c]) / d[c]); else if (d[c] < -1e-6f) a = std::min(a, -pp[c] / d[c]); }
+                    a = std::min(std::max(a, 0.f), 1.f); for (int c = 0; c < 3; c++) o[c] = f2h(std::min(std::max(pp[c] + a * d[c], 0.f), 1.f)); memcpy(p2u + (size_t)y * opitch + x * 8, o, 8); }
+                al->Reset(); cl->Reset(al, nullptr);
+                bar(p2in, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST); { auto d = ts(p2in), s = fp(p2up, opitch, OFMT); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
+                bar(p2in, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                r &= eval(cl, f2, nullptr, p2in, nullptr, nullptr, out2, W, H, W, H, W, H, 0, 0, 0, 0, 0, k == 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1.f, 1.f); last = out2; }
+            else if (passes > 1) { bar(out, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);   // raw: pass 1's output (RGBA16F) straight into the second feature
+                r &= eval(cl, f2, nullptr, out, nullptr, nullptr, out2, W, H, W, H, W, H, 0, 0, 0, 0, 0, k == 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1.f, 1.f);
                 bar(out, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); last = out2; }
             bar(last, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE); { auto d = fp(rb, opitch, OFMT), s = ts(last); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
             bar(last, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); cl->Close();
