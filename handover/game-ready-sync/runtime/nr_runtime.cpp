@@ -168,8 +168,11 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
     for (;;) { size_t q = s.find('|', pos); if (q == std::string::npos) { t.push_back(s.substr(pos)); break; } t.push_back(s.substr(pos, q - pos)); pos = q + 1; }
     if (t.size() != 7 && t.size() != 8) { fclose(f); FAIL("bad manifest line: %s", line); }
     t[0] = rel(c->dir, t[0]);
-    if (!mods.count(t[0])) { hipModule_t m; hipError_t e = load_mod(c, t[0], &m); if (e != hipSuccess) { fclose(f); FAIL("hipModuleLoad %s: %s", t[0].c_str(), hipGetErrorString(e)); } mods[t[0]] = m; c->mods.push_back(m); }
-    Step st; st.pre = t[1].find("k_pre_block") != std::string::npos; st.post = t[1].find("k_post_block") != std::string::npos; hipError_t e = hipModuleGetFunction(&st.fn, mods[t[0]], t[1].c_str()); if (e != hipSuccess) { fclose(f); FAIL("no symbol %s", t[1].c_str()); }
+    Step st; st.pre = t[1].find("k_pre_block") != std::string::npos; st.post = t[1].find("k_post_block") != std::string::npos;
+    if (!c->ovr.count(t[1])) {   // overridden steps never touch the manifest's module (it need not exist)
+      if (!mods.count(t[0])) { hipModule_t m; hipError_t e = load_mod(c, t[0], &m); if (e != hipSuccess) { fclose(f); FAIL("hipModuleLoad %s: %s", t[0].c_str(), hipGetErrorString(e)); } mods[t[0]] = m; c->mods.push_back(m); }
+      if (hipModuleGetFunction(&st.fn, mods[t[0]], t[1].c_str()) != hipSuccess) { fclose(f); FAIL("no symbol %s", t[1].c_str()); }
+    }
     size_t off = strtoull(t[2].c_str(), nullptr, 10), len = strtoull(t[3].c_str(), nullptr, 10);
     if (off + len > kab.size()) { fclose(f); FAIL("kernarg out of range"); }
     st.ka.assign(kab.begin() + off, kab.begin() + off + len);
