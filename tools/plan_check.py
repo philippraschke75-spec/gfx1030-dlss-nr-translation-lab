@@ -100,7 +100,7 @@ def run(dlldir, ref, new, W, H, frames=4, hist=0):
     base = np.fromfile('E:/dlss-runtime/color_%dx%d.bin' % (W, H), np.uint16).reshape(H, W, 4)
     outs = []
     for d in (ref, new):
-        err = C.create_string_buffer(512); c = lib.nr_create(str(d).encode(), W, H, 1, err, 512)
+        err = C.create_string_buffer(512); c = lib.nr_create(str(d).encode(), W, H, int(os.environ.get("VIT_EVERY", "1")), err, 512)   # VIT_EVERY=-2: bottleneck reuse
         if not c: sys.exit('nr_create %s: %s' % (d, err.value.decode()))
         o = []
         for k in range(frames):

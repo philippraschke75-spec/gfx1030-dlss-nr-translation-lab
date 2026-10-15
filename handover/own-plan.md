@@ -39,8 +39,8 @@ py -I tools/build_plan.py --selftest                      # synthetic shrunk mod
    * Field values follow our difftested contracts. The installer's spare/debug pointers are gone.
 5. **Kernels** (`choose`). For each op it takes the first native kernel that is present in the kernel dir and supports
    the derived widths; otherwise the translated one, if it exists and was compiled for these widths; otherwise it fails.
-   * Native kernels go **straight into the manifest** with their own grids. No translated anchor and no override is needed.
-   * Only pre and post keep the override form, because nr_runtime finds them by the names `k_pre_block`/`k_post_block`.
+   * Native kernels go **straight into the manifest** with their own grids, pre/post included; `overrides.txt` is empty.
+     nr_runtime finds pre/post by `meta pre_step/post_step` (needs the own-plan runtime; older runtimes find them by name).
    * `k_post_native` has the 310.8 block70 weights baked in. It is used only if the DLL's block70 record has the same
      FNV (`POST_310`); otherwise the translated post-block is used and a message says so.
    * Every missing kernel is reported in one error, for example:
@@ -96,10 +96,53 @@ The plan then puts them straight into the manifest. Their kernarg must be the st
 kernel should `#include` it. Not pushed yet when this was written.
 
 ## Open
-* The native kernels still declare private copies of their structs. They match `nr_params.h` (`plan_check` and the
-  bit-exact runs show it), but they do not `#include` it yet. Their sources are outside the repo.
+* Pre/post native kernels are still prebuilt binaries (see round 2).
 * The activation sizes keep v0.3's generous formula: 2 B/element, plus 2x on the half-resolution pre output. They are
   not minimised.
-* Two runtime things still keyed by name: pre/post detection, and `vit_every<-1`, which uses ±33 instead of `bn_lo/bn_hi`
-  (the new-model-pipeline runtime reads bn_lo/bn_hi from meta). With a different C_mid block count, bottleneck reuse
-  needs that runtime change.
+
+## Round 2 (same day)
+### 1. v0.3 at 1280x720 with history: no stride bug
+* Layouts agree. The runtime keeps history as RGB32F over the padded frame (`hist_end`: netout 16 B/px to 12 B/px,
+  `pad_w*pad_h` pixels). Pre +0x40 and post +0x40 both index it with the same padded pixel index.
+* What differs is the crop. v0.3's 1280 data runs the post-block only over the 160x90 source tiles. The result's
+  bottom margin (rows 720-767) is never written, so the history there stays 0. The pre-block reads that zero history,
+  and the effect spreads through the global ViT.
+* Static 2-frame sequence, frame 1 with history: crop vs full is 56 dB. The difference is spread over the whole
+  image and slightly larger toward the bottom (mean |d| 0.0007 at the top, 0.0029 in the last rows). The 35 dB seen
+  before came from 4 shifted frames, where history accumulates.
+* Against PyTorch with history (`HIST=1 tools/torch_ref.py`, flex with pre lanes 7-9 + post lerp, mirrored padding):
+  crop 30.50 dB, full 30.51 dB, 960x540 31.49 dB.
+* **Verdict:** v0.3's 720p is not buggy in layout. Its margin history is zero instead of computed. Against the
+  reference that is equal within 0.01 dB, so it is invisible next to the port's ~30 dB error. Full compute (this plan)
+  is the consistent choice.
+
+### 2. bn_lo/bn_hi and 3. pre/post by index
+`nr_runtime.cpp`:
+* Bottleneck reuse (`vit_every < -1`) takes the range from `meta bn_lo/bn_hi` when present. Without them it falls back
+  to the old ±33 and the name check.
+* Pre/post are tagged by `meta pre_step/post_step`, with the name match as the fallback.
+* Built with hipcc into `E:\dlss-runtimeuild_ownplan
+r_runtime.dll`. Checked at 960x540 against v0.3 data on the
+  same runtime, 4 frames each:
+  * history on: bit-exact
+  * history on with `VIT_EVERY=-2` (bottleneck reuse): bit-exact
+* 1280x720 history off: bit-exact.
+
+### 4. Native kernel sources (`rdna2/native/`)
+* `swin_var.hip`, `swin_c32.hip` + `swin_common.h`, `c512.hip`, `vit_swz.hip`, `decup.hip` + `nk_common.h`. These are
+  the exact sources of the v0.3 modules. They were found by rebuilding every copy in the worktrees and comparing
+  `.text/.rodata` with the shipped `.co`.
+* The private struct copies are removed. Each file includes `nr_params.h`, and the header now uses the kernels' field
+  names (H/W/X0/Y0/T/xp/resp/skip/K/KN/four/out[3]/H5/W5).
+* `sh rdna2/native/build.sh <out>` rebuilds all five.
+  * `.text/.rodata` are byte-identical to v0.3; only the metadata differs.
+  * A plan built with them (`--kernels` = v0.3 dir + rebuilt modules) is bit-exact at 960x540 with history.
+  * The generated `kernargs.bin` is byte-identical to the one before the field renames.
+* Not brought in: `pre_native.hip` / `post_native.hip`.
+  * They need `pre_tables.h` / `post_weights.h`, which are vendor-derived.
+  * No source copy in any worktree rebuilds the shipped modules: the shipped post is a plain ELF, probably assembled
+    from an edited .s.
+  * They stay prebuilt. They only read the first 0x50 B, which equals `PreParams`/`PostParams`.
+
+### 5. no-translated
+Not on origin at the time of this round. Add its kernels to `native_candidates()` when it lands.
