@@ -19,6 +19,8 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <atomic>
+#include <thread>
 #include <d3dcompiler.h>
 #include "dlssnr_iface.h"
 #include "r11g10.h"
@@ -152,9 +154,9 @@ int main(int argc, char** argv) {
                 if (e > *maxerr) *maxerr = e; if (e > 0.004 + (r11 ? 0.035 : 0.004) * fabs(bv)) (*beyond)++; } } };   // r11: 5-6 bit mantissa
 
     if (getenv("NR_TEST_PACE")) {   // pacing: a game submitting every NR_TEST_CPU_MS with up to 2 frames queued; frame time = gap between GPU completions
-        const int n = atoi(getenv("NR_TEST_PACE")); const double cpu = getenv("NR_TEST_CPU_MS") ? atof(getenv("NR_TEST_CPU_MS")) : 8.0;
+        const int n = atoi(getenv("NR_TEST_PACE")); const int QD = getenv("NR_TEST_QUEUE") ? std::max(1, std::min(7, atoi(getenv("NR_TEST_QUEUE")))) : 2, NQ = QD + 1; const double cpu = getenv("NR_TEST_CPU_MS") ? atof(getenv("NR_TEST_CPU_MS")) : 8.0;
         auto stats = (void (*)(void*, unsigned*, unsigned*, unsigned*))GetProcAddress(m, "dlssnr_port_stats"); if (!stats) { puts("missing dlssnr_port_stats"); return 1; }
-        ID3D12CommandAllocator* A[3]; ID3D12GraphicsCommandList* L[3]; for (int i = 0; i < 3; i++) { CK(dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&A[i]))); CK(dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, A[i], nullptr, IID_PPV_ARGS(&L[i]))); L[i]->Close(); }
+        ID3D12CommandAllocator* A[8]; ID3D12GraphicsCommandList* L[8]; for (int i = 0; i < NQ; i++) { CK(dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&A[i]))); CK(dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, A[i], nullptr, IID_PPV_ARGS(&L[i]))); L[i]->Close(); }
         const double gms = getenv("NR_TEST_GPU_MS") ? atof(getenv("NR_TEST_GPU_MS")) : 0; ID3D12RootSignature* lrs = nullptr; ID3D12PipelineState* lps = nullptr; ID3D12Resource* lb = nullptr; UINT lit = 20000;
         if (gms > 0) {   // dummy "game rendering": an ALU loop over 4096x64 threads, iteration count calibrated to gms (from branch pipeline)
             const char* hl = "RWByteAddressBuffer u : register(u0); cbuffer C : register(b0) { uint n; };\n"
@@ -172,42 +174,45 @@ int main(int argc, char** argv) {
                 printf("gpu load calibration: %u iterations -> %.2f ms\n", lit, t); if (it < 3) lit = (UINT)std::min(5e7, std::max(1000.0, lit * gms / std::max(t, 0.05))); }
         }
         auto gtex = [&](DXGI_FORMAT fm) { auto r = tex(D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON, fm); return r; };
-        ID3D12Resource *mvt = gtex(DXGI_FORMAT_R16G16_FLOAT), *dpt = gtex(DXGI_FORMAT_R32_FLOAT), *mu[3], *du[3]; uint8_t *mup[3], *dup[3];
-        for (int i = 0; i < 3; i++) { mu[i] = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ); du[i] = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ); mu[i]->Map(0, nullptr, (void**)&mup[i]); du[i]->Map(0, nullptr, (void**)&dup[i]); }
+        ID3D12Resource *mvt = gtex(DXGI_FORMAT_R16G16_FLOAT), *dpt = gtex(DXGI_FORMAT_R32_FLOAT), *mu[8], *du[8]; uint8_t *mup[8], *dup[8];
+        for (int i = 0; i < NQ; i++) { mu[i] = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ); du[i] = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ); mu[i]->Map(0, nullptr, (void**)&mup[i]); du[i]->Map(0, nullptr, (void**)&dup[i]); }
         mvp = mup[0]; dpp = dup[0];
-        makeFrame(0); memcpy(mup[1], mup[0], (size_t)gpitch * H); memcpy(dup[1], dup[0], (size_t)gpitch * H); memcpy(mup[2], mup[0], (size_t)gpitch * H); memcpy(dup[2], dup[0], (size_t)gpitch * H);
+        makeFrame(0); for (int i = 1; i < NQ; i++) { memcpy(mup[i], mup[0], (size_t)gpitch * H); memcpy(dup[i], dup[0], (size_t)gpitch * H); }
         bool gfirst = true; std::vector<double> done; std::vector<UINT64> fvs; unsigned n0, b0, r0; stats(f, &n0, &b0, &r0);
         // NR_TEST_GHOST=1: the image moves (makeFrame(k) shift) every frame; reused frames are compared with the reference NR of the SAME frame
-        const bool ghost = getenv("NR_TEST_GHOST") && UP == 1 && !r11; ID3D12Resource *gu[3] = {}, *gr[3] = {}; uint8_t *gup[3] = {}, *grp[3] = {};
+        const bool ghost = getenv("NR_TEST_GHOST") && UP == 1 && !r11; ID3D12Resource *gu[8] = {}, *gr[8] = {}; uint8_t *gup[8] = {}, *grp[8] = {};
         std::vector<int> greu(n, 0); std::vector<std::vector<uint16_t>> gout(n); ID3D12Resource* up0 = up; uint8_t* upp0 = upp;
-        if (ghost) for (int i = 0; i < 3; i++) { gu[i] = buf(D3D12_HEAP_TYPE_UPLOAD, sz, D3D12_RESOURCE_STATE_GENERIC_READ); gr[i] = buf(D3D12_HEAP_TYPE_READBACK, (UINT64)opitch * H, D3D12_RESOURCE_STATE_COPY_DEST); gu[i]->Map(0, nullptr, (void**)&gup[i]); gr[i]->Map(0, nullptr, (void**)&grp[i]); }
-        auto grab = [&](int j) { if (!ghost || j < 0 || !greu[j]) return; auto& o = gout[j]; o.resize((size_t)W * H * 4); for (UINT y = 0; y < H; y++) memcpy(&o[(size_t)y * W * 4], grp[j % 3] + (size_t)y * opitch, (size_t)W * 8); };
+        if (ghost) for (int i = 0; i < NQ; i++) { gu[i] = buf(D3D12_HEAP_TYPE_UPLOAD, sz, D3D12_RESOURCE_STATE_GENERIC_READ); gr[i] = buf(D3D12_HEAP_TYPE_READBACK, (UINT64)opitch * H, D3D12_RESOURCE_STATE_COPY_DEST); gu[i]->Map(0, nullptr, (void**)&gup[i]); gr[i]->Map(0, nullptr, (void**)&grp[i]); }
+        auto grab = [&](int j) { if (!ghost || j < 0 || !greu[j]) return; auto& o = gout[j]; o.resize((size_t)W * H * 4); for (UINT y = 0; y < H; y++) memcpy(&o[(size_t)y * W * 4], grp[j % NQ] + (size_t)y * opitch, (size_t)W * 8); };
         auto waitFv = [&](UINT64 v) { if (fence->GetCompletedValue() >= v) return true; fence->SetEventOnCompletion(v, ev); return WaitForSingleObject(ev, 5000) == WAIT_OBJECT_0; };
         auto poll = [&]() { while (done.size() < fvs.size() && fence->GetCompletedValue() >= fvs[done.size()]) done.push_back(now()); };
+        // completion times from a poller thread: the DLL may block the submit thread (busy_mode=wait), which must not skew the GPU frame times
+        const UINT64 fv0 = fv; std::vector<double> tv(n, 0); std::atomic<bool> prun{true};
+        std::thread pt([&] { UINT64 seen = fv0; while (prun) { UINT64 c = fence->GetCompletedValue(); const double t = now(); while (seen < c && seen - fv0 < (UINT64)n) tv[(++seen) - fv0 - 1] = t; Sleep(0); } });
         double next = now();
         for (int k = 0; k < n; k++) {
             while (now() < next) { poll(); Sleep(0); } next = now() + cpu;   // game CPU time per frame
-            if (k >= 2) { if (!waitFv(fvs[k - 2])) { puts("FAIL pace: GPU wait timed out"); return 7; } poll(); grab(k - 2); }   // swapchain: at most 2 frames queued
-            if (ghost) { up = gu[k % 3]; upp = gup[k % 3]; mvp = mup[k % 3]; dpp = dup[k % 3]; makeFrame(k); }
-            auto* c = L[k % 3]; A[k % 3]->Reset(); c->Reset(A[k % 3], nullptr); std::swap(cl, c);
+            if (k >= QD) { if (!waitFv(fvs[k - QD])) { prun = false; pt.join(); puts("FAIL pace: GPU wait timed out"); return 7; } poll(); grab(k - QD); }   // swapchain: at most QD frames queued (NR_TEST_QUEUE, default 2)
+            if (ghost) { up = gu[k % NQ]; upp = gup[k % NQ]; mvp = mup[k % NQ]; dpp = dup[k % NQ]; makeFrame(k); }
+            auto* c = L[k % NQ]; A[k % NQ]->Reset(); c->Reset(A[k % NQ], nullptr); std::swap(cl, c);
             bar(color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST); { auto d = ts(color), s = fp(up, pitch, FMT); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
             bar(color, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             for (int g = 0; g < 2; g++) { ID3D12Resource* t = g ? dpt : mvt; DXGI_FORMAT fm = g ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R16G16_FLOAT;   // guides: upload -> texture -> shader resource
                 bar(t, gfirst ? D3D12_RESOURCE_STATE_COMMON : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
-                D3D12_TEXTURE_COPY_LOCATION s0 = {}; s0.pResource = g ? du[k % 3] : mu[k % 3]; s0.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; s0.PlacedFootprint.Footprint = {fm, W, H, 1, gpitch};
+                D3D12_TEXTURE_COPY_LOCATION s0 = {}; s0.pResource = g ? du[k % NQ] : mu[k % NQ]; s0.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; s0.PlacedFootprint.Footprint = {fm, W, H, 1, gpitch};
                 auto d0 = ts(t); cl->CopyTextureRegion(&d0, 0, 0, 0, &s0, nullptr); bar(t, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); } gfirst = false;
             if (lps) { cl->SetComputeRootSignature(lrs); cl->SetPipelineState(lps); cl->SetComputeRoot32BitConstants(0, 1, &lit, 0); cl->SetComputeRootUnorderedAccessView(1, lb->GetGPUVirtualAddress()); cl->Dispatch(4096, 1, 1);
                        D3D12_RESOURCE_BARRIER ub = {}; ub.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV; cl->ResourceBarrier(1, &ub); }
             unsigned x1, x2, ru0, ru1; stats(f, &x1, &x2, &ru0);
             eval(cl, f, nullptr, color, dpt, mvt, out, W, H, W, H, W, H, 0, 0, 0, 0, 1, k == 0, 1.f, 0, 1.f, 1.f, 1.f, 0, (float)W, (float)H);
             stats(f, &x1, &x2, &ru1); greu[k] = ru1 != ru0;
-            if (ghost) { bar(out, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE); { auto d = fp(gr[k % 3], opitch, OFMT), s = ts(out); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
+            if (ghost) { bar(out, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE); { auto d = fp(gr[k % NQ], opitch, OFMT), s = ts(out); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
                          bar(out, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
             cl->Close();
             ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); q->Signal(fence, ++fv); fvs.push_back(fv); std::swap(cl, c); poll();
         }
-        if (!waitFv(fvs.back())) { puts("FAIL pace: GPU wait timed out"); return 7; } poll(); while (done.size() < fvs.size()) done.push_back(now());
-        for (int j = std::max(0, n - 2); j < n; j++) grab(j);
+        if (!waitFv(fvs.back())) { prun = false; pt.join(); puts("FAIL pace: GPU wait timed out"); return 7; } prun = false; pt.join(); done = tv;
+        for (int j = std::max(0, n - QD); j < n; j++) grab(j);
         if (ghost) {   // ghosting: mean |out - refNR(same frame)| over reused frames; "live" = the plain live frame for scale
             double e = 0, el = 0, er = 0, erl = 0; size_t cnt = 0, cr = 0; int nf = 0; up = up0; upp = upp0; mvp = mvScratch.data(); dpp = dScratch.data();
             for (int j = 0; j < n; j++) { if (gout[j].empty()) continue; makeFrame(j); float gms; if (rrun(ref, in.data(), refo.data(), &gms)) { puts("FAIL reference nr_run"); return 6; } nf++;
