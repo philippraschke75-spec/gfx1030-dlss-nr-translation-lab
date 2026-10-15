@@ -271,6 +271,54 @@ int main(int argc, char** argv) {
         printf("HIST list ms p50 %.2f\n", tl[tl.size() / 2]);
         release(f); return 0;
     }
+    if (getenv("NR_TEST_HDR")) {   // HDR white-out test (RE Engine-like scene-linear colour): NR_TEST_HDR=frames, frame W x H (NR_TEST_FW/FH), source NR_TEST_SW x SH.
+        // Scene: the source (display sRGB) decoded to linear x NR_TEST_EXP (default 3), a 5..50 light strip at the top, four skin-like patches (~1.5..4).
+        // Static sequence; NR_TEST_PASSES=2 evaluates twice per frame (output -> input, as OptiScaler Passes=2). Last frame: white-out = share of
+        // pixels whose luma rises above 1.5 x input + 0.05 (linear), and in display space P = sRGB(x/(1+x)): share with P(out) - P(in) > 0.1.
+        // NR_TEST_HDRDUMP=prefix: writes prefix_in.ppm / prefix_out.ppm (P-tonemapped, 8 bit) for viewing.
+        const int n = atoi(getenv("NR_TEST_HDR")), passes = getenv("NR_TEST_PASSES") ? atoi(getenv("NR_TEST_PASSES")) : 1; const float ex = getenv("NR_TEST_EXP") ? (float)atof(getenv("NR_TEST_EXP")) : 3.f;
+        auto P = [](double x) { x = std::max(x, 0.0); x = x / (1 + x); return x <= 0.0031308 ? 12.92 * x : 1.055 * pow(x, 1 / 2.4) - 0.055; };
+        auto lin = [](double v) { v = std::min(std::max(v, 0.0), 1.0); return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4); };
+        std::vector<float> hin((size_t)W * H * 3); std::vector<char> skin((size_t)W * H);
+        const float sk[4][3] = {{0.30f, 0.30f, 0.12f}, {0.62f, 0.45f, 0.10f}, {0.45f, 0.70f, 0.14f}, {0.80f, 0.75f, 0.09f}};   // centre u, v, radius (fraction of H)
+        for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { const size_t i = (size_t)y * W + x; const UINT sx = x * SW / W, sy = y * SH / H; float l = 0;
+            for (int c = 0; c < 3; c++) { hin[i * 3 + c] = ex * (float)lin(h2f(base[((size_t)sy * SW + sx) * 4 + c])); l += hin[i * 3 + c] / 3; }
+            if (y < H / 8) { const float v = 5.f + 45.f * x / W; for (int c = 0; c < 3; c++) hin[i * 3 + c] = v * (c == 2 ? 0.8f : 1.f) * (0.8f + 0.4f * l / ex); }
+            for (auto& s : sk) { const float du = (x + .5f) / H - s[0] * W / H, dv = (y + .5f) / H - s[1]; if (du * du + dv * dv < s[2] * s[2]) { const float k = 1.5f + 2.5f * (1 - sqrtf(du * du + dv * dv) / s[2]) * (0.7f + 0.6f * std::min(l / ex, 1.f));
+                hin[i * 3] = 1.0f * k; hin[i * 3 + 1] = 0.66f * k; hin[i * 3 + 2] = 0.5f * k; skin[i] = 1; } } }
+        for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { uint16_t h4[4]; float* p = &hin[((size_t)y * W + x) * 3]; for (int c = 0; c < 3; c++) h4[c] = f2h(p[c]); h4[3] = f2h(1.f);
+            if (e5) { uint32_t v = pk5(h4); memcpy(upp + (size_t)y * pitch + x * 4, &v, 4); up5(v, h4); } else if (r11) { uint32_t v; pack_r11g11b10(h4, &v); memcpy(upp + (size_t)y * pitch + x * 4, &v, 4); unpack_r11g11b10(v, h4); }
+            else memcpy(upp + (size_t)y * pitch + x * 8, h4, 8);
+            for (int c = 0; c < 3; c++) p[c] = (float)h2f(h4[c]); }   // what the DLL really gets
+        ID3D12Resource* out2 = passes > 1 ? tex(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, OFMT) : nullptr;
+        for (int k = 0; k < n; k++) {
+            al->Reset(); cl->Reset(al, nullptr);
+            bar(color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST); { auto d = ts(color), s = fp(up, pitch, FMT); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
+            bar(color, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            int r = eval(cl, f, nullptr, color, nullptr, nullptr, out, W, H, W, H, W, H, 0, 0, 0, 0, 0, k == 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1.f, 1.f); ID3D12Resource* last = out;
+            if (passes > 1) { bar(out, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                r &= eval(cl, f, nullptr, out, nullptr, nullptr, out2, W, H, W, H, W, H, 0, 0, 0, 0, 0, 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1.f, 1.f);
+                bar(out, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); last = out2; }
+            bar(last, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE); { auto d = fp(rb, opitch, OFMT), s = ts(last); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
+            bar(last, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); cl->Close();
+            ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); if (!wait(5000)) { printf("FAIL frame %d: GPU wait timed out\n", k); return 7; }
+            if (r != 1) { printf("FAIL frame %d: evaluate returned %d\n", k, r); return 9; }
+            size_t wo = 0, wp = 0, sw = 0, ns = 0; double dp = 0, mx = 0, so = 0, si = 0;
+            for (size_t i = 0; i < (size_t)W * H; i++) { const size_t y = i / W, x = i % W; uint16_t o[4]; if (r11) unpack_r11g11b10(*(uint32_t*)(rbp + y * pitch + x * 4), o); else memcpy(o, rbp + y * opitch + x * 8, 8);
+                double lo = 0, li = 0; for (int c = 0; c < 3; c++) { const double wl = c == 0 ? .2126 : c == 1 ? .7152 : .0722, v = h2f(o[c]); lo += wl * (v == v ? v : 1e9); li += wl * hin[i * 3 + c]; }
+                const bool w1 = lo > 1.5 * li + 0.05, w2 = P(lo) - P(li) > 0.1; wo += w1; wp += w2; dp += fabs(P(lo) - P(li)); mx = std::max(mx, lo);
+                if (skin[i]) { ns++; sw += w2; so += lo; si += li; } }
+            const double N = (double)W * H;
+            if (k < 2 || k == n - 1) printf("HDR frame %d (passes %d): white-out (lin) %.3f%%, white-out (display) %.3f%%, mean |dP| %.5f, max luma %.1f | skin: white-out %.3f%%, mean luma out/in %.3f\n",
+                                            k, passes, 100 * wo / N, 100 * wp / N, dp / N, mx, 100.0 * sw / std::max<size_t>(ns, 1), so / std::max(si, 1e-9));
+            if (k == n - 1 && getenv("NR_TEST_HDRDUMP")) for (int g = 0; g < 2; g++) { std::string fn = std::string(getenv("NR_TEST_HDRDUMP")) + (g ? "_out.ppm" : "_in.ppm"); FILE* pf = fopen(fn.c_str(), "wb"); if (!pf) continue;
+                fprintf(pf, "P6\n%u %u\n255\n", W, H); std::vector<uint8_t> row((size_t)W * 3);
+                for (UINT y = 0; y < H; y++) { for (UINT x = 0; x < W; x++) { uint16_t o[4]; if (r11) unpack_r11g11b10(*(uint32_t*)(rbp + (size_t)y * pitch + x * 4), o); else memcpy(o, rbp + (size_t)y * opitch + x * 8, 8);
+                    for (int c = 0; c < 3; c++) { double v = g ? h2f(o[c]) : hin[((size_t)y * W + x) * 3 + c]; row[x * 3 + c] = (uint8_t)std::min(255.0, P(v == v ? v : 1e9) * 255 + .5); } } fwrite(row.data(), 1, row.size(), pf); }
+                fclose(pf); }
+        }
+        release(f); return 0;
+    }
     if (fl) {   // NR_TEST_FW/FH: temporal flicker test at any frame size (frame W x H, network MW x MH). See HARNESS.md (handover/temporal-2026-10-11).
         // Sequence (a game-like camera): the source texture (argv[1], NR_TEST_SW x NR_TEST_SH, default the model size) bilinear-resampled to the
         // frame with a pan of NR_TEST_VX/VY frame px per frame (default 0.37, 0.13), TAA-like sub-pixel jitter (Halton 2,3, amplitude NR_TEST_JIT px,
