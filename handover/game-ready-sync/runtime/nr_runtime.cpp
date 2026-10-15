@@ -182,6 +182,27 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
     c->names.push_back(st.ov ? st.ov->sym : t[1]); c->steps.push_back(std::move(st));
   }
   fclose(f);
+  // Load-time prep: an override module may export <sym>_prep (e.g. the f16 weight shadow of swin_var.hip). It runs once per
+  // weight record (kernarg +0x10) with the step's kernarg, grid 1, 256 threads, and leaves a pointer in the module global
+  // g_w16_last, which goes to kernarg +0xa0 (original layout) of every step using that record.
+  { std::map<uint64_t, uint64_t> done;
+    for (auto& st : c->steps) {
+      if (!st.ov || st.src.size() < 0xa8) continue;
+      hipModule_t m = nullptr; for (size_t i = 0; i < c->mods.size() && !m; i++) { hipFunction_t g; if (hipModuleGetFunction(&g, c->mods[i], st.ov->sym.c_str()) == hipSuccess && g == st.fn) m = c->mods[i]; }
+      hipFunction_t pf; if (!m || hipModuleGetFunction(&pf, m, (st.ov->sym + "_prep").c_str()) != hipSuccess) continue;
+      uint64_t w; memcpy(&w, st.src.data() + 0x10, 8);
+      if (!done.count(w)) {
+        void* gp; size_t gs; size_t sz = st.ka.size(); uint64_t v = 0;
+        void* cfg[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, st.ka.data(), HIP_LAUNCH_PARAM_BUFFER_SIZE, &sz, HIP_LAUNCH_PARAM_END};
+        HK(hipModuleLaunchKernel(pf, 1, 1, 1, 256, 1, 1, 0, nullptr, nullptr, cfg));
+        HK(hipModuleGetGlobal((hipDeviceptr_t*)&gp, &gs, m, "g_w16_last"));
+        HK(hipMemcpy(&v, gp, 8, hipMemcpyDeviceToHost));
+        if (!v) FAIL("%s_prep: weight pool full", st.ov->sym.c_str());
+        done[w] = v;
+      }
+      memcpy(st.src.data() + 0xa0, &done[w], 8); nr_apply_override(*st.ov, st.src, st.ka);
+    }
+  }
   if (bn) {   // bottleneck reuse: also skip the c512 encoder stage + k_final_head before the ViT and k_dec_upsample + c512 decoder stage after it
     c->vit_lo -= 33; c->vit_hi += 33;   // (32 dispatches each side + 1). Their outputs live in own arena buffers that nothing later overwrites.
     if (c->vit_lo < 0 || c->vit_hi >= (int)c->names.size() || c->names[c->vit_lo].find("ffwd2") == std::string::npos || c->names[c->vit_hi].find("swin") == std::string::npos)
