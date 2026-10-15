@@ -76,3 +76,5 @@ NR_API int nr_ext_enqueue3(nr_ctx*, unsigned seq, int max_inflight, int hist_val
 // Debug only: run the first n dispatches of each frame (0 = all); read arena bytes (offsets as in meta.json placements).
 NR_API int nr_dbg_steps(nr_ctx*, int n);
 NR_API int nr_dbg_read(nr_ctx*, unsigned long long off, unsigned long long size, void* dst);
+// Log sink for the hardware line at create and the output self-check (default stderr). A failed self-check makes nr_ext_enqueue* return -2.
+NR_API void nr_set_log(void (*cb)(const char*));

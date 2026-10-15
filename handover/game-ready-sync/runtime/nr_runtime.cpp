@@ -4,6 +4,7 @@
 #define NR_BUILD
 #include "nr_runtime.h"
 #include <cstdio>
+#include <cstdarg>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -41,7 +42,14 @@ struct nr_ctx {
   float* hist = nullptr; uint64_t netout = 0; int hist_mask = 0; unsigned ph = 0, pw = 0; bool have_prev = false; int dbg_n = 0; size_t io_size = 0, hin = 0, hout = 0;
   std::vector<hipEvent_t> prof; std::vector<std::string> names;   // NR_PROF only
   int ksplit[2] = {0, 0};   // nr_ext_split: first dispatch of part 2 for a full / a skipping (vit_every) frame; 0 = no split
+  std::atomic<bool> broken{false}; long checked = 0;   // output self-check (ext path): broken -> nr_ext_enqueue* returns -2, the DLL stays native
 };
+#ifndef NR_BUILD_ID
+#define NR_BUILD_ID __DATE__ " " __TIME__
+#endif
+static void (*g_logcb)(const char*) = nullptr;   // nr_set_log: the DLL's log (dlssnr_nr.log); stderr when unset
+static void rlog(const char* fmt, ...) { char b[512]; va_list a; va_start(a, fmt); vsnprintf(b, sizeof b, fmt, a); va_end(a); if (g_logcb) g_logcb(b); else fprintf(stderr, "%s\n", b); }
+NR_API void nr_set_log(void (*cb)(const char*)) { g_logcb = cb; }
 static const size_t kStrOff0 = 0x28, kStrOff1 = 0x48;
 static const size_t PAD = 1 << 16;
 #define FAIL(...) do { snprintf(err, errlen, __VA_ARGS__); nr_destroy(c); return nullptr; } while (0)
@@ -140,6 +148,11 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
   if (!bn && c->vit_every > 1 && num("off_vitres") == num("off_headb")) FAIL("vit_every>1 needs data generated with VIT_OWN=1");
 
   hipDeviceProp_t p{}; HK(hipGetDeviceProperties(&p, 0));
+  { size_t fr = 0, tot = 0; hipMemGetInfo(&fr, &tot); int rv = 0, dv = 0; hipRuntimeGetVersion(&rv); hipDriverGetVersion(&dv);
+    rlog("runtime: build %s | GPU %s (%s), %d CUs (HIP count, WGPs on RDNA), VRAM %zu MB total / %zu MB free | HIP runtime %d, driver %d",
+         NR_BUILD_ID, p.name, p.gcnArchName, p.multiProcessorCount, tot >> 20, fr >> 20, rv, dv);
+    const size_t need = c->arena + 2 * PAD + (64u << 20) + (256u << 20);   // arena + history/io (~64 MB) + headroom for the game
+    if (fr && fr < need) FAIL("not enough free VRAM: NR needs about %zu MB, only %zu MB of %zu MB free - NR stays off (lower texture quality/resolution or close other GPU apps)", need >> 20, fr >> 20, tot >> 20); }
   c->mach = rdna2_mach(p.gcnArchName); if (!c->mach) FAIL("not an RDNA2 GPU (gfx1030-1036): %s", p.gcnArchName);
   HK(hipMalloc(&c->d, c->arena + 2 * PAD)); c->dev = (uint64_t)(c->d + PAD);
   if (!upload_arena(c)) FAIL("arena data missing/wrong size, nvngx_dlssnr.dll missing or wrong version next to %s, or upload failed", data_dir);
@@ -310,6 +323,29 @@ NR_API int nr_ext_open(nr_ctx* c, void* io, unsigned long long io_alloc, unsigne
   snprintf(err, errlen, "D3D12 interop is Windows only"); return 9;
 #endif
 }
+// One-off output sanity check (ext path, after the 10th finished frame): reads the io input and output (RGBA16F, ~2x7 MB once) and
+// disables NR for the session if the output is non-finite or mostly pure black/white where the input is not.
+// Env NR_SELFCHECK_TEST=1 corrupts that output first (test hook).
+static float h2f_(uint16_t h) { uint32_t s = (h & 0x8000u) << 16, e = (h >> 10) & 31, m = h & 1023, u;
+  if (e == 31) u = s | 0x7f800000u | (m << 13); else if (e) u = s | ((e + 112) << 23) | (m << 13); else { float f = m / 16777216.f; return s ? -f : f; }
+  float f; memcpy(&f, &u, 4); return f; }
+static void self_check(nr_ctx* c) {
+  if (getenv("NR_SELFCHECK_TEST") && atoi(getenv("NR_SELFCHECK_TEST"))) hipMemsetAsync(c->io + c->out_off, 0xFF, c->dst_size, c->s);   // all NaN
+  const size_t n = c->dst_size < c->src_size ? c->dst_size : c->src_size; std::vector<uint16_t> in(n / 2), out(n / 2);
+  if (hipMemcpyAsync(in.data(), c->io, n, hipMemcpyDeviceToHost, c->s) != hipSuccess || hipMemcpyAsync(out.data(), c->io + c->out_off, n, hipMemcpyDeviceToHost, c->s) != hipSuccess ||
+      hipStreamSynchronize(c->s) != hipSuccess) { rlog("selfcheck: readback failed - skipped"); return; }
+  size_t px = 0, bad = 0, bwo = 0, bwi = 0; double mean = 0, dif = 0;
+  auto bw = [](const float* v) { return (v[0] <= 0 && v[1] <= 0 && v[2] <= 0) || (v[0] >= 1 && v[1] >= 1 && v[2] >= 1); };
+  for (size_t i = 0; i + 4 <= out.size(); i += 4 * 7) {   // every 7th pixel
+    float o[3], a[3]; bool fin = true; for (int k = 0; k < 3; k++) { o[k] = h2f_(out[i + k]); a[k] = h2f_(in[i + k]); fin = fin && std::isfinite(o[k]); }
+    px++; if (!fin) { bad++; continue; }
+    bwo += bw(o); bwi += bw(a); for (int k = 0; k < 3; k++) { mean += o[k]; if (std::isfinite(a[k])) dif += fabs(o[k] - a[k]); }
+  }
+  const size_t ok = px - bad; const double fb = px ? (double)bad / px : 1, fo = px ? (double)bwo / px : 0, fi = px ? (double)bwi / px : 0;
+  rlog("selfcheck: %zu px sampled, non-finite %.2f%%, black/white out %.1f%% (in %.1f%%), mean %.4f, mean |out-in| %.4f",
+       px, 100 * fb, 100 * fo, 100 * fi, ok ? mean / (3 * ok) : 0.0, ok ? dif / (3 * ok) : 0.0);
+  if (fb > 0.001 || fo - fi >= 0.30) { c->broken = true; rlog("selfcheck: NR output looks broken on this GPU - disabling (native frames for this session)"); }
+}
 static const int kExtWaitMs = 500;   // flag_in wait bound; longer than the D3D12 spin bound, so a late frame is dropped on both sides
 static void ext_thread(nr_ctx* c) {
   for (;;) {
@@ -337,6 +373,7 @@ static void ext_thread(nr_ctx* c) {
              hipMemcpyAsync(c->io + c->out_off, c->d + PAD + c->off_dst, c->dst_size, hipMemcpyDeviceToDevice, s) == hipSuccess;
       ok = ok && hipStreamWriteValue32(s, c->io + c->flag_off, seq, 0) == hipSuccess;
       hipStreamSynchronize(s); if (part != 1) c->frame++;
+      if (ok && part != 1 && ++c->checked == 10) self_check(c);
       if (!ok) fprintf(stderr, "nr_ext: frame %u launch failed\n", seq);
     }
     c->inflight--;
@@ -352,6 +389,7 @@ NR_API int nr_ext_history(nr_ctx* c, unsigned long long hist_in_off, unsigned lo
 NR_API int nr_ext_enqueue2(nr_ctx* c, unsigned seq, int max_inflight, int hist_valid) { return nr_ext_enqueue3(c, seq, max_inflight, hist_valid, 0); }
 NR_API int nr_ext_enqueue3(nr_ctx* c, unsigned seq, int max_inflight, int hist_valid, int part) {
   if (!c || !c->s || part < 0 || part > 2 || (part && !c->ksplit[0])) return -1;
+  if (c->broken) return -2;   // self-check failed: the DLL goes native for the session
   if (c->inflight >= (max_inflight < 1 ? 1 : max_inflight)) return 1;
   c->inflight++; { std::lock_guard<std::mutex> g(c->mx); c->q.push_back({seq, part == 2 ? 0 : hist_valid, part}); } c->cv.notify_one(); return 0;
 }
