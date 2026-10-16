@@ -36,7 +36,7 @@
 // ---------------------------------------------------------------- logging / settings
 static CRITICAL_SECTION g_cs; static FILE* g_log; static char g_err[512] = "";
 static std::wstring g_dir;                         // folder of this DLL
-static std::string g_dataDir, g_modelRes = "auto", g_logName = "dlssnr_nr.log"; static int g_reuseBn = 0, g_vitEvery = 1, g_settleMs = 20, g_jobTimeoutMs = 3000;
+static std::string g_dataDir, g_modelRes = "auto", g_model = "auto", g_logName = "dlssnr_nr.log"; static int g_reuseBn = 0, g_vitEvery = 1, g_settleMs = 20, g_jobTimeoutMs = 3000;
 static std::atomic<int> g_evalCalls{0};
 static float g_intensity = -1.0f;                       // ini override of the host's intensity (output blend towards the NR result, 0..2); <0 = the host's value
 static float g_iniCond[5] = {NAN, NAN, NAN, NAN, NAN};   // ini overrides: style, local_tone, local_structure, skin_structure, auto_mask; NaN = the host's value
@@ -61,6 +61,7 @@ static void loadSettings() {
     GetPrivateProfileStringA("nr", "data_dir", "nr_data", b, sizeof b, narrow(ini).c_str()); g_dataDir = b;
     if (g_dataDir.size() < 2 || (g_dataDir[1] != ':' && g_dataDir[0] != '\\' && g_dataDir[0] != '/')) g_dataDir = narrow(g_dir) + g_dataDir;   // relative -> next to the DLL
     GetPrivateProfileStringA("nr", "model_res", "auto", b, sizeof b, narrow(ini).c_str()); g_modelRes = b;   // WxH (a subfolder of data_dir) or auto
+    GetPrivateProfileStringA("nr", "model", "auto", b, sizeof b, narrow(ini).c_str()); g_model = b;   // small (310.9 WEIGHTS_CC_SMALL_FP8) | large (WEIGHTS_HT) | auto = small when the DLL has it
     GetPrivateProfileStringA("nr", "log", "dlssnr_nr.log", b, sizeof b, narrow(ini).c_str()); g_logName = b;
     g_vitEvery = (int)GetPrivateProfileIntA("nr", "vit_every", 1, narrow(ini).c_str());
     { char r[32]; GetPrivateProfileStringA("nr", "reuse", "vit", r, sizeof r, narrow(ini).c_str()); g_reuseBn = !_stricmp(r, "bottleneck"); }   // what vit_every>1 reuses
@@ -573,7 +574,13 @@ static std::string sha256Prefix(const std::string& p) {   // first 12 hex digits
     ok = ok && !BCryptFinishHash(h, d, 32, 0); if (h) BCryptDestroyHash(h); if (a) BCryptCloseAlgorithmProvider(a, 0); fclose(f);
     char s[13] = "-"; if (ok) for (int i = 0; i < 6; i++) snprintf(s + 2 * i, 3, "%02x", d[i]); return s;
 }
-static uint64_t modelIdRaw(const char* p) { return nr_model_id(p); }
+// 310.9 carries two models: WEIGHTS_HT (= 310.8) and WEIGHTS_CC_SMALL_FP8 (small, 113M params). nr_port.ini [nr] model=small|large|auto
+// (auto = small when present). How NVIDIA's own DLL chooses is not known; the id names the chosen resource's model.
+static const char* g_res = "WEIGHTS_HT";
+static uint64_t modelIdRaw(const char* p) {
+    if (_stricmp(g_model.c_str(), "large")) if (uint64_t id = nr_model_id(p, "WEIGHTS_CC_SMALL_FP8")) { g_res = "WEIGHTS_CC_SMALL_FP8"; return id; }
+    g_res = "WEIGHTS_HT"; return nr_model_id(p);
+}
 static uint64_t modelIdSafe(const char* p) { __try { return modelIdRaw(p); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; } }   // truncated / broken PE
 static std::string metaModelId(const std::string& dir) {   // meta.json "model_id": "<16 hex>"; absent = v0.3 data = 310.8
     FILE* f = nullptr; fopen_s(&f, (dir + "\\meta.json").c_str(), "rb"); if (!f) return kModel3108;
@@ -590,7 +597,7 @@ static bool pickModelBase(std::string* base) {
                              g_dllDesc = "version " + fileVersion(w) + " sha256 " + sha256Prefix(from); }
         else g_dllDesc = "(not found)";
         char hx[17]; snprintf(hx, sizeof hx, "%016llx", (unsigned long long)id); g_dllId = hx;
-        logf("model: %s %s, model id %s", from.empty() ? "nvngx_dlssnr.dll" : from.c_str(), g_dllDesc.c_str(), id ? hx : "none (no WEIGHTS_HT / unreadable)");
+        logf("model: %s %s, model id %s (%s, model=%s)", from.empty() ? "nvngx_dlssnr.dll" : from.c_str(), g_dllDesc.c_str(), id ? hx : "none (no WEIGHTS_HT / unreadable)", g_res, g_model.c_str());
     }
     const std::string m = g_dataDir + "\\" + g_dllId; const DWORD at = GetFileAttributesA(m.c_str());
     *base = at != INVALID_FILE_ATTRIBUTES && (at & FILE_ATTRIBUTE_DIRECTORY) ? m : g_dataDir;

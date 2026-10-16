@@ -4,12 +4,12 @@
 # Multi-model layout: nr_data\<model_id>\<W>x<H>\ (flat nr_data\<W>x<H>\ = whatever its meta.json says, default 310.8).
 # usage: python model_id.py <nvngx_dlssnr.dll> [<data dir with meta.json> ...]
 import sys, os, mmap, struct, json
-sys.path.insert(0, r'E:/dlss 5/rdna2/emu'); import weights_ht
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'rdna2', 'emu')); import weights_ht
 
 
-def model_id(path):
+def model_id(path, res='WEIGHTS_HT'):
     f = open(path, 'rb'); m = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ); h = 0xcbf29ce484222325
-    for r in weights_ht.records(m):
+    for r in weights_ht.records(m, res):
         for x in r['name'].encode() + b'\0' + struct.pack('<Q', r['bytes']): h = ((h ^ x) * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
     return '%016x' % h
 
@@ -20,4 +20,6 @@ def stamp(dll, d):
 
 if __name__ == '__main__':
     print(model_id(sys.argv[1]))
+    try: print('small', model_id(sys.argv[1], 'WEIGHTS_CC_SMALL_FP8'))
+    except ValueError: pass
     for d in sys.argv[2:]: stamp(sys.argv[1], d)
