@@ -81,7 +81,7 @@ static bool upload_arena(nr_ctx* c) {   // pristine arena between two 0xA5 guard
 #endif
   }
   if (a.size() != c->arena) return false;
-  // weights.map: the release ships no vendor weights; copy them by record name from the WEIGHTS_HT resource of the
+  // weights.map: the release ships no vendor weights; copy them by record name from the WEIGHTS_HT (or weights.map 'res') resource of the
   // user's nvngx_dlssnr.dll (next to the data dir), so any DLL build carrying the same weights works.
   // Record: u64 name_len, name, u64, u64, u64 D, u32 1, data[D], 20-byte trailer (see rdna2/emu/weights_ht.py).
 #ifdef _WIN32
@@ -89,7 +89,9 @@ static bool upload_arena(nr_ctx* c) {   // pristine arena between two 0xA5 guard
     std::map<std::string, std::pair<const uint8_t*, uint64_t>> rec;
     HMODULE dll = nullptr;   // beside the data dir, or one level up (nr_data\<W>x<H>\ step dirs)
     for (const char* up : {"/../", "/../../"}) if (!dll) dll = LoadLibraryExA((c->dir + up + "nvngx_dlssnr.dll").c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
-    HRSRC r = dll ? FindResourceA(dll, "WEIGHTS_HT", MAKEINTRESOURCEA(10)) : nullptr;
+    char res[64] = "WEIGHTS_HT"; long at = ftell(m);   // optional first line "res <name>" (310.9 small model: WEIGHTS_CC_SMALL_FP8, same framing)
+    if (fscanf(m, "res %63s ", res) != 1) fseek(m, at, SEEK_SET);
+    HRSRC r = dll ? FindResourceA(dll, res, MAKEINTRESOURCEA(10)) : nullptr;
     const uint8_t* b = r ? (const uint8_t*)LockResource(LoadResource(dll, r)) : nullptr; uint64_t sz = r ? SizeofResource(dll, r) : 0, o = 8;
     while (b && o + 8 <= sz) {
       uint64_t L, D; memcpy(&L, b + o, 8); if (o + 8 + L + 28 > sz) break;
