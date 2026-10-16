@@ -3,6 +3,8 @@
     py -I tools/torch_ref.py ours <nr_runtime.dll dir> <nr_data/WxH> <W> <H> <out.npy>     (GPU: wrap in gpu2.sh)
     <flex venv python> tools/torch_ref.py torch <nvngx_dlssnr.dll> <W> <H> <ours.npy>        (CPU, from the flex folder)
 
+Same conditioning: the runtime's default (intensity 1) is tone 0 / structure 0, the reference's Controls() is 1/1/1/1;
+STR=1,1,1,1 sets ours to the reference's (an apples-to-apples comparison needs it). NR_COLOR overrides the input file.
 Input: E:/dlss-runtime/color_WxH.bin with RGB clamped to [0,1] (the data runs import/export mode 0, so both sides get
 the same linear values; as handover/game-ready-sync/temporal/flicker_torch.py). Prints PSNR (peak 1) ours vs PyTorch.
 """
@@ -13,7 +15,7 @@ BLEND = 0.7397
 
 
 def frame(W, H):
-    x = np.fromfile('E:/dlss-runtime/color_%dx%d.bin' % (W, H), np.uint16).reshape(H, W, 4).view(np.float16).astype(np.float32)
+    x = np.fromfile(os.environ.get('NR_COLOR', 'E:/dlss-runtime/color_%dx%d.bin' % (W, H)), np.uint16).reshape(H, W, 4).view(np.float16).astype(np.float32)
     x[..., :3] = np.clip(np.nan_to_num(x[..., :3]), 0, 1)
     return x
 
@@ -25,6 +27,8 @@ def ours(dlldir, data, W, H, out):
     lib.nr_run2.argtypes = [C.c_void_p, C.c_void_p, C.c_void_p, C.c_void_p, C.c_int]
     err = C.create_string_buffer(512); c = lib.nr_create(data.encode(), W, H, 1, err, 512); assert c, err.value
     x = np.ascontiguousarray(frame(W, H).astype(np.float16).view(np.uint16)); y = np.empty_like(x)
+    if os.environ.get('STR'):   # tone,structure,skin,other conditioning; the reference's Controls() defaults are 1,1,1,1
+        lib.nr_set_strength.argtypes = [C.c_void_p] + [C.c_float] * 4; assert lib.nr_set_strength(c, *map(float, os.environ['STR'].split(','))) == 0
     for k in range(1 + HIST):   # HIST: a static 2-frame sequence, frame 1 with the runtime's history (= frame 0's output)
         assert lib.nr_run2(c, x.ctypes.data, y.ctypes.data, None, int(k > 0)) == 0
     np.save(out, y.view(np.float16)[..., :3].astype(np.float32))
