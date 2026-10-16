@@ -24,7 +24,7 @@
 #endif
 #include "nr_override.h"
 
-struct Step { hipFunction_t fn; std::vector<uint8_t> ka; unsigned gx, gy, gz, thr; bool pre = false, post = false;   // pre = k_pre_block (its kernarg holds the strength fields)
+struct Step { hipFunction_t fn; std::vector<uint8_t> ka; unsigned gx, gy, gz, thr; bool pre = false, post = false, i8 = false;   // pre = k_pre_block (its kernarg holds the strength fields)
               const NrOverride* ov = nullptr; std::vector<uint8_t> src; };   // ov: native replacement; src = original rebased kernarg it is built from
 struct nr_ctx {
   std::map<std::string, NrOverride> ovr;   // see OVERRIDES.md; empty -> unchanged behaviour
@@ -163,6 +163,13 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
   { std::string m; if (!nr_load_overrides(c->dir + "/manifest.txt", c->ovr, m)) { fclose(f); FAIL("%s", m.c_str()); } }
   std::map<std::string, hipModule_t> mods; std::set<std::string> prepped; char line[1024];
   const int pre_i = kv.count("pre_step") ? (int)num("pre_step") : -1, post_i = kv.count("post_step") ? (int)num("post_step") : -1;
+  bool i8pp = kv.count("int8_prepost") && atoi(kv["int8_prepost"].c_str());
+#ifdef _WIN32
+  { char e[8]; if (GetEnvironmentVariableA("NR_INT8_PREPOST", e, sizeof e)) i8pp = atoi(e) != 0; }   // the DLL sets it from the ini
+#else
+  if (const char* e = getenv("NR_INT8_PREPOST")) i8pp = atoi(e) != 0;
+#endif
+  if (i8pp) rlog("int8_prepost: on (post-block MLP on int8 dot4 where the module has _i8 kernels)");
   while (fgets(line, sizeof line, f)) {
     if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
     std::string s(line); while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
@@ -199,13 +206,17 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
         hipError_t e = hipModuleLaunchKernel(pf, 1, 1, 1, 256, 1, 1, 0, nullptr, nullptr, cfg); if (e == hipSuccess) e = hipDeviceSynchronize();
         if (e != hipSuccess) { fclose(f); FAIL("%s_prep: %s", ps.c_str(), hipGetErrorString(e)); }
       }
+      // int8_prepost (opt-in: meta int8_prepost=1 or env NR_INT8_PREPOST=1/0): pre/post run <sym>_i8 (MLP on int8 dot4) when
+      // the module has it; its int8 tables come from the same <sym>_prep
+      hipFunction_t f8;
+      if ((st.pre || st.post) && i8pp && hipModuleGetFunction(&f8, mods[pm], (ps + "_i8").c_str()) == hipSuccess) { st.fn = f8; st.i8 = true; }
     }
     if (st.pre && (st.ov ? st.src : st.ka).size() >= kStrOff1 + 8) {          // remember the data dir's own values as the current strength
       const auto& k = st.ov ? st.src : st.ka; memcpy(&c->str[0], k.data() + kStrOff0, 8); memcpy(&c->str[2], k.data() + kStrOff1, 8);
       memcpy(c->pend, c->str, sizeof c->str);
     }
     if (st.post) { const auto& k = st.ov ? st.src : st.ka; memcpy(&c->netout, k.data() + 0x10, 8); memcpy(&c->ph, k.data() + 0x20, 4); memcpy(&c->pw, k.data() + 0x24, 4); }
-    c->names.push_back(st.ov ? st.ov->sym : t[1]); c->steps.push_back(std::move(st));
+    c->names.push_back((st.ov ? st.ov->sym : t[1]) + (st.i8 ? "_i8" : "")); c->steps.push_back(std::move(st));
   }
   fclose(f);
   if (bn) {   // bottleneck reuse: also skip the c512 encoder stage + k_final_head before the ViT and k_dec_upsample + c512 decoder stage after it

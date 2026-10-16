@@ -49,8 +49,10 @@ struct PreParams {
   uint8_t* out_half;      // 0x38 act(2*C0, stage 0) - input of encoder stage 0 (C0 channels, 2x headroom)
   const float* hist;      // 0x40 previous output RGB32F (12 B/px, padded) or null; set per frame by the runtime
   float a, b;             // 0x48 strength pair 2 (runtime kStrOff1), 1.0, 1.0
+  const uint8_t* src;     // 0x50 fused k_import (native pre): ImportParams.src, or null = rgb comes from a k_import step
+  int32_t src_h, src_w;   // 0x58 (pitch src_w * 8, RGBA16F, mode 0); rgb is then unused
 };
-static_assert(sizeof(PreParams) == 0x50, "PreParams");
+static_assert(sizeof(PreParams) == 0x60, "PreParams");
 
 // Swin block of width C (encoder and decoder levels), one 8x8 window per workgroup.
 struct VarParams {
@@ -180,8 +182,11 @@ struct PostParams {
   const float* hist;      // 0x40 history RGB32F or null (runtime sets it per frame)
   float blend;            // 0x48 value of record <post>.layer0.blend_scale (f16)
   int32_t _pad4c;
+  uint8_t* dst;           // 0x50 fused k_export (native post): ExportParams.dst, or null = a k_export step follows
+  int32_t dst_h, dst_w;   // 0x58 (pitch dst_w * 8, RGBA16F, mode 0)
+  const uint8_t* src;     // 0x60 fused k_import: ImportParams.src (dst_w x dst_h) instead of rgb, or null
 };
-static_assert(sizeof(PostParams) == 0x50, "PostParams");
+static_assert(sizeof(PostParams) == 0x68, "PostParams");
 
 // k_export: network result -> game output RGBA16F.
 struct ExportParams {
