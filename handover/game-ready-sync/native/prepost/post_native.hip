@@ -4,10 +4,13 @@
 // Build: build.bat (-ffp-contract=off).
 #include <hip/hip_runtime.h>
 #include <stdint.h>
+#ifndef POST_ATTR
+#define POST_ATTR __attribute__((amdgpu_waves_per_eu(7)))   // perf-prepost: 144 VGPR, 7 waves/SIMD
+#endif
 
 typedef _Float16 h2 __attribute__((ext_vector_type(2)));
 
-// weight blob (f16): expand[128][32], contract[32][128], qkv[96][32], out[32][32]
+// weight blob (f16): expand[128][32], contract[128/8][32][8] (no BAKED: hc-chunk major), qkv[96][32], out[32][32]
 #define W_EXP 0
 #define W_CON (128 * 32)
 #define W_QKV (W_CON + 32 * 128)
@@ -133,7 +136,7 @@ __device__ __noinline__ void compose(const PostParams& P, size_t pix, float r0, 
   ((float4*)P.out)[pix] = make_float4(res[0], res[1], res[2], alpha);
 }
 
-extern "C" __global__ __launch_bounds__(64) void k_post_native(PostParams P) {
+extern "C" __global__ __launch_bounds__(64) POST_ATTR void k_post_native(PostParams P) {
   __shared__ h2 Ks[64][16];
   __shared__ h2 Vt[32][32];
   const h2* Wt = (const h2*)gWt; const float* Fp = gFp;
@@ -194,7 +197,7 @@ extern "C" __global__ __launch_bounds__(64) void k_post_native(PostParams P) {
 #pragma unroll
     for (int c = 0; c < 32; c++)
 #pragma unroll
-      for (int j = 0; j < 4; j++) y[c] = dot2(ap[j], Wt[WI((W_CON + c * 128 + hc) / 2 + j)], y[c]);
+      for (int j = 0; j < 4; j++) y[c] = dot2(ap[j], Wt[WI((W_CON + hc * 32 + c * 8) / 2 + j)], y[c]);
   }
   // y = rs * x + mlp (two roundings), skip = y in f32, matrix operand = q8(f16(y))
   h2 yq[16];
@@ -332,7 +335,9 @@ extern "C" __global__ __launch_bounds__(256) void k_post_native_prep(PostParams 
   for (int i = t; i < W_HALFS; i += 256) {
     int off, k, cols, inner;
     if (i < W_CON) { off = R_EXP; k = i; cols = 32; inner = 8; }
-    else if (i < W_QKV) { off = R_CON; k = i - W_CON; cols = 128; inner = 2; }
+    else if (i < W_QKV) {   // contract cached [hc/8][c][8]: one MLP step reads 512 contiguous bytes
+      off = R_CON; k = i - W_CON; cols = 128; inner = 2; k = ((k >> 3) & 31) * 128 + (k >> 8) * 8 + (k & 7);
+    }
     else if (i < W_OUT) { off = R_QKV; k = i - W_QKV; cols = 32; inner = 6; }
     else { off = R_OUT; k = i - W_OUT; cols = 32; inner = 2; }
     gWt[i] = __builtin_bit_cast(uint16_t, (_Float16)e4(R[off + unswz(k / cols, k % cols, cols, inner)]));
