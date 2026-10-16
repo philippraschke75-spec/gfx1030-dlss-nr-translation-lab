@@ -36,8 +36,8 @@ static CRITICAL_SECTION g_cs; static FILE* g_log; static char g_err[512] = "";
 static std::wstring g_dir;                         // folder of this DLL
 static std::string g_dataDir, g_modelRes = "auto", g_logName = "dlssnr_nr.log"; static int g_reuseBn = 0, g_vitEvery = 1, g_settleMs = 20, g_jobTimeoutMs = 3000;
 static std::atomic<int> g_evalCalls{0};
-static float g_intensity = -1.0f;                       // nr_set_intensity 0..2 (runtime strength of the network); <0 = keep the strength baked into the data dir
-static float curIntensity() { return g_intensity; }
+static float g_intensity = -1.0f;                       // ini override of the host's intensity (output blend towards the NR result, 0..2); <0 = the host's value
+static float g_iniCond[5] = {NAN, NAN, NAN, NAN, NAN};   // ini overrides: style, local_tone, local_structure, skin_structure, auto_mask; NaN = the host's value
 static std::atomic<bool> g_exiting{false};              // set by atexit: at process exit never join/destroy anything (leak it, the OS reclaims)
 static struct ExitHook { ExitHook() { atexit([] { g_exiting = true; }); } } g_exitHook;
 static int g_apply = 1, g_gate = 1, g_ldrIn = 1, g_hdr = 2; static float g_hdrFrac = 0.125f, g_gain = 1.0f, g_gateLo = 0.03f, g_gateHi = 0.15f;   // apply=1: out = current frame + gain * (NR(old frame) - old frame) (no lag); apply=0: copy the finished (stale) NR image
@@ -73,6 +73,8 @@ static void loadSettings() {
     GetPrivateProfileStringA("nr", "gate_lo", "0.03", b, sizeof b, narrow(ini).c_str()); g_gateLo = (float)atof(b);
     GetPrivateProfileStringA("nr", "gate_hi", "0.15", b, sizeof b, narrow(ini).c_str()); g_gateHi = (float)atof(b);
     GetPrivateProfileStringA("nr", "intensity", "-1", b, sizeof b, narrow(ini).c_str()); g_intensity = (float)atof(b); if (!(g_intensity >= 0.f)) g_intensity = -1.f; if (g_intensity > 2.f) g_intensity = 2.f;
+    { const char* k[5] = {"style", "local_tone", "local_structure", "skin_structure", "auto_mask"};   // empty = follow the host (OptiScaler menu)
+      for (int i = 0; i < 5; i++) { GetPrivateProfileStringA("nr", k[i], "", b, sizeof b, narrow(ini).c_str()); g_iniCond[i] = b[0] ? (float)atof(b) : NAN; } }
     g_sync = (int)GetPrivateProfileIntA("nr", "sync", 1, narrow(ini).c_str());
     g_spinMs = (int)GetPrivateProfileIntA("nr", "sync_timeout_ms", 250, narrow(ini).c_str()); g_spinMs = g_spinMs < 10 ? 10 : g_spinMs > 1000 ? 1000 : g_spinMs;   // GPU wait bound, far below the 2 s TDR
     g_fg = (int)GetPrivateProfileIntA("nr", "fg_mode", 0, narrow(ini).c_str());   // 1: frame-generation friendly sync (never native once an NR result exists; short bounded queue wait)
@@ -111,8 +113,8 @@ struct nr_ctx;
 typedef nr_ctx* (*P_create)(const char*, int, int, int, char*, int);
 typedef int (*P_run)(nr_ctx*, const void*, void*, float*);
 typedef void (*P_destroy)(nr_ctx*);
-typedef int (*P_intensity)(nr_ctx*, float);
-static P_create p_create; static P_run p_run; static P_destroy p_destroy; static P_intensity p_intensity;
+typedef int (*P_cond)(nr_ctx*, int, float, float, float, int);
+static P_create p_create; static P_run p_run; static P_destroy p_destroy; static P_cond p_cond;
 typedef int (*P_extOpen)(nr_ctx*, void*, unsigned long long, unsigned long long, unsigned long long, unsigned long long, void*, unsigned long long, unsigned long long, char*, int);
 typedef int (*P_extEnqueue)(nr_ctx*, unsigned, int);
 typedef int (*P_extHist)(nr_ctx*, unsigned long long, unsigned long long); typedef int (*P_histLayout)(nr_ctx*, unsigned*, unsigned*); typedef int (*P_extEnqueue2)(nr_ctx*, unsigned, int, int);
@@ -127,9 +129,9 @@ static bool loadRuntime() {
     if (!p_create || !p_run || !p_destroy) { p_create = nullptr; seterr("nr_runtime.dll lacks nr_create/nr_run/nr_destroy"); return false; }
     p_extOpen = (P_extOpen)GetProcAddress(m, "nr_ext_open"); p_extEnqueue = (P_extEnqueue)GetProcAddress(m, "nr_ext_enqueue"); p_extHist = (P_extHist)GetProcAddress(m, "nr_ext_history"); p_histLayout = (P_histLayout)GetProcAddress(m, "nr_hist_layout"); p_extEnqueue2 = (P_extEnqueue2)GetProcAddress(m, "nr_ext_enqueue2");
     p_extEnqueue3 = (P_extEnqueue3)GetProcAddress(m, "nr_ext_enqueue3"); p_extSplit = (P_extSplit)GetProcAddress(m, "nr_ext_split");
-    p_intensity = (P_intensity)GetProcAddress(m, "nr_set_intensity");            // absent in an old nr_runtime.dll: the baked strength stays
+    p_cond = (P_cond)GetProcAddress(m, "nr_set_conditioning");                   // absent in an old nr_runtime.dll: the conditioning baked into the data dir stays
     if (auto sl = (void (*)(void (*)(const char*)))GetProcAddress(m, "nr_set_log")) sl([](const char* s) { logf("%s", s); });   // hardware line + output self-check
-    if (!p_intensity && curIntensity() >= 0.f) logf("nr_runtime.dll has no nr_set_intensity (old runtime): intensity is ignored");
+    if (!p_cond) logf("nr_runtime.dll has no nr_set_conditioning (old runtime): style / tone / structure / skin stay at the data dir's values");
     return true;
 }
 // SEH wrappers: an access violation inside the HIP runtime must fail the feature, never the game (worker thread has no other guard)
@@ -332,8 +334,12 @@ struct Sync {                                       // D3D12 side of the sync pa
     unsigned waitFails = 0; unsigned padW = 0, padH = 0, lastNrFrm = 0xFFFFFFF0u, accFrm = 0xFFFFFFF0u; bool histOn = false;   // history=1   // fg: frame counter, frame of each in-flight seq (edit age)
     bool split = false; unsigned part = 0, jobFrm = 0, doneFrm = 0xFFFFFFF0u, accTo = 0xFFFFFFF0u;   // nr_split: next part (0 = start a job), frame of the job in flight / last finished one, NR frame the acc chain points to
 };
+struct Feature;
+static void applyCond(Feature* F); static float curIntensity(Feature* F);
 struct Feature {
     unsigned W = 0, H = 0, pitch = 0;
+    std::atomic<float> hostI{1.f}, hostTone{1.f}, hostStruct{1.f}, hostSkin{-1.f}; std::atomic<int> hostStyle{0}, hostMask{1};   // the host's controls (NVIDIA defaults)
+    float appliedCond[5] = {NAN, NAN, NAN, NAN, NAN};
     ID3D12Resource* rb = nullptr; ID3D12Resource* up[2] = {}; uint8_t* rbp = nullptr; uint8_t* upp[2] = {};
     std::atomic<int> state{S_LOADING}; std::atomic<int> published{-1}; std::atomic<bool> quit{false};
     std::thread th; std::string dir; nr_ctx* ctx = nullptr; DWORD jobStart = 0; bool warnedFmt = false, warnedSize = false;
@@ -398,7 +404,7 @@ static void worker(Feature* F) {
         if (F->sy) {
             if (!p_extOpen || !p_extEnqueue) logf("sync: nr_runtime.dll has no nr_ext_* (old runtime) - async path");
             else if (p_extOpen(F->ctx, F->sy->hIo, F->sy->ioAlloc, F->sy->ioSize, F->sy->outOff, F->sy->flagOff, F->sy->hSig, F->sy->sigAlloc, F->sy->sigSize, err, sizeof err)) logf("sync: nr_ext_open failed (%s) - async path", err);
-            else { if (p_intensity && curIntensity() >= 0.f && p_intensity(F->ctx, curIntensity()) == 0) logf("worker: intensity %.2f", curIntensity());
+            else { applyCond(F);
                    if (g_hist) { unsigned pw = 0, ph = 0; int r = p_extHist && p_histLayout && p_extEnqueue2 ? p_histLayout(F->ctx, &pw, &ph) : -1; if (!r) r = p_extHist(F->ctx, F->sy->histOff, F->sy->histOut);
                        if (r || (UINT64)pw * ph * 12 > F->sy->histOut - F->sy->histOff || (unsigned)pw < F->W || (unsigned)ph < F->H) logf("history: unavailable (%s, code %d) - history off", p_extHist ? "this data dir / runtime cannot take it" : "nr_runtime.dll has no nr_ext_history", r);
                        else { F->sy->padW = pw; F->sy->padH = ph; F->sy->histOn = true; F->sy->impScale = importScale(F->dir); logf("history: k_import scale %.3g (0 = mode 0, raw colour)", F->sy->impScale); logf("history: mode %d on (warped history io+%llu, runtime output io+%llu, %ux%u RGB32F, gate %.2f..%.2f)", g_hist, F->sy->histOff, F->sy->histOut, pw, ph, g_hLo, g_hHi); } }
@@ -420,7 +426,7 @@ static void worker(Feature* F) {
                     else if (F->inFmt == (int)DXGI_FORMAT_R8G8B8A8_UNORM) for (unsigned x = 0; x < F->W * 4; x++) ((uint16_t*)d)[x] = f2h(sr[x] / 255.f);
                     else memcpy(d, sr, (size_t)F->W * 8); }
                 sanitizeHalf4((uint16_t*)F->tin.data(), (size_t)F->W * F->H * 4);
-                { const float want = curIntensity(); if (p_intensity && want >= 0.f && F->appliedIntensity != want) { if (p_intensity(F->ctx, want) == 0) logf("worker: intensity %.2f", want); F->appliedIntensity = want; } }
+                applyCond(F);
                 float ms = 0; int r = safeRun(F->ctx, F->tin.data(), F->tout.data(), &ms);
                 if (r) { seterr("nr_run failed (%d)", r); F->state = S_FAILED; return; }
                 { static unsigned jobs = 0; if (jobs < 3 || jobs % 8 == 0) logStats(F); jobs++; }
@@ -431,7 +437,7 @@ static void worker(Feature* F) {
                     uint8_t* d = F->upp[slot] + (size_t)y * F->pitch; const uint8_t* sr = F->tout.data() + (size_t)y * F->W * 8;
                     if (F->delta) {                                             // edit = NR(old) - old, half4 (rgb used)
                         const uint16_t* a = (const uint16_t*)sr; const uint16_t* b0 = (const uint16_t*)(F->tin.data() + (size_t)y * F->W * 8); uint16_t* e = (uint16_t*)d;
-                        for (unsigned x = 0; x < F->W * 4; x++) e[x] = f2h(g_gain * (h2f(a[x]) - h2f(b0[x])));
+                        for (unsigned x = 0; x < F->W * 4; x++) e[x] = f2h(g_gain * curIntensity(F) * (h2f(a[x]) - h2f(b0[x])));
                         memcpy(F->upOldp[slot] + (size_t)y * F->pitch, b0, (size_t)F->W * 8); }
                     else if (F->outFmt == (int)DXGI_FORMAT_R11G11B10_FLOAT) for (unsigned x = 0; x < F->W; x++) pack_r11g11b10((const uint16_t*)sr + 4 * x, (uint32_t*)d + x);
                     else if (F->outFmt == (int)DXGI_FORMAT_R8G8B8A8_UNORM) for (unsigned x = 0; x < F->W * 4; x++) { float v = h2f(((const uint16_t*)sr)[x]); d[x] = (uint8_t)(v <= 0.f ? 0 : v >= 1.f ? 255 : v * 255.f + .5f); }
@@ -572,8 +578,26 @@ static void logHost(void* caller) {
     logf("host: dlssnr_nr build %s %s | game %ls | host module %ls (version %s)", __DATE__, __TIME__, exe, host, ver);
 }
 
+}  // extern "C" (the helpers below are C++)
+// Host controls -> runtime (ini keys override). Values outside NVIDIA's ranges are ignored (the previous ones stay).
+static void setHost(Feature* F, float i, int style, float structure, float tone, float skin, int mask) {
+    if (i >= 0.f && i <= 2.f) F->hostI = i; if (style >= 0 && style <= 2) F->hostStyle = style; if (structure >= 0.f && structure <= 2.f) F->hostStruct = structure;
+    if (tone >= 0.f && tone <= 2.f) F->hostTone = tone; if (skin >= -1.f && skin <= 2.f) F->hostSkin = skin; F->hostMask = mask ? 1 : 0;
+}
+static float curIntensity(Feature* F) { return g_intensity >= 0.f ? g_intensity : F->hostI.load(); }
+static void applyCond(Feature* F) {
+    if (!p_cond || !F->ctx) return;
+    const float host[5] = {(float)F->hostStyle.load(), F->hostTone.load(), F->hostStruct.load(), F->hostSkin.load(), (float)F->hostMask.load()};
+    float v[5]; for (int i = 0; i < 5; i++) v[i] = g_iniCond[i] == g_iniCond[i] ? g_iniCond[i] : host[i];
+    if (!memcmp(v, F->appliedCond, sizeof v)) return;
+    const int r = p_cond(F->ctx, (int)v[0], v[1], v[2], v[3], v[4] != 0.f);
+    logf("conditioning: style %d tone %.2f structure %.2f skin %.2f auto_mask %d, intensity %.2f%s", (int)v[0], v[1], v[2], v[3], (int)(v[4] != 0.f), curIntensity(F), r ? " - rejected by the runtime" : "");
+    memcpy(F->appliedCond, v, sizeof v);
+}
+
+extern "C" {
 __declspec(dllexport) void* dlssnr_call_create(const wchar_t* snippet, const wchar_t*, ID3D12Device* dev, ID3D12GraphicsCommandList*, void*,
-        unsigned w, unsigned h, int, float, int, float, float, float, int, int) {
+        unsigned w, unsigned h, int, float intensity, int style, float localStructure, float localTone, float skinStructure, int useAutoMask, int) {
     try {
         if (!g_log) loadSettings();
         logf("create: snippet=%ls dev=%p %ux%u", snippet ? snippet : L"", (void*)dev, w, h);
@@ -584,7 +608,7 @@ __declspec(dllexport) void* dlssnr_call_create(const wchar_t* snippet, const wch
         if (!readMeta(dir, &mw, &mh)) { seterr("create: no meta.txt in '%s' (run gen_runtime_data.py, see INSTALL.md)", dir.c_str()); return nullptr; }
         if ((mw != w || mh != h) && g_sync) { logf("create: frame %ux%u, model %ux%u - sync path resamples (universal for any resolution / upscaler mode)", w, h, mw, mh); w = mw; h = mh; }
         if (mw != w || mh != h) { seterr("create: model size %ux%u but data dir '%s' is for %ux%u - generate data for this size", w, h, dir.c_str(), mw, mh); return nullptr; }
-        auto* F = new Feature; F->dir = dir; F->pass = g_live++;   // ponytail: pass = live features at create (janblade creates the main one first); recreating only the main feature while extras live would mislabel it
+        auto* F = new Feature; F->dir = dir; F->pass = g_live++; setHost(F, intensity, style, localStructure, localTone, skinStructure, useAutoMask);   // ponytail: pass = live features at create (janblade creates the main one first); recreating only the main feature while extras live would mislabel it
         if (F->pass) logf("create: extra pass %d (pass2_gain %.2f)", F->pass, g_pass2Gain); F->W = w; F->H = h; F->pitch = align256(w * 8);
         F->tin.resize((size_t)w * h * 8); F->tout.resize((size_t)w * h * 8);
         UINT64 sz = (UINT64)F->pitch * h;
@@ -622,11 +646,13 @@ static int passThrough(ID3D12GraphicsCommandList* cmd, ID3D12Resource* color, ID
 
 __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd, void* f, void*, ID3D12Resource* color, ID3D12Resource* depth,
         ID3D12Resource* motion, ID3D12Resource* out, unsigned w, unsigned h, unsigned dW, unsigned dH, unsigned mW, unsigned mH, unsigned dBx, unsigned dBy, unsigned mBx, unsigned mBy,
-        int depthInv, int reset, float, int, float, float, float, int, float mvSx, float mvSy) {
+        int depthInv, int reset, float intensity, int style, float localStructure, float localTone, float skinStructure, int useAutoMask, float mvSx, float mvSy) {
     try {
         auto* F = (Feature*)f; int n = ++g_evalCalls;
         if (!F || !cmd || !color || !out) return 0;
         if (F->state == S_FAILED) return 0;
+        setHost(F, intensity, style, localStructure, localTone, skinStructure, useAutoMask);
+        if (F->state == S_SYNC) applyCond(F);   // the runtime applies it at the start of the next network run
         if ((w != F->W || h != F->H) && F->state != S_SYNC) { if (!F->warnedSize) { F->warnedSize = true; logf("evaluate: frame %ux%u, model %ux%u - native frame until the runtime has loaded", w, h, F->W, F->H); } return passThrough(cmd, color, out, w, h); }
         D3D12_RESOURCE_DESC cd = color->GetDesc(), od = out->GetDesc();
         // R9G9B9E5 output (RE Engine): sync path only, packed in a shader and copied in. Only when the host created the texture
@@ -686,7 +712,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
                              (UINT)(g_fg ? (std::max)(g_fgMaxAge, g_nrEvery - 1) : 0x7FFF /* busy reuse: no age limit, no fade (the colour gate guards) */), (UINT)mvOn, 0, 0, mW | (mH << 16), mBx | (mBy << 16), dW | (dH << 16), dBx | (dBy << 16), (UINT)dOn | (depthInv ? 2u : 0u), 0, 0,
                              (UINT)s->histOff, s->padW | (s->padH << 16), (UINT)histOk, (UINT)hMv, 0, 0, 0, (UINT)s->histOut }; memcpy(&cb[30], &s->impScale, 4);
             cb[33] = g_hdr == 1 ? 1u : g_hdr == 2 && (cd.Format == DXGI_FORMAT_R16G16B16A16_FLOAT || cd.Format == DXGI_FORMAT_R9G9B9E5_SHAREDEXP) ? 2u | ((UINT)(g_hdrFrac * F->W * F->H) << 2) : 0u;   // hdrM | auto threshold << 2
-            float gain = F->pass ? g_gain * g_pass2Gain : g_gain; memcpy(&cb[6], &gain, 4); memcpy(&cb[9], &g_gateLo, 4); memcpy(&cb[10], &g_gateHi, 4);   // gLo, gHi
+            float gain = (F->pass ? g_gain * g_pass2Gain : g_gain) * curIntensity(F); memcpy(&cb[6], &gain, 4); memcpy(&cb[9], &g_gateLo, 4); memcpy(&cb[10], &g_gateHi, 4);   // gLo, gHi   // gain x intensity: NVIDIA's blend towards the NR result (above 1 extrapolated linearly)
             memcpy(&cb[15], &mvSx, 4); memcpy(&cb[16], &mvSy, 4); memcpy(&cb[22], &g_mvLo, 4); memcpy(&cb[23], &g_mvHi, 4); memcpy(&cb[28], &g_hLo, 4); memcpy(&cb[29], &g_hHi, 4);
             ID3D12DescriptorHeap* hp[] = { s->heap }; cmd->SetDescriptorHeaps(1, hp); cmd->SetComputeRootSignature(s->rs);
             cmd->SetComputeRootDescriptorTable(0, gpu); cmd->SetComputeRootUnorderedAccessView(1, s->io->GetGPUVirtualAddress()); cmd->SetComputeRootUnorderedAccessView(2, s->st->GetGPUVirtualAddress());
