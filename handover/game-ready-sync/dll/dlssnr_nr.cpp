@@ -25,6 +25,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <mutex>
 #include "dlssnr_iface.h"
 #include "r11g10.h"
 #include "../runtime/weights_ht.h"
@@ -42,7 +43,7 @@ static float curIntensity() { return g_intensity; }
 static std::atomic<bool> g_exiting{false};              // set by atexit: at process exit never join/destroy anything (leak it, the OS reclaims)
 static struct ExitHook { ExitHook() { atexit([] { g_exiting = true; }); } } g_exitHook;
 static int g_apply = 1, g_gate = 1, g_ldrIn = 1, g_hdr = 2; static float g_hdrFrac = 0.125f, g_gain = 1.0f, g_gateLo = 0.03f, g_gateHi = 0.15f;   // apply=1: out = current frame + gain * (NR(old frame) - old frame) (no lag); apply=0: copy the finished (stale) NR image
-static int g_sync = 1, g_spinMs = 250, g_maxInflight = 3, g_fg = 0, g_fgWaitMs = 4, g_fgMaxAge = 3, g_mv = 0, g_nrEvery = 1; static float g_mvLo = 0.05f, g_mvHi = 0.25f;
+static int g_allowAny = 0, g_evictMs = 2000; static int g_sync = 1, g_spinMs = 250, g_maxInflight = 3, g_fg = 0, g_fgWaitMs = 4, g_fgMaxAge = 3, g_mv = 0, g_nrEvery = 1; static float g_mvLo = 0.05f, g_mvHi = 0.25f;
 static int g_busy = 0, g_busyWaitMs = 100;   // busy_mode: 0 wait (CPU waits, bounded, for a free HIP slot), 1 reuse (last NR edit, warped) - never a native frame once NR ran
 static float g_pass2Gain = 0.5f; static std::atomic<int> g_live{0}; static UINT g_hdrP0 = 0; static ID3D12Resource* g_hl = nullptr; static float g_hdrKey = 0.18f, g_hdrAdapt = 0.05f, g_hdrBias = 1.f, g_hdrExp = 0.f;   // OptiScaler "2 passes": a later pass (a second feature on pass 1's output) adds its edit at gain * pass2_gain
 static int g_split = 0, g_splitK[2] = {0, 0}; static int g_hist = 0; static float g_hLo = 0.08f, g_hHi = 0.25f;   // history=1: temporal history (previous NR output warped by the game's MVs) into the pre-block's +0x40, see handover/temporal-2026-10-11/DLL.md   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
@@ -79,6 +80,7 @@ static void loadSettings() {
     GetPrivateProfileStringA("nr", "gate_hi", "0.15", b, sizeof b, narrow(ini).c_str()); g_gateHi = (float)atof(b);
     GetPrivateProfileStringA("nr", "intensity", "-1", b, sizeof b, narrow(ini).c_str()); g_intensity = (float)atof(b); if (!(g_intensity >= 0.f)) g_intensity = -1.f; if (g_intensity > 2.f) g_intensity = 2.f;
     g_sync = (int)GetPrivateProfileIntA("nr", "sync", 1, narrow(ini).c_str());
+    g_allowAny = (int)GetPrivateProfileIntA("nr", "allow_any_gpu", 0, narrow(ini).c_str()); g_evictMs = (int)GetPrivateProfileIntA("nr", "evict_idle_ms", 2000, narrow(ini).c_str());
     g_spinMs = (int)GetPrivateProfileIntA("nr", "sync_timeout_ms", 250, narrow(ini).c_str()); g_spinMs = g_spinMs < 10 ? 10 : g_spinMs > 1000 ? 1000 : g_spinMs;   // GPU wait bound, far below the 2 s TDR
     g_fg = (int)GetPrivateProfileIntA("nr", "fg_mode", 0, narrow(ini).c_str());   // 1: frame-generation friendly sync (never native once an NR result exists; short bounded queue wait)
     g_fgWaitMs = (int)GetPrivateProfileIntA("nr", "fg_wait_ms", 4, narrow(ini).c_str()); g_fgWaitMs = g_fgWaitMs < 0 ? 0 : g_fgWaitMs > 1000 ? 1000 : g_fgWaitMs;
@@ -122,7 +124,7 @@ typedef int (*P_extOpen)(nr_ctx*, void*, unsigned long long, unsigned long long,
 typedef int (*P_extEnqueue)(nr_ctx*, unsigned, int);
 typedef int (*P_extHist)(nr_ctx*, unsigned long long, unsigned long long); typedef int (*P_histLayout)(nr_ctx*, unsigned*, unsigned*); typedef int (*P_extEnqueue2)(nr_ctx*, unsigned, int, int);
 typedef int (*P_extEnqueue3)(nr_ctx*, unsigned, int, int, int); typedef int (*P_extSplit)(nr_ctx*, int*, int*, float*); static P_extEnqueue3 p_extEnqueue3; static P_extSplit p_extSplit;
-static P_extOpen p_extOpen; static P_extEnqueue p_extEnqueue; static P_extHist p_extHist; static P_histLayout p_histLayout; static P_extEnqueue2 p_extEnqueue2;   // p_extHist: absent in an old runtime -> history off   // absent in an old nr_runtime.dll -> async path
+static void (*p_select)(const void*, int); static P_extOpen p_extOpen; static P_extEnqueue p_extEnqueue; static P_extHist p_extHist; static P_histLayout p_histLayout; static P_extEnqueue2 p_extEnqueue2;   // p_extHist: absent in an old runtime -> history off   // absent in an old nr_runtime.dll -> async path
 static bool loadRuntime() {
     if (p_create) return true;
     std::wstring p = g_dir + L"nr_runtime.dll";
@@ -132,6 +134,7 @@ static bool loadRuntime() {
     if (!p_create || !p_run || !p_destroy) { p_create = nullptr; seterr("nr_runtime.dll lacks nr_create/nr_run/nr_destroy"); return false; }
     p_extOpen = (P_extOpen)GetProcAddress(m, "nr_ext_open"); p_extEnqueue = (P_extEnqueue)GetProcAddress(m, "nr_ext_enqueue"); p_extHist = (P_extHist)GetProcAddress(m, "nr_ext_history"); p_histLayout = (P_histLayout)GetProcAddress(m, "nr_hist_layout"); p_extEnqueue2 = (P_extEnqueue2)GetProcAddress(m, "nr_ext_enqueue2");
     p_extEnqueue3 = (P_extEnqueue3)GetProcAddress(m, "nr_ext_enqueue3"); p_extSplit = (P_extSplit)GetProcAddress(m, "nr_ext_split");
+    p_select = (void (*)(const void*, int))GetProcAddress(m, "nr_select_device");   // absent in an old runtime: it uses HIP device 0
     p_intensity = (P_intensity)GetProcAddress(m, "nr_set_intensity");            // absent in an old nr_runtime.dll: the baked strength stays
     if (auto sl = (void (*)(void (*)(const char*)))GetProcAddress(m, "nr_set_log")) sl([](const char* s) { logf("%s", s); });   // hardware line + output self-check
     if (!p_intensity && curIntensity() >= 0.f) logf("nr_runtime.dll has no nr_set_intensity (old runtime): intensity is ignored");
@@ -354,7 +357,11 @@ struct Feature {
     std::atomic<int> inFmt{(int)DXGI_FORMAT_R16G16B16A16_FLOAT}, outFmt{(int)DXGI_FORMAT_R16G16B16A16_FLOAT};   // game texture formats (set by evaluate)
     int pass = 0;                                                       // 0 = the host's main feature; >0 = an extra pass (created while another feature lives)
     Sync* sy = nullptr;                                                 // non-null: sync resources exist (worker tries nr_ext_open)
+    std::mutex mu; std::atomic<DWORD> lastUse{GetTickCount()}; std::atomic<bool> done{false};   // mu: evaluate vs eviction; done: worker finished (release-while-loading handoff)
 };
+// Hosts (OptiScaler in MSFS 2024) create features again and again without releasing the old ones. Every live feature
+// holds a runtime context (~1 GB VRAM), so before loading a new one the contexts of features idle for evict_idle_ms are freed.
+static std::mutex g_featMu; static std::vector<Feature*> g_feats;
 static const DXGI_FORMAT kFmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
 static bool fmtOk(DXGI_FORMAT f) { return f == DXGI_FORMAT_R16G16B16A16_FLOAT || f == DXGI_FORMAT_R11G11B10_FLOAT || f == DXGI_FORMAT_R8G8B8A8_UNORM; }
 static unsigned fmtBpp(int f) { return f == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4; }
@@ -395,15 +402,21 @@ static void logStats(Feature* F) {
 }
 
 static float importScale(const std::string& dir);
-static void worker(Feature* F) {
+static void freeFeature(Feature* F);
+static void evictIdle(Feature* self);
+static void workerBody(Feature* F);
+static void worker(Feature* F) { workerBody(F); if (F->done.exchange(true)) freeFeature(F); }   // released while loading: the last one out frees F
+static void workerBody(Feature* F) {
     try {
         char err[512] = {0};
         if (!loadRuntime()) { F->state = S_FAILED; return; }
         logf("worker: nr_create(%s, %ux%u, vit_every %d%s)...", F->dir.c_str(), F->W, F->H, g_vitEvery, g_reuseBn ? " bottleneck" : "");
+        evictIdle(F);
+        if (p_select) { LUID l = F->dev->GetAdapterLuid(); p_select(&l, g_allowAny); }   // HIP on the GPU the game renders on (not an iGPU / HIP device 0)
         DWORD t0 = GetTickCount();
         F->ctx = safeCreate(F->dir.c_str(), (int)F->W, (int)F->H, g_reuseBn && g_vitEvery > 1 ? -g_vitEvery : g_vitEvery, err, sizeof err);
         if (!F->ctx) { seterr("nr_create failed: %s", err); F->state = S_FAILED; return; }
-        if (F->quit) { if (p_destroy) p_destroy(F->ctx); F->ctx = nullptr; return; }   // released while the runtime was loading: clean up and leave
+        if (F->quit) return;   // released while the runtime was loading: worker() frees it
         logf("worker: runtime ready after %lu ms", GetTickCount() - t0);
         if (F->sy) {
             if (!p_extOpen || !p_extEnqueue) logf("sync: nr_runtime.dll has no nr_ext_* (old runtime) - async path");
@@ -660,6 +673,7 @@ __declspec(dllexport) void* dlssnr_call_create(const wchar_t* snippet, const wch
         }
         if (g_sync) F->sy = makeSync(F);
         logf("create: sync %s; async fallback apply mode %s gain %.2f", F->sy ? "resources ready" : "off", F->delta ? "delta (live frame + NR edit)" : "copy (stale NR image)", g_gain);
+        { std::lock_guard<std::mutex> g(g_featMu); g_feats.push_back(F); }
         F->th = std::thread(worker, F);
         dlssnr_call_last_create = 1; return F;
     } catch (...) { seterr("create: exception"); return nullptr; }
@@ -688,6 +702,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
         auto* F = (Feature*)f; int n = ++g_evalCalls;
         if (!F || !cmd || !color || !out) return 0;
         if (F->state == S_FAILED) return passThrough(cmd, color, out, w, h);   // NR off for this session (model guard, runtime failure): native frame
+        std::lock_guard<std::mutex> lk(F->mu); F->lastUse = GetTickCount();
         if ((w != F->W || h != F->H) && F->state != S_SYNC) { if (!F->warnedSize) { F->warnedSize = true; logf("evaluate: frame %ux%u, model %ux%u - native frame until the runtime has loaded", w, h, F->W, F->H); } return passThrough(cmd, color, out, w, h); }
         D3D12_RESOURCE_DESC cd = color->GetDesc(), od = out->GetDesc();
         // R9G9B9E5 output (RE Engine): sync path only, packed in a shader and copied in. Only when the host created the texture
@@ -872,18 +887,38 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
     } catch (...) { return 0; }
 }
 
+}   // extern "C"
+// Runtime context + every D3D12 resource of F. Callers: release, the worker (released while loading), eviction (keepF).
+static void freeRes(Feature* F) {
+    if (F->ctx && p_destroy) p_destroy(F->ctx); F->ctx = nullptr;
+    if (F->rb) F->rb->Release(); for (auto u : F->up) if (u) u->Release();
+    for (auto u : F->upOld) if (u) u->Release(); if (F->zero) F->zero->Release();
+    if (F->pso) F->pso->Release(); if (F->rs) F->rs->Release(); if (F->heap) F->heap->Release();
+    freeSync(F->sy);   // ponytail: assumes the host released after its last list using us completed (INTERFACE.md: it parks handles); a still-spinning list ends by its bound
+    F->rb = F->zero = nullptr; F->up[0] = F->up[1] = F->upOld[0] = F->upOld[1] = nullptr; F->pso = nullptr; F->rs = nullptr; F->heap = nullptr; F->sy = nullptr;
+}
+static void freeFeature(Feature* F) { try { freeRes(F); } catch (...) {} delete F; }
+static void evictIdle(Feature* self) {
+    std::lock_guard<std::mutex> g(g_featMu);   // ponytail: held while freeing (<= ~2 s); a release or create on another thread waits that long
+    for (Feature* F : g_feats) {                 // release() unlists F under g_featMu first, so every F here is alive
+        if (F == self) continue;
+        std::unique_lock<std::mutex> lk(F->mu, std::try_to_lock);   // being evaluated right now: in use
+        if (!lk.owns_lock() || GetTickCount() - F->lastUse < (DWORD)g_evictMs || F->state == S_LOADING || F->state == S_FAILED) continue;
+        F->quit = true; if (F->th.joinable()) F->th.join();   // async worker loop ends; a sync worker has already returned
+        logf("evict %p: idle %lu ms while a new feature loads - runtime and buffers freed, native frames if the host uses it again", (void*)F, GetTickCount() - F->lastUse.load());
+        F->state = S_FAILED; freeRes(F);   // F itself stays valid for the host's later evaluate/release
+    }
+}
+extern "C" {
 __declspec(dllexport) void dlssnr_call_release(void* f) {
     auto* F = (Feature*)f; if (!F) return;
     try {
         logf("release %p", f); F->quit = true; g_live--;
-        if (g_exiting || F->state == S_LOADING) { if (F->th.joinable()) F->th.detach(); return; }   // process exit, or the runtime is still loading: never block the game, leak F (the worker leaves on its own)
+        { std::lock_guard<std::mutex> g(g_featMu); g_feats.erase(std::remove(g_feats.begin(), g_feats.end(), F), g_feats.end()); }
+        if (g_exiting) { if (F->th.joinable()) F->th.detach(); return; }   // process exit: never block, leak F
+        if (F->state == S_LOADING) { if (F->th.joinable()) F->th.detach(); if (F->done.exchange(true)) freeFeature(F); return; }   // still loading: never block the game, the worker frees F when nr_create returns
         if (F->th.joinable()) F->th.join();
-        if (F->ctx && p_destroy) p_destroy(F->ctx);
-        if (F->rb) F->rb->Release(); for (auto u : F->up) if (u) u->Release();
-        for (auto u : F->upOld) if (u) u->Release(); if (F->zero) F->zero->Release();
-        if (F->pso) F->pso->Release(); if (F->rs) F->rs->Release(); if (F->heap) F->heap->Release();
-        freeSync(F->sy);   // ponytail: assumes the host released after its last list using us completed (INTERFACE.md: it parks handles); a still-spinning list ends by its bound
+        freeFeature(F);
     } catch (...) {}
-    delete F;
 }
 }
