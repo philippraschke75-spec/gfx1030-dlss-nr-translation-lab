@@ -245,7 +245,8 @@ __device__ __forceinline__ void swin_block(const VarParams& P) {
   // I8: Xs becomes [x as e4m3 byte pairs, u16 [C/2][64]] | [Xq int8 quads, words [C/4][64]]
   uint16_t* Xb = (uint16_t*)Xs;
   uint32_t* Xq = Xs + C * 16;
-  if constexpr (I8) {   // per (token, 32-channel group kb): power-of-two scale sa_s[kb][t]
+  // Xs (f16, e4m3-grid values) -> Xb bytes + Xq int8 with a power-of-two scale sa_s[kb][t] per (token, 32-channel group kb)
+  auto quant = [&]() {
     constexpr int NP = (64 * KB + 255) / 256;
     uint32_t q[NP][8], xb[NP][8];
     __syncthreads();
@@ -282,7 +283,8 @@ __device__ __forceinline__ void swin_block(const VarParams& P) {
         Xb[(kb * 16 + 2 * j + 1) * 64 + t] = (uint16_t)(xb[p][j] >> 16);
       }
     }
-  }
+  };
+  if constexpr (I8) quant();
 
   float accc[NPASS][8][CPT];
 #pragma unroll
@@ -494,6 +496,7 @@ __device__ __forceinline__ void swin_block(const VarParams& P) {
       for (int r = 0; r < 8; r++)
 #pragma unroll
         for (int c = 0; c < CPT / 2; c++) Xs[(chan(pass, 0) / 2 + c) * 64 + ty * 8 + r] = yq[pass][r][c];
+    if constexpr (I8) { quant(); __syncthreads(); }
   }
 
   // ================= attention, one head at a time; out_proj accumulated per head
@@ -522,6 +525,42 @@ __device__ __forceinline__ void swin_block(const VarParams& P) {
       const int tx16 = tid & 15, ty16 = tid >> 4;
       float acc[4][6] = {};
       const bool ld = tid < 192;
+      if constexpr (I8) {   // int8 copy: (h, kb) blocks of [8 kq][96] words, then float scales[3C]
+        const uint8_t* q0 = P.scratch + 4 * C * C + 16 * C;
+        const uint4* wsrc = (const uint4*)(q0 + (size_t)h * KB * 3072) + (ld ? tid : 0);
+        uint4 wn = wsrc[0];
+#pragma unroll 1
+        for (int kb = 0; kb < KB; kb++) {
+          __syncthreads();
+          if (ld) ((uint4*)R3)[tid] = wn;
+          __syncthreads();
+          if (kb + 1 < KB) wn = wsrc[(kb + 1) * 192];
+          int32_t ai[4][6] = {};
+#pragma unroll
+          for (int kq = 0; kq < 8; kq++) {
+            uint4 a = *(const uint4*)&Xq[(kb * 8 + kq) * 64 + ty16 * 4];
+            uint2 b0 = *(const uint2*)&R3[kq * 96 + tx16 * 6];
+            uint2 b1 = *(const uint2*)&R3[kq * 96 + tx16 * 6 + 2];
+            uint2 b2 = *(const uint2*)&R3[kq * 96 + tx16 * 6 + 4];
+            uint32_t av[4] = {a.x, a.y, a.z, a.w}, bv[6] = {b0.x, b0.y, b1.x, b1.y, b2.x, b2.y};
+#pragma unroll
+            for (int r = 0; r < 4; r++)
+#pragma unroll
+              for (int c = 0; c < 6; c++) ai[r][c] = __builtin_amdgcn_sdot4((int)av[r], (int)bv[c], ai[r][c], false);
+          }
+#pragma unroll
+          for (int r = 0; r < 4; r++) {
+            const float st = sa_s[kb * 64 + ty16 * 4 + r];
+#pragma unroll
+            for (int c = 0; c < 6; c++) acc[r][c] = fmaf((float)ai[r][c], st, acc[r][c]);
+          }
+        }
+        const float* sw = (const float*)(q0 + 3 * C * C) + h * 96 + tx16 * 6;
+#pragma unroll
+        for (int r = 0; r < 4; r++)
+#pragma unroll
+          for (int c = 0; c < 6; c++) acc[r][c] *= sw[c] * (1.f / 256.f);   // the epilogue below multiplies by 256
+      } else {
       const uint4* wsrc = (const uint4*)(rec + R_QKV + h * 6 * 512) + (ld ? tid : 0);
       uint4 wn = wsrc[0];
 #pragma unroll 1
@@ -542,6 +581,7 @@ __device__ __forceinline__ void swin_block(const VarParams& P) {
 #pragma unroll
             for (int c = 0; c < 6; c++) acc[r][c] = dot2(av[r], bv[c], acc[r][c]);
         }
+      }
       }
       __syncthreads();   // everyone is done with R1 (Wo of the previous head) and R2 (Vt)
 #pragma unroll
@@ -682,7 +722,7 @@ __device__ __forceinline__ void swin_block(const VarParams& P) {
 #pragma unroll
         for (int c = 0; c < CPT; c++) {
           int ch = chan(pass, c);
-          uint32_t sk = Xs[(ch >> 1) * 64 + t];
+          uint32_t sk = I8 ? x256(e4x2(Xb[(ch >> 1) * 64 + t])) : Xs[(ch >> 1) * 64 + t];
           float o = __fadd_rn(__fmul_rn((ch & 1) ? hi(sk) : lo(sk), (float)ars[ch]), acco[pass][r][c] * 256.f);
           acco[pass][r][c] = o;
           if (!in) continue;
@@ -786,13 +826,37 @@ __device__ void i8_prep(const VarParams& P) {
       dst[(size_t)((h * NS + s_) * KB + (k >> 5)) * HC * 32 + ((((k & 31) >> 2) * HC + nn) << 2) + (k & 3)] = (int8_t)rintf(w(k) / s);
   }
 }
+template <int C>
+__device__ void i8_prep_qkv(const VarParams& P) {
+  constexpr int KB = C / 32, GN = 3 * C / 16;
+  const bool up = P.flags & 8;
+  constexpr int R_AFT = 4 * C * C + C * 128 + C * C;
+  const int R_RS = up ? R_AFT + 2 * C * C : R_AFT, R_QKV = R_RS + 2 * C + 32 + (up ? 2 * C - 32 : 0);
+  int8_t* dst = (int8_t*)P.scratch + 4 * C * C + 16 * C;
+  float* sc = (float*)(dst + 3 * C * C);
+  for (int n = blockIdx.x * 256 + threadIdx.x; n < 3 * C; n += gridDim.x * 256) {
+    auto w = [&](int k) {
+      int tile = (k >> 5) * GN + (n >> 4), nn = n & 15, kk = k & 31;
+      uint8_t b = P.w[R_QKV + tile * 512 + (nn & 7) * 64 + ((kk >> 1) & 3) * 16 + (nn >> 3) * 8 + (kk >> 3) * 2 + (kk & 1)];
+      return lo(e4x2(b)) * 256.f;
+    };
+    float m = 0.f;
+    for (int k = 0; k < C; k++) m = fmaxf(m, fabsf(w(k)));
+    int e; frexpf(m, &e);
+    const float s = m > 0.f ? ldexpf(1.f, e - 7) : 1.f;
+    sc[n] = s;
+    const int h = n / 96, nn = n % 96;
+    for (int k = 0; k < C; k++)
+      dst[(size_t)(h * KB + (k >> 5)) * 3072 + ((((k & 31) >> 2) * 96 + nn) << 2) + (k & 3)] = (int8_t)rintf(w(k) / s);
+  }
+}
 extern "C" __global__ __launch_bounds__(256) void k_swin_c256_i8(VarParams P) { swin_block<256, false, true>(P); }
 extern "C" __global__ __launch_bounds__(256) void k_swin_c128_i8(VarParams P) { swin_block<128, false, true>(P); }
 extern "C" __global__ __launch_bounds__(256) void k_swin_c256s_i8(VarParams P) { swin_block<256, true, true>(P); }
 extern "C" __global__ __launch_bounds__(256) void k_swin_c128s_i8(VarParams P) { swin_block<128, true, true>(P); }
 extern "C" __global__ __launch_bounds__(256) __attribute__((amdgpu_waves_per_eu(8))) void k_swin_c64_i8(VarParams P) { swin_block<64, false, true>(P); }
-extern "C" __global__ __launch_bounds__(256) void k_swin_c256_i8_prep(VarParams P) { i8_prep<256>(P); }
-extern "C" __global__ __launch_bounds__(256) void k_swin_c128_i8_prep(VarParams P) { i8_prep<128>(P); }
-extern "C" __global__ __launch_bounds__(256) void k_swin_c256s_i8_prep(VarParams P) { i8_prep<256>(P); }
-extern "C" __global__ __launch_bounds__(256) void k_swin_c128s_i8_prep(VarParams P) { i8_prep<128>(P); }
-extern "C" __global__ __launch_bounds__(256) void k_swin_c64_i8_prep(VarParams P) { i8_prep<64>(P); }
+extern "C" __global__ __launch_bounds__(256) void k_swin_c256_i8_prep(VarParams P) { i8_prep<256>(P); i8_prep_qkv<256>(P); }
+extern "C" __global__ __launch_bounds__(256) void k_swin_c128_i8_prep(VarParams P) { i8_prep<128>(P); i8_prep_qkv<128>(P); }
+extern "C" __global__ __launch_bounds__(256) void k_swin_c256s_i8_prep(VarParams P) { i8_prep<256>(P); i8_prep_qkv<256>(P); }
+extern "C" __global__ __launch_bounds__(256) void k_swin_c128s_i8_prep(VarParams P) { i8_prep<128>(P); i8_prep_qkv<128>(P); }
+extern "C" __global__ __launch_bounds__(256) void k_swin_c64_i8_prep(VarParams P) { i8_prep<64>(P); i8_prep_qkv<64>(P); }
