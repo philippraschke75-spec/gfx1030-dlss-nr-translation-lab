@@ -394,7 +394,7 @@ def write_dir(P, out, kdir, mm, recs):
     mid = 0xcbf29ce484222325   # model id (runtime/model_id.py, weights_ht.h nr_model_id): FNV-1a over record names + u64 sizes
     for nm, (_, n) in recs.items():
         for x in nm.encode() + b'\0' + struct.pack('<Q', n): mid = ((mid ^ x) * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
-    m = dict(m, model_id='%016x' % mid, weights_res=RES)
+    m = dict(m, model_id='%016x' % mid, weights_res=RES, int8_swin=int(os.environ.get('NR_PLAN_INT8', '1')))   # int8_swin: runtime swaps in k_swin_*_i8 (env NR_INT8_SWIN overrides at load)
     (out / 'meta.json').write_text(json.dumps(m, indent=1))
     (out / 'meta.txt').write_text(''.join('%s=%s\n' % (k, v) for k, v in m.items() if k != 'placements'))
     for mod in P['modules']: shutil.copy2(kdir / mod.split('\\')[-1], out / 'kernels')
