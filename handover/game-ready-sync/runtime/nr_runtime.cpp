@@ -30,6 +30,7 @@ struct nr_ctx {
   std::map<std::string, NrOverride> ovr;   // see OVERRIDES.md; empty -> unchanged behaviour
   std::string dir; uint8_t* d = nullptr; size_t arena = 0; uint64_t base = 0, dev = 0;
   size_t off_src = 0, src_size = 0, off_dst = 0, dst_size = 0; int vit_lo = 0, vit_hi = 0, vit_every = 1; long frame = 0;
+  std::vector<void*> i8bufs;   // int8_swin: per-record int8 weight copies
   std::vector<Step> steps; std::vector<hipModule_t> mods; unsigned mach = 0x36; std::deque<std::vector<uint8_t>> imgs; hipEvent_t e0 = nullptr, e1 = nullptr;
   // strength = the two f32 pairs of k_pre_block PreParams: +0x28 (LocalTone, LocalStructure) and +0x48 (a, b). Set from any thread, applied at the start of the next run.
   std::mutex mx; float str[4] = {0, 0, 1, 1}; float pend[4] = {0, 0, 1, 1}; bool dirty = false;
@@ -162,6 +163,13 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
   FILE* f = fopen((c->dir + "/manifest.txt").c_str(), "r"); if (!f) FAIL("no manifest.txt");
   { std::string m; if (!nr_load_overrides(c->dir + "/manifest.txt", c->ovr, m)) { fclose(f); FAIL("%s", m.c_str()); } }
   std::map<std::string, hipModule_t> mods; std::set<std::string> prepped; char line[1024];
+    // int8_swin (opt-in, meta int8_swin=1 or env NR_INT8_SWIN=1/0): a native swin step <sym> whose module also exports <sym>_i8
+  // and <sym>_i8_prep runs <sym>_i8. The prep runs once per weight record (kernarg +0x10) at load and fills a 1 MiB buffer
+  // that goes to kernarg +0xa0 (VarParams.scratch, null for native kernels).
+  bool i8 = kv.count("int8_swin") && atoi(kv["int8_swin"].c_str());
+  { char e[8]; if (GetEnvironmentVariableA("NR_INT8_SWIN", e, sizeof e)) i8 = atoi(e) != 0; }
+  std::map<uint64_t, void*> i8rec;
+  if (i8) rlog("int8_swin: on (swin MLP expand on int8 dot4 where the module has _i8 kernels)");
   const int pre_i = kv.count("pre_step") ? (int)num("pre_step") : -1, post_i = kv.count("post_step") ? (int)num("post_step") : -1;
   while (fgets(line, sizeof line, f)) {
     if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
@@ -181,6 +189,19 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
       if (v >= c->base && v < c->base + c->arena) { v = c->dev + (v - c->base); memcpy(st.ka.data() + o, &v, 8); }
     }
     st.gx = atoi(t[4].c_str()); st.gy = atoi(t[5].c_str()); st.thr = atoi(t[6].c_str()); st.gz = t.size() == 8 ? atoi(t[7].c_str()) : 1;
+    hipFunction_t f8, p8; bool did8 = false;   // the _i8 path ran its own _i8_prep
+    if (i8 && st.ka.size() >= 0xa8 && hipModuleGetFunction(&f8, mods[t[0]], (t[1] + "_i8").c_str()) == hipSuccess &&
+        hipModuleGetFunction(&p8, mods[t[0]], (t[1] + "_i8_prep").c_str()) == hipSuccess) {
+      uint64_t w; memcpy(&w, st.ka.data() + 0x10, 8);
+      void*& b = i8rec[w];
+      if (!b) {   // ponytail: fixed 1 MiB per record (C = 256 needs 4*C*C + 16*C); size it from the module if wider swins come
+        HK(hipMalloc(&b, 1u << 20)); c->i8bufs.push_back(b);
+        std::vector<uint8_t> k = st.ka; memcpy(k.data() + 0xa0, &b, 8); size_t sz = k.size();
+        void* cfg[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, k.data(), HIP_LAUNCH_PARAM_BUFFER_SIZE, &sz, HIP_LAUNCH_PARAM_END};
+        HK(hipModuleLaunchKernel(p8, 16, 1, 1, 256, 1, 1, 0, nullptr, nullptr, cfg)); HK(hipDeviceSynchronize());
+      }
+      memcpy(st.ka.data() + 0xa0, &b, 8); st.fn = f8; t[1] += "_i8"; did8 = true;
+    }
     auto ov = c->ovr.find(t[1]);
     if (ov != c->ovr.end()) {   // swap in the native kernel; its kernarg is rebuilt from the original one (also after strength patches)
       NrOverride& o = ov->second; st.ov = &o;
@@ -194,7 +215,7 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
        // module+symbol (override or direct native manifest step) at load with this step's kernarg, grid 1 x 256 threads.
       const std::string& pm = st.ov ? st.ov->mod : t[0]; const std::string& ps = st.ov ? st.ov->sym : t[1];
       hipFunction_t pf;
-      if (prepped.insert(pm + "|" + ps).second && hipModuleGetFunction(&pf, mods[pm], (ps + "_prep").c_str()) == hipSuccess) {
+      if (!did8 && prepped.insert(pm + "|" + ps).second && hipModuleGetFunction(&pf, mods[pm], (ps + "_prep").c_str()) == hipSuccess) {
         size_t sz = st.ka.size(); void* cfg[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, st.ka.data(), HIP_LAUNCH_PARAM_BUFFER_SIZE, &sz, HIP_LAUNCH_PARAM_END};
         hipError_t e = hipModuleLaunchKernel(pf, 1, 1, 1, 256, 1, 1, 0, nullptr, nullptr, cfg); if (e == hipSuccess) e = hipDeviceSynchronize();
         if (e != hipSuccess) { fclose(f); FAIL("%s_prep: %s", ps.c_str(), hipGetErrorString(e)); }
@@ -453,5 +474,6 @@ NR_API void nr_destroy(nr_ctx* c) {
   for (auto m : c->mods) hipModuleUnload(m);
   if (c->d) hipFree(c->d);
   if (c->hist) hipFree(c->hist);
+  for (auto b : c->i8bufs) hipFree(b);
   delete c;
 }
