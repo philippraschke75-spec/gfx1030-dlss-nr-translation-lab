@@ -357,7 +357,7 @@ struct Feature {
     std::atomic<int> inFmt{(int)DXGI_FORMAT_R16G16B16A16_FLOAT}, outFmt{(int)DXGI_FORMAT_R16G16B16A16_FLOAT};   // game texture formats (set by evaluate)
     int pass = 0;                                                       // 0 = the host's main feature; >0 = an extra pass (created while another feature lives)
     Sync* sy = nullptr;                                                 // non-null: sync resources exist (worker tries nr_ext_open)
-    std::mutex mu; std::atomic<DWORD> lastUse{GetTickCount()}; std::atomic<bool> done{false};   // mu: evaluate vs eviction; done: worker finished (release-while-loading handoff)
+    std::mutex mu; std::atomic<DWORD> lastUse{GetTickCount()}; std::atomic<bool> done{false}; std::atomic<bool> evaluated{false};   // mu: evaluate vs eviction; done: worker finished (release-while-loading handoff)
 };
 // Hosts (OptiScaler in MSFS 2024) create features again and again without releasing the old ones. Every live feature
 // holds a runtime context (~1 GB VRAM), so before loading a new one the contexts of features idle for evict_idle_ms are freed.
@@ -702,7 +702,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
         auto* F = (Feature*)f; int n = ++g_evalCalls;
         if (!F || !cmd || !color || !out) return 0;
         if (F->state == S_FAILED) return passThrough(cmd, color, out, w, h);   // NR off for this session (model guard, runtime failure): native frame
-        std::lock_guard<std::mutex> lk(F->mu); F->lastUse = GetTickCount();
+        std::lock_guard<std::mutex> lk(F->mu); F->lastUse = GetTickCount(); F->evaluated = true;
         if ((w != F->W || h != F->H) && F->state != S_SYNC) { if (!F->warnedSize) { F->warnedSize = true; logf("evaluate: frame %ux%u, model %ux%u - native frame until the runtime has loaded", w, h, F->W, F->H); } return passThrough(cmd, color, out, w, h); }
         D3D12_RESOURCE_DESC cd = color->GetDesc(), od = out->GetDesc();
         // R9G9B9E5 output (RE Engine): sync path only, packed in a shader and copied in. Only when the host created the texture
@@ -901,7 +901,12 @@ static void freeFeature(Feature* F) { try { freeRes(F); } catch (...) {} delete 
 static void evictIdle(Feature* self) {
     std::lock_guard<std::mutex> g(g_featMu);   // ponytail: held while freeing (<= ~2 s); a release or create on another thread waits that long
     for (Feature* F : g_feats) {                 // release() unlists F under g_featMu first, so every F here is alive
-        if (F == self) continue;
+        if (F == self || !F->evaluated) continue;   // never evaluated yet (e.g. pass 0 while the host creates its extra passes): not abandoned
+        if (!F->pass) {   // pass 0 stays while any extra pass of the chain was evaluated recently
+            bool chainLive = false;
+            for (Feature* G : g_feats) if (G != F && G->pass && G->evaluated && GetTickCount() - G->lastUse < (DWORD)g_evictMs) chainLive = true;
+            if (chainLive) continue;
+        }
         std::unique_lock<std::mutex> lk(F->mu, std::try_to_lock);   // being evaluated right now: in use
         if (!lk.owns_lock() || GetTickCount() - F->lastUse < (DWORD)g_evictMs || F->state == S_LOADING || F->state == S_FAILED) continue;
         F->quit = true; if (F->th.joinable()) F->th.join();   // async worker loop ends; a sync worker has already returned
