@@ -86,6 +86,7 @@ static void loadSettings() {
     GetPrivateProfileStringA("nr", "history_gate_lo", "0.08", b, sizeof b, narrow(ini).c_str()); g_hLo = (float)atof(b);
     GetPrivateProfileStringA("nr", "history_gate_hi", "0.25", b, sizeof b, narrow(ini).c_str()); g_hHi = (float)atof(b);
     GetPrivateProfileStringA("nr", "pass2_gain", "0.5", b, sizeof b, narrow(ini).c_str()); g_pass2Gain = (float)atof(b); g_pass2Gain = g_pass2Gain == g_pass2Gain ? (std::min)((std::max)(g_pass2Gain, 0.f), 1.f) : 0.5f;
+    if (GetPrivateProfileIntA("nr", "int8_prepost", 0, narrow(ini).c_str())) SetEnvironmentVariableA("NR_INT8_PREPOST", "1");   // opt-in int8 post-block MLP (nr_runtime reads it at nr_create)
     g_split = (int)GetPrivateProfileIntA("nr", "nr_split", 0, narrow(ini).c_str()) != 0;   // 1: the network in two halves over two frames (implies nr_every=2), output = last finished NR, warped
     if (g_split) g_nrEvery = 2;
     GetPrivateProfileStringA("nr", "nr_split_k", "0", b, sizeof b, narrow(ini).c_str()); g_splitK[0] = g_splitK[1] = 0; sscanf_s(b, "%d,%d", &g_splitK[0], &g_splitK[1]);   // first dispatch of part 2 (full[,skipping] frames); 0 = measure

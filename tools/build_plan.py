@@ -246,8 +246,16 @@ def plan(A, W, H, kdir, structs):
 
     steps = []   # (op, C, struct, {field: value}, grid)
     S = lambda op, st, f, grid, C=None: steps.append((op, C, st, f, tuple(grid) + (1,) * (3 - len(grid))))
-    S('import', 'ImportParams', dict(src=src, src_pitch=W * 8, src_format=0, src_h=H, src_w=W, pad_h=PH, pad_w=PW, rgb=rgb, mode=0, scale=1.0), (-(-PW // 256), PH))
-    S('pre', 'PreParams', dict(rgb=rgb, out_full=full, w=wl(0, 0), h=PH, w_=PW, in_scale=0.0625, out_half=half, a=1.0, b=1.0), (PW // 8, PH // 8))
+    # native pre/post that export the marker k_<op>_native_fused_io do k_import / k_export themselves (two dispatches
+    # less); older native and translated ones need the steps
+    def native(op):
+        try: mod, sym = choose(op, A, None, (1, 1, 1), kdir, {})[:2]
+        except PlanError: return False
+        return (sym + '_fused_io').encode() in module_syms(kdir / mod.split('\\')[-1])
+    fuse = native('pre') and native('post')
+    io = dict(src=src, src_h=H, src_w=W) if fuse else {}
+    if not fuse: S('import', 'ImportParams', dict(src=src, src_pitch=W * 8, src_format=0, src_h=H, src_w=W, pad_h=PH, pad_w=PW, rgb=rgb, mode=0, scale=1.0), (-(-PW // 256), PH))
+    S('pre', 'PreParams', dict(rgb=rgb, out_full=full, w=wl(0, 0), h=PH, w_=PW, in_scale=0.0625, out_half=half, a=1.0, b=1.0, **io), (PW // 8, PH // 8))
     scratch = [None]
 
     def swin(C, k_hw, blocks, inp, pp, pool, dec, prev=None):
@@ -305,8 +313,8 @@ def plan(A, W, H, kdir, structs):
     for k, (C, blocks) in enumerate(A['dec']):
         stage_in = swin(C, hw(n - 1 - k), blocks, skips[n - 1 - k], dec_b[k][:2], dec_b[k][2], True, prev=stage_in)[-1]
     blend = A['blend']
-    S('post', 'PostParams', dict(x=stage_in, skip=full, out=netout, w=wl(A['post'], 0), h=PH, w_=PW, scale=0.03125, _r34=1, rgb=rgb, blend=blend), (PW // 8, PH // 8))   # full padded frame: the margin feeds the next frame's history (cropping it changes history output)
-    S('export', 'ExportParams', dict(res=netout, res_stride=PW, h=H, w_=W, dst_pitch=W * 8, dst=dst, mode=0, rgb=rgb, gain=1.0), (-(-W // 256), H))
+    S('post', 'PostParams', dict(x=stage_in, skip=full, out=netout, w=wl(A['post'], 0), h=PH, w_=PW, scale=0.03125, _r34=1, rgb=rgb, blend=blend, **(dict(dst=dst, dst_h=H, dst_w=W, src=src) if fuse else {})), (PW // 8, PH // 8))   # full padded frame: the margin feeds the next frame's history (cropping it changes history output)
+    if not fuse: S('export', 'ExportParams', dict(res=netout, res_stride=PW, h=H, w_=W, dst_pitch=W * 8, dst=dst, mode=0, rgb=rgb, gain=1.0), (-(-W // 256), H))
 
     # kernels, then pack
     cache, lines, ovr, blob, mods = {}, [], {}, bytearray(), set()
