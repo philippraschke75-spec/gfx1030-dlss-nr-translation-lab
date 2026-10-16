@@ -167,8 +167,16 @@ def native_candidates(op, A, C, grid):
         out.append(('native_swinvar.co', 'k_swin_c%d' % C, grid, 256, None if C % 32 == 0 else 'needs C % 32 == 0'))
         return out
     nat = {'pre': ('native_pre_native.co', 'k_pre_native', grid, 64, None if A['c0'] == 32 else 'hardwired C0 = 32'),
-           'post': ('native_post_native.co', 'k_post_native', grid, 64, None if A['c0'] == 32 and A['post_baked_ok'] else
-                    'hardwired C0 = 32 and block%d weights baked in (310.8)' % A['post']),
+           'post': ('native_post_native.co', 'k_post_native', grid, 64, None if A['c0'] == 32 and A['post_ok'] else
+                    'hardwired C0 = 32 and the 310.8 block%d record layout (k_post_native_prep reads it at load)' % A['post']),
+           # native_io.co (no-translated). k_final_head_n / k_conv_res_views_n read their tile count T at kernarg 0x18 / 0x48,
+           # which is the hidden block_count_x right after the struct, so their grid x must stay T (= the translated grid x).
+           'import': ('native_io.co', 'k_import_n', grid, 256, None),
+           'export': ('native_io.co', 'k_export_n', grid, 256, None),
+           'repack': ('native_io.co', 'k_repack_n', grid, 256, None),
+           'attn1d': ('native_io.co', 'k_attention_n', grid, 256, None if V310 else 'hardwired 1024'),
+           'head': ('native_io.co', 'k_final_head_n', (gx, 16, gz), 256, None if M310 and V310 else 'hardwired 512 -> 1024'),
+           'convpl': ('native_io.co', 'k_conv_res_views_n', (gx, 8, gz), 256, None if M310 else 'hardwired C_mid 512'),
            'conv2': ('native_c512.co', 'k_conv2_n', (gx, A['c_mid'] // 64, gz), 256, None if M310 else 'hardwired C_mid 512'),
            'ffwd2': ('native_c512.co', 'k_ffwd2_n', grid, 256, None if M310 else 'hardwired C_mid 512'),
            'attn': ('native_c512.co', 'k_qkv_attn_n', grid, 256, None if M310 else 'hardwired C_mid 512 / 16 heads'),
@@ -376,7 +384,7 @@ def lzms(d, path):
     cab.CloseCompressor(hc); Path(path).write_bytes(o.raw[:n.value])
 
 
-POST_310 = 0x2ed4cf9d2a340cb7   # FNV-1a of block70.layer0.layer in 310.8: the record k_post_native has baked in
+POST_REC_BYTES = 21808   # size of block70.layer0.layer in 310.8: the record layout k_post_native_prep decodes
 
 
 def fnv(b):
@@ -393,11 +401,11 @@ def build(dll, sizes, out, kdir, use_flex):
     fo, nb = recs['block%d.layer0.blend_scale' % A['post']]
     A['blend'] = struct.unpack('<e', mm[fo:fo + 2])[0]
     fo, nb = recs['block%d.layer0.layer' % A['post']]
-    A['post_baked_ok'] = fnv(mm[fo:fo + nb]) == POST_310
+    A['post_ok'] = nb == POST_REC_BYTES
     A['records'] = {k: v[1] for k, v in recs.items()}
     print('arch: levels %s | C_mid %d x%d (%d heads) | ViT %d/%d x%d | post block %d, blend %.6g%s' % (
         [(c, len(s)) for c, s in A['enc']], A['c_mid'], len(A['c1']), A['heads'], A['c_vit'], A['hid'], len(A['vit']), A['post'], A['blend'],
-        '' if A['post_baked_ok'] else ' | post weights differ from 310.8: k_post_native (baked) not used'))
+        '' if A['post_ok'] else ' | post record layout differs from 310.8: k_post_native not used'))
     for W, H in sizes:
         P = plan(A, W, H, kdir, structs)
         write_dir(P, Path(out) / ('%dx%d' % (W, H)), kdir, mm, recs)
@@ -413,7 +421,7 @@ def selftest(dll):
 
     def run(label, size, want):
         try:
-            A = derive(size); A.update(blend=1.0, post_baked_ok=True, records=size)
+            A = derive(size); A.update(blend=1.0, post_ok=True, records=size)
             P = plan(A, 960, 540, kdir, structs); got = 'OK %d dispatches' % len(P['lines'])
         except PlanError as e: got = 'PlanError: %s' % e
         ok = got.startswith(want)

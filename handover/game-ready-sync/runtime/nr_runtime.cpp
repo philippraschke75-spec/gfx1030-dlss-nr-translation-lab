@@ -29,7 +29,7 @@
 #endif
 
 struct Step { hipFunction_t fn; std::vector<uint8_t> ka; unsigned gx, gy, gz, thr; bool pre = false, post = false;   // pre = k_pre_block (its kernarg holds the strength fields)
-              const NrOverride* ov = nullptr; std::vector<uint8_t> src; };   // ov: native replacement; src = original rebased kernarg it is built from
+              const NrOverride* ov = nullptr; hipModule_t mod = nullptr; std::vector<uint8_t> src; };   // ov: native replacement; src = original rebased kernarg it is built from
 struct nr_ctx {
   std::map<std::string, NrOverride> ovr;   // see OVERRIDES.md; empty -> unchanged behaviour
   std::string dir; uint8_t* d = nullptr; size_t arena = 0; uint64_t base = 0, dev = 0;
@@ -194,7 +194,7 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
   std::vector<uint8_t> kab; if (!rd(c->dir + "/kernargs.bin", kab)) FAIL("no kernargs.bin");
   FILE* f = fopen((c->dir + "/manifest.txt").c_str(), "r"); if (!f) FAIL("no manifest.txt");
   { std::string m; if (!nr_load_overrides(c->dir + "/manifest.txt", c->ovr, m)) { fclose(f); FAIL("%s", m.c_str()); } }
-  std::map<std::string, hipModule_t> mods; std::set<std::string> prepped; char line[1024];
+  std::map<std::string, hipModule_t> mods; char line[1024];
   const int pre_i = kv.count("pre_step") ? (int)num("pre_step") : -1, post_i = kv.count("post_step") ? (int)num("post_step") : -1;
   while (fgets(line, sizeof line, f)) {
     if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
@@ -207,7 +207,7 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
     st.pre = pre_i >= 0 ? si == pre_i : t[1].find("k_pre_block") != std::string::npos; st.post = post_i >= 0 ? si == post_i : t[1].find("k_post_block") != std::string::npos;
     if (!c->ovr.count(t[1])) {   // overridden steps never touch the manifest's module (it need not exist)
       if (!mods.count(t[0])) { hipModule_t m; hipError_t e = load_mod(c, t[0], &m); if (e != hipSuccess) { fclose(f); FAIL("hipModuleLoad %s: %s", t[0].c_str(), hipGetErrorString(e)); } mods[t[0]] = m; c->mods.push_back(m); }
-      if (hipModuleGetFunction(&st.fn, mods[t[0]], t[1].c_str()) != hipSuccess) { fclose(f); FAIL("no symbol %s", t[1].c_str()); }
+      st.mod = mods[t[0]]; if (hipModuleGetFunction(&st.fn, mods[t[0]], t[1].c_str()) != hipSuccess) { fclose(f); FAIL("no symbol %s", t[1].c_str()); }
     }
     size_t off = strtoull(t[2].c_str(), nullptr, 10), len = strtoull(t[3].c_str(), nullptr, 10);
     if (off + len > kab.size()) { fclose(f); FAIL("kernarg out of range"); }
@@ -222,19 +222,9 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
       NrOverride& o = ov->second; st.ov = &o;
       o.mod = rel(c->dir, o.mod);
       if (!mods.count(o.mod)) { hipModule_t m; hipError_t e = load_mod(c, o.mod, &m); if (e != hipSuccess) { fclose(f); FAIL("hipModuleLoad %s: %s", o.mod.c_str(), hipGetErrorString(e)); } mods[o.mod] = m; c->mods.push_back(m); }
-      if (hipModuleGetFunction(&st.fn, mods[o.mod], o.sym.c_str()) != hipSuccess) { fclose(f); FAIL("no symbol %s", o.sym.c_str()); }
+      st.mod = mods[o.mod]; if (hipModuleGetFunction(&st.fn, mods[o.mod], o.sym.c_str()) != hipSuccess) { fclose(f); FAIL("no symbol %s", o.sym.c_str()); }
       st.gx = nr_grid(o.g[0], st.gx); st.gy = nr_grid(o.g[1], st.gy); st.gz = nr_grid(o.g[2], st.gz); st.thr = nr_grid(o.g[3], st.thr);
       st.src.swap(st.ka); if (!nr_apply_override(o, st.src, st.ka)) { fclose(f); FAIL("override for %s copies past the original kernarg", t[1].c_str()); }
-      // <sym>_prep: the module builds its weights from the arena's weight record (so the .co ships none). Run once per
-      // module+symbol at load with this step's kernarg, grid 1 x 256 threads.
-      // Modules with a g_w16_last global (swin_var's f16 shadow) use the per-record +0xa0 prep after the manifest instead.
-      hipFunction_t pf; hipDeviceptr_t gq; size_t gqs;
-      if (prepped.insert(o.mod + "|" + o.sym).second && hipModuleGetGlobal(&gq, &gqs, mods[o.mod], "g_w16_last") != hipSuccess &&
-          hipModuleGetFunction(&pf, mods[o.mod], (o.sym + "_prep").c_str()) == hipSuccess) {
-        size_t sz = st.ka.size(); void* cfg[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, st.ka.data(), HIP_LAUNCH_PARAM_BUFFER_SIZE, &sz, HIP_LAUNCH_PARAM_END};
-        hipError_t e = hipModuleLaunchKernel(pf, 1, 1, 1, 256, 1, 1, 0, nullptr, nullptr, cfg); if (e == hipSuccess) e = hipDeviceSynchronize();
-        if (e != hipSuccess) { fclose(f); FAIL("%s_prep: %s", o.sym.c_str(), hipGetErrorString(e)); }
-      }
     }
     if (st.pre && (st.ov ? st.src : st.ka).size() >= kStrOff1 + 8) {          // remember the data dir's own values as the current strength
       const auto& k = st.ov ? st.src : st.ka; memcpy(&c->str[0], k.data() + kStrOff0, 8); memcpy(&c->str[2], k.data() + kStrOff1, 8);
@@ -244,26 +234,30 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
     c->names.push_back(st.ov ? st.ov->sym : t[1]); c->steps.push_back(std::move(st));
   }
   fclose(f);
-  // Load-time prep: an override module may export <sym>_prep (e.g. the f16 weight shadow of swin_var.hip). It runs once per
-  // weight record (kernarg +0x10) with the step's kernarg, grid 1, 256 threads, and leaves a pointer in the module global
-  // g_w16_last, which goes to kernarg +0xa0 (original layout) of every step using that record.
-  { std::map<uint64_t, uint64_t> done;
-    for (auto& st : c->steps) {
-      if (!st.ov || st.src.size() < 0xa8) continue;
-      hipModule_t m = nullptr; for (size_t i = 0; i < c->mods.size() && !m; i++) { hipFunction_t g; if (hipModuleGetFunction(&g, c->mods[i], st.ov->sym.c_str()) == hipSuccess && g == st.fn) m = c->mods[i]; }
-      hipFunction_t pf; hipDeviceptr_t gq; size_t gqs;
-      if (!m || hipModuleGetGlobal(&gq, &gqs, m, "g_w16_last") != hipSuccess || hipModuleGetFunction(&pf, m, (st.ov->sym + "_prep").c_str()) != hipSuccess) continue;
-      uint64_t w; memcpy(&w, st.src.data() + 0x10, 8);
-      if (!done.count(w)) {
-        void* gp; size_t gs; size_t sz = st.ka.size(); uint64_t v = 0;
-        void* cfg[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, st.ka.data(), HIP_LAUNCH_PARAM_BUFFER_SIZE, &sz, HIP_LAUNCH_PARAM_END};
-        HK(hipModuleLaunchKernel(pf, 1, 1, 1, 256, 1, 1, 0, nullptr, nullptr, cfg));
-        HK(hipModuleGetGlobal((hipDeviceptr_t*)&gp, &gs, m, "g_w16_last"));
-        HK(hipMemcpy(&v, gp, 8, hipMemcpyDeviceToHost));
-        if (!v) FAIL("%s_prep: weight pool full", st.ov->sym.c_str());
-        done[w] = v;
+  // Load-time prep, for manifest natives and overrides alike: a module may export <sym>_prep. It runs with the step's
+  // kernarg, grid 1 x 256 threads. Two kinds:
+  //  * module global g_w16_last (swin_var's f16 weight shadow): once per weight record (kernarg +0x10); the pointer it
+  //    leaves goes to kernarg +0xa0 (original/nr_params layout) of every step using that record.
+  //  * otherwise (post-noweights: weights decoded into the module's __constant__ tables): once per module+symbol.
+  { std::map<uint64_t, uint64_t> done; std::set<std::string> prepped;
+    for (size_t si = 0; si < c->steps.size(); si++) {
+      Step& st = c->steps[si]; const std::string& sym = c->names[si]; hipFunction_t pf; hipDeviceptr_t gp; size_t gs;
+      if (!st.mod || hipModuleGetFunction(&pf, st.mod, (sym + "_prep").c_str()) != hipSuccess) continue;
+      size_t sz = st.ka.size(); void* cfg[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, st.ka.data(), HIP_LAUNCH_PARAM_BUFFER_SIZE, &sz, HIP_LAUNCH_PARAM_END};
+      if (hipModuleGetGlobal(&gp, &gs, st.mod, "g_w16_last") == hipSuccess) {
+        std::vector<uint8_t>& k = st.ov ? st.src : st.ka; if (k.size() < 0xa8) continue;
+        uint64_t w; memcpy(&w, k.data() + 0x10, 8);
+        if (!done.count(w)) {
+          uint64_t v = 0;
+          HK(hipModuleLaunchKernel(pf, 1, 1, 1, 256, 1, 1, 0, nullptr, nullptr, cfg));
+          HK(hipMemcpy(&v, (void*)gp, 8, hipMemcpyDeviceToHost));
+          if (!v) FAIL("%s_prep: weight pool full", sym.c_str());
+          done[w] = v;
+        }
+        memcpy(k.data() + 0xa0, &done[w], 8); if (st.ov) nr_apply_override(*st.ov, st.src, st.ka);
+      } else if (prepped.insert(std::to_string((uintptr_t)st.mod) + "|" + sym).second) {
+        HK(hipModuleLaunchKernel(pf, 1, 1, 1, 256, 1, 1, 0, nullptr, nullptr, cfg)); HK(hipDeviceSynchronize());
       }
-      memcpy(st.src.data() + 0xa0, &done[w], 8); nr_apply_override(*st.ov, st.src, st.ka);
     }
   }
   if (bn) {   // bottleneck reuse: also skip the c512 encoder stage + k_final_head before the ViT and k_dec_upsample + c512 decoder stage after it
