@@ -189,13 +189,15 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
       if (hipModuleGetFunction(&st.fn, mods[o.mod], o.sym.c_str()) != hipSuccess) { fclose(f); FAIL("no symbol %s", o.sym.c_str()); }
       st.gx = nr_grid(o.g[0], st.gx); st.gy = nr_grid(o.g[1], st.gy); st.gz = nr_grid(o.g[2], st.gz); st.thr = nr_grid(o.g[3], st.thr);
       st.src.swap(st.ka); if (!nr_apply_override(o, st.src, st.ka)) { fclose(f); FAIL("override for %s copies past the original kernarg", t[1].c_str()); }
-      // <sym>_prep: the module builds its weights from the arena's weight record (so the .co ships none). Run once per
-      // module+symbol at load with this step's kernarg, grid 1 x 256 threads.
+    }
+    {  // <sym>_prep: the module builds its weights from the arena's weight record (so the .co ships none). Run once per
+       // module+symbol (override or direct native manifest step) at load with this step's kernarg, grid 1 x 256 threads.
+      const std::string& pm = st.ov ? st.ov->mod : t[0]; const std::string& ps = st.ov ? st.ov->sym : t[1];
       hipFunction_t pf;
-      if (prepped.insert(o.mod + "|" + o.sym).second && hipModuleGetFunction(&pf, mods[o.mod], (o.sym + "_prep").c_str()) == hipSuccess) {
+      if (prepped.insert(pm + "|" + ps).second && hipModuleGetFunction(&pf, mods[pm], (ps + "_prep").c_str()) == hipSuccess) {
         size_t sz = st.ka.size(); void* cfg[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, st.ka.data(), HIP_LAUNCH_PARAM_BUFFER_SIZE, &sz, HIP_LAUNCH_PARAM_END};
         hipError_t e = hipModuleLaunchKernel(pf, 1, 1, 1, 256, 1, 1, 0, nullptr, nullptr, cfg); if (e == hipSuccess) e = hipDeviceSynchronize();
-        if (e != hipSuccess) { fclose(f); FAIL("%s_prep: %s", o.sym.c_str(), hipGetErrorString(e)); }
+        if (e != hipSuccess) { fclose(f); FAIL("%s_prep: %s", ps.c_str(), hipGetErrorString(e)); }
       }
     }
     if (st.pre && (st.ov ? st.src : st.ka).size() >= kStrOff1 + 8) {          // remember the data dir's own values as the current strength
