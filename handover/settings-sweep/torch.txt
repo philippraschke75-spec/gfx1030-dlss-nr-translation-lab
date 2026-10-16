@@ -1,0 +1,4 @@
+960x540: ours vs PyTorch 41.25 dB (input vs PyTorch 27.11 dB), edit correlation 0.981
+832x468: ours vs PyTorch 41.23 dB (input vs PyTorch 27.15 dB), edit correlation 0.981
+768x432: ours vs PyTorch 39.53 dB (input vs PyTorch 26.49 dB), edit correlation 0.977
+640x360: ours vs PyTorch 43.03 dB (input vs PyTorch 26.42 dB), edit correlation 0.989

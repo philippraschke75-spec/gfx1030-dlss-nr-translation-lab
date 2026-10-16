@@ -1,0 +1,16 @@
+BENCH 960x540 vit_every=1 frames=37: median 22.311 mean 22.351 min 22.143 ms
+BENCH 960x540 vit_every=-2 frames=37: median 16.997 mean 19.383 min 16.346 ms
+BENCH 960x540 vit_every=-3 frames=37: median 16.524 mean 18.598 min 16.234 ms
+BENCH 960x540 vit_every=-4 frames=37: median 16.524 mean 17.959 min 16.328 ms
+BENCH 832x468 vit_every=1 frames=37: median 18.295 mean 18.396 min 17.646 ms
+BENCH 832x468 vit_every=-2 frames=37: median 13.463 mean 15.425 min 12.585 ms
+BENCH 832x468 vit_every=-3 frames=37: median 13.116 mean 14.725 min 12.418 ms
+BENCH 832x468 vit_every=-4 frames=37: median 12.924 mean 13.984 min 12.306 ms
+BENCH 768x432 vit_every=1 frames=37: median 16.852 mean 17.021 min 16.656 ms
+BENCH 768x432 vit_every=-2 frames=37: median 12.256 mean 14.399 min 11.550 ms
+BENCH 768x432 vit_every=-3 frames=37: median 12.740 mean 14.251 min 11.506 ms
+BENCH 768x432 vit_every=-4 frames=37: median 12.057 mean 13.103 min 11.459 ms
+BENCH 640x360 vit_every=1 frames=37: median 13.802 mean 13.888 min 13.386 ms
+BENCH 640x360 vit_every=-2 frames=37: median 9.042 mean 11.060 min 8.324 ms
+BENCH 640x360 vit_every=-3 frames=37: median 8.972 mean 10.346 min 8.272 ms
+BENCH 640x360 vit_every=-4 frames=37: median 8.504 mean 9.885 min 8.306 ms

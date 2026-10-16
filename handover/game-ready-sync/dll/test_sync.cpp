@@ -270,6 +270,8 @@ int main(int argc, char** argv) {
         }
         std::vector<double> d; for (size_t i = 10; i < done.size(); i++) d.push_back(done[i] - done[i - 1]);   // skip warm-up
         double s = 0, s2 = 0, oe[2] = {}; for (size_t i = 0; i < d.size(); i++) { s += d[i]; s2 += d[i] * d[i]; oe[(i + 11) & 1] += d[i]; } double av = s / d.size(), sd = sqrt(std::max(0.0, s2 / d.size() - av * av));
+        { std::vector<double> m(d); std::nth_element(m.begin(), m.begin() + m.size() / 2, m.end()); const double med = m[m.size() / 2]; int ns = 0;   // spikes: frame index (from 0) and time, > 1.5x median
+          printf("pace spikes (> %.1f ms):", 1.5 * med); for (size_t i = 0; i < d.size(); i++) if (d[i] > 1.5 * med && ns++ < 20) printf(" #%zu %.1f", i + 10, d[i]); printf(" (%d)\n", ns); }
         printf("pace odd/even: frame time odd %.2f even %.2f |diff| %.2f ms\n", oe[1] / (d.size() / 2), oe[0] / ((d.size() + 1) / 2), fabs(oe[1] / (d.size() / 2) - oe[0] / ((d.size() + 1) / 2))); std::sort(d.begin(), d.end());
         unsigned n1, b1, r1; stats(f, &n1, &b1, &r1);
         printf("pace (gpu load %.1f ms) ", gms);
