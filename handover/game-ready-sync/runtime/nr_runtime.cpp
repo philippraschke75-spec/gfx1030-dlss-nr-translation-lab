@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 #include <mutex>
 #include <deque>
 #include <thread>
@@ -160,7 +161,7 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
   std::vector<uint8_t> kab; if (!rd(c->dir + "/kernargs.bin", kab)) FAIL("no kernargs.bin");
   FILE* f = fopen((c->dir + "/manifest.txt").c_str(), "r"); if (!f) FAIL("no manifest.txt");
   { std::string m; if (!nr_load_overrides(c->dir + "/manifest.txt", c->ovr, m)) { fclose(f); FAIL("%s", m.c_str()); } }
-  std::map<std::string, hipModule_t> mods; char line[1024];
+  std::map<std::string, hipModule_t> mods; std::set<std::string> prepped; char line[1024];
   while (fgets(line, sizeof line, f)) {
     if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
     std::string s(line); while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
@@ -186,6 +187,16 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
       if (hipModuleGetFunction(&st.fn, mods[o.mod], o.sym.c_str()) != hipSuccess) { fclose(f); FAIL("no symbol %s", o.sym.c_str()); }
       st.gx = nr_grid(o.g[0], st.gx); st.gy = nr_grid(o.g[1], st.gy); st.gz = nr_grid(o.g[2], st.gz); st.thr = nr_grid(o.g[3], st.thr);
       st.src.swap(st.ka); if (!nr_apply_override(o, st.src, st.ka)) { fclose(f); FAIL("override for %s copies past the original kernarg", t[1].c_str()); }
+      // <sym>_prep: the module builds its weights from the arena's weight record (so the .co ships none). Run once per
+      // module+symbol at load with this step's kernarg, grid 1 x 256 threads.
+      // Modules with a g_w16_last global (swin_var's f16 shadow) use the per-record +0xa0 prep after the manifest instead.
+      hipFunction_t pf; hipDeviceptr_t gq; size_t gqs;
+      if (prepped.insert(o.mod + "|" + o.sym).second && hipModuleGetGlobal(&gq, &gqs, mods[o.mod], "g_w16_last") != hipSuccess &&
+          hipModuleGetFunction(&pf, mods[o.mod], (o.sym + "_prep").c_str()) == hipSuccess) {
+        size_t sz = st.ka.size(); void* cfg[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, st.ka.data(), HIP_LAUNCH_PARAM_BUFFER_SIZE, &sz, HIP_LAUNCH_PARAM_END};
+        hipError_t e = hipModuleLaunchKernel(pf, 1, 1, 1, 256, 1, 1, 0, nullptr, nullptr, cfg); if (e == hipSuccess) e = hipDeviceSynchronize();
+        if (e != hipSuccess) { fclose(f); FAIL("%s_prep: %s", o.sym.c_str(), hipGetErrorString(e)); }
+      }
     }
     if (st.pre && (st.ov ? st.src : st.ka).size() >= kStrOff1 + 8) {          // remember the data dir's own values as the current strength
       const auto& k = st.ov ? st.src : st.ka; memcpy(&c->str[0], k.data() + kStrOff0, 8); memcpy(&c->str[2], k.data() + kStrOff1, 8);
@@ -202,7 +213,8 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
     for (auto& st : c->steps) {
       if (!st.ov || st.src.size() < 0xa8) continue;
       hipModule_t m = nullptr; for (size_t i = 0; i < c->mods.size() && !m; i++) { hipFunction_t g; if (hipModuleGetFunction(&g, c->mods[i], st.ov->sym.c_str()) == hipSuccess && g == st.fn) m = c->mods[i]; }
-      hipFunction_t pf; if (!m || hipModuleGetFunction(&pf, m, (st.ov->sym + "_prep").c_str()) != hipSuccess) continue;
+      hipFunction_t pf; hipDeviceptr_t gq; size_t gqs;
+      if (!m || hipModuleGetGlobal(&gq, &gqs, m, "g_w16_last") != hipSuccess || hipModuleGetFunction(&pf, m, (st.ov->sym + "_prep").c_str()) != hipSuccess) continue;
       uint64_t w; memcpy(&w, st.src.data() + 0x10, 8);
       if (!done.count(w)) {
         void* gp; size_t gs; size_t sz = st.ka.size(); uint64_t v = 0;

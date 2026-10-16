@@ -1,6 +1,6 @@
 // Native fused k_post_block_1h_32_fp8 for gfx1030: blend (2x up of e4m3 decoder x + e4m3 skip, gains) ->
 // C=32 Swin body (native-swin32) -> 32->4 projection -> compose to RGBA f32. Same PostParams kernarg as the
-// original; launch 64 threads per 8x8 window, grid W/8 x H/8. Weights are baked in (post_weights.h, block70).
+// original; launch 64 threads per 8x8 window, grid W/8 x H/8. Weights come from block70 at load (k_post_native_prep).
 // Build: build.bat (-ffp-contract=off).
 #include <hip/hip_runtime.h>
 #include <stdint.h>
@@ -22,7 +22,16 @@ typedef _Float16 h2 __attribute__((ext_vector_type(2)));
 #define F_AS (4096 + 32)
 #define F_HS (4096 + 64)
 #define F_FLOATS (4096 + 65)
-#include "post_weights.h"
+#ifdef BAKED
+#include "post_weights.h"   // old build: weights baked from block70 (vendor data, not committed) - only for A/B checks
+#else
+// Filled at load by k_post_native_prep from the block70.layer0 record (+0x18), so the .co ships no weights.
+__constant__ uint16_t gWt[W_HALFS];
+__constant__ float gFp[F_FLOATS];
+__constant__ float gMain[32];
+__constant__ float gSkip[32];
+__constant__ uint16_t gProj[128];
+#endif
 #include "wstage.h"
 #if PREW
 #define WEXP(j, k) WEXP_L(Lr, j, k)
@@ -33,7 +42,7 @@ typedef _Float16 h2 __attribute__((ext_vector_type(2)));
 #endif
 
 struct PostParams {
-  const uint8_t* x; const uint8_t* skip; float* out; const void* wrec;   // wrec unused (weights baked)
+  const uint8_t* x; const uint8_t* skip; float* out; const uint8_t* wrec;   // wrec: block70.layer0 record (prep only)
   int H, W, col0, row0; float scale; int denorm; const float* frame; const float* aux; float gate;
 };
 
@@ -320,3 +329,58 @@ extern "C" __global__ __launch_bounds__(64) POST_ATTR void k_post_native(PostPar
   }
   compose(P, (size_t)py * W + px, r[0], r[1], r[2], r[3]);
 }
+
+#ifndef BAKED
+// ---- load-time prep: decode the block70.layer0 record into the __constant__ tables above. The runtime launches it
+// once per module with the step's kernarg, grid 1 x 256 threads. Same values as the old baked post_weights.h
+// (dlssnr-pytorch gen_weights.py); record layout from dlssnr-pytorch extract.py (_post_block_layout).
+#define R_EXP 0x0000    // e4m3 [128][32], packed, inner 8
+#define R_CON 0x1000    // e4m3 [32][128], inner 2
+#define R_RS 0x2010     // residual_scale f16[32] (mlp scale; not zero-padded in this record)
+#define R_MAIN 0x2050   // main_gain f16[32]
+#define R_SKIP 0x2090   // skip_gain f16[32]
+#define R_QKV 0x20d0    // e4m3 [96][32], inner 6
+#define R_BIAS 0x2cd0   // attn_pos_bias f16[64*64], fragment order
+#define R_SB 0x4cd0     // scalars_b f32 (head scale)
+#define R_OUT 0x4ce0    // e4m3 [32][32], inner 2
+#define R_ARS 0x50e0    // attn_residual_scale f16[32]
+#define R_PROJ 0x5130   // out_project f16, two 16-input operand blocks
+
+// byte of element (r, c) of a row-major [rows][cols] matrix in its packed 512-byte slices (extract.py unswizzle_matrix)
+__device__ int unswz(int r, int c, int cols, int inner) {
+  const int n = r & 7, half = (r >> 3) & 1, t = (r >> 4) % inner, o = (r >> 4) / inner;
+  const int p = c & 1, j = (c >> 1) & 3, q = (c >> 3) & 3, g = c >> 5;
+  return ((((((o * (cols >> 5) + g) * inner + t) * 8 + n) * 4 + j) * 2 + half) * 4 + q) * 2 + p;
+}
+// writable alias of a __constant__ table: the asm hides where the address came from, else the stores are dropped
+template <class T> __device__ T* wr(T* p) { uint64_t a = (uint64_t)p; asm volatile("" : "+s"(a)); return (T*)a; }
+__device__ float rf16(const uint8_t* R, int off, int i) { return (float)__builtin_bit_cast(_Float16, *(const uint16_t*)(R + off + 2 * i)); }
+
+extern "C" __global__ __launch_bounds__(256) void k_post_native_prep(PostParams P) {
+  const uint8_t* R = P.wrec; const int t = threadIdx.x;
+  uint16_t* const gWt = wr(::gWt); uint16_t* const gProj = wr(::gProj);
+  float* const gFp = wr(::gFp); float* const gMain = wr(::gMain); float* const gSkip = wr(::gSkip);
+  for (int i = t; i < W_HALFS; i += 256) {
+    int off, k, cols, inner;
+    if (i < W_CON) { off = R_EXP; k = i; cols = 32; inner = 8; }
+    else if (i < W_QKV) { off = R_CON; k = i - W_CON; cols = 128; inner = 2; }
+    else if (i < W_OUT) { off = R_QKV; k = i - W_QKV; cols = 32; inner = 6; }
+    else { off = R_OUT; k = i - W_OUT; cols = 32; inner = 2; }
+    gWt[i] = __builtin_bit_cast(uint16_t, (_Float16)e4(R[off + unswz(k / cols, k % cols, cols, inner)]));
+  }
+  for (int k = t; k < 64 * 64; k += 256) {   // exp_bias = fma(bias, slope, offset) in f64, rounded once to f32
+    const int i = k >> 6, j = k & 63;
+    const int lane = 4 * (i & 7) + (j & 7) / 2, slot = (j & 1) | (((i & 15) >> 3) << 1) | (((j & 15) >> 3) << 2);
+    gFp[F_BIAS + k] = (float)((double)rf16(R, R_BIAS, (4 * (i >> 4) + (j >> 4)) * 256 + lane * 8 + slot) * 0.044921875 + 1.30078125);
+  }
+  if (t < 32) {
+    gFp[F_MS + t] = rf16(R, R_RS, t); gFp[F_AS + t] = rf16(R, R_ARS, t);
+    gMain[t] = rf16(R, R_MAIN, PI(t)); gSkip[t] = rf16(R, R_SKIP, PI(t));
+  }
+  if (t == 0) gFp[F_HS] = *(const float*)(R + R_SB);
+  if (t < 128) {   // rows 0..3 (RGB + gate) of the 16x32 projection
+    const int n = t >> 5, k = t & 31;
+    gProj[t] = ((const uint16_t*)(R + R_PROJ))[(k >> 4) * 256 + 32 * (n & 7) + 8 * ((k & 7) >> 1) + 4 * (n >> 3) + (k & 1) + 2 * ((k & 15) >> 3)];
+  }
+}
+#endif
