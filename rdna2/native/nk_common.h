@@ -21,6 +21,7 @@ __device__ __forceinline__ uint32_t e4x2(uint32_t u) {   // two e4m3 bytes (low 
 }
 __device__ __forceinline__ uint2 cvt4(uint32_t d) { return make_uint2(e4x2(d & 0xFFFFu), e4x2(d >> 16)); }
 __device__ __forceinline__ float q8(float x) {   // f32 -> nearest e4m3 (RNE, saturating)
+  x = x == x ? x : 0.f;   // NaN publishes as +0 (OpenDLSS-NR numerics.md), not as the saturated 448
   float a = fminf(fabsf(x), 448.f);
   uint32_t b = __float_as_uint(a);
   float rn = __uint_as_float((b + 0x7FFFFu + ((b >> 20) & 1u)) & 0xFFF00000u);
@@ -33,6 +34,7 @@ __device__ __forceinline__ uint32_t to_e4m3(float v) {   // v on the e4m3 grid
   return b | (v < 0.f ? 0x80u : 0u);
 }
 __device__ __forceinline__ uint32_t e4m3_byte(float x) {   // nearest e4m3 byte of x; a negative value that rounds to 0 gives 0x80, -0.0 gives 0x00 (as the translated epilogues)
+  if (x != x) return 0u;   // NaN -> +0
   const uint32_t s = x < 0.f ? 0x80u : 0u;
   const float a = fminf(fabsf(x), 448.f);
   if (a < 0.015625f) return s | (uint32_t)__fsub_rn(__fadd_rn(a * 512.f, 12582912.f), 12582912.f);

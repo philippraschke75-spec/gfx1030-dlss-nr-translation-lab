@@ -36,6 +36,15 @@ struct ImportParams {
 };
 static_assert(sizeof(ImportParams) == 0x30, "ImportParams");
 
+// Mirror padding of the imported image (native, after k_import): pixels past the valid w x h take the colour at
+// 2*valid - x - 2 per axis (reflection without edge repeat), as NVIDIA (OpenDLSS-NR network.md, dlssnr-pytorch _mirror).
+struct MirrorParams {
+  float* rgb;             // 0x00 ImportParams.rgb, pad_w x pad_h RGB32F
+  int32_t h, w_;          // 0x08 valid extent
+  int32_t pad_h, pad_w;   // 0x10 padded extent
+};
+static_assert(sizeof(MirrorParams) == 0x18, "MirrorParams");
+
 // Pre-block (block 0): RGB -> C0 features at full and half resolution.
 struct PreParams {
   const float* rgb;       // 0x00 ImportParams.rgb
@@ -44,11 +53,11 @@ struct PreParams {
   int32_t h, w_;          // 0x18 pad_h, pad_w
   float in_scale;         // 0x20 0.0625 (input gain; at 0 the RGB input is ignored)
   int32_t _r24;           // 0x24 0
-  float tone, structure;  // 0x28 strength pair 1 (runtime: nr_set_strength, kStrOff0)
-  int32_t _r30, _pad34;   // 0x30 0
+  float tone, structure;  // 0x28 features 11 local tone, 12 structure (auto mask: 1); NVIDIA default 1, 1 (runtime: nr_set_conditioning)
+  int32_t _r30, _pad34;   // 0x30 feature 10 = style / 128 as f32 (0 = default style), 0
   uint8_t* out_half;      // 0x38 act(2*C0, stage 0) - input of encoder stage 0 (C0 channels, 2x headroom)
   const float* hist;      // 0x40 previous output RGB32F (12 B/px, padded) or null; set per frame by the runtime
-  float a, b;             // 0x48 strength pair 2 (runtime kStrOff1), 1.0, 1.0
+  float a, b;             // 0x48 features 13 skin, 14 other structure (auto mask; without it -1, -1); default 1, 1
 };
 static_assert(sizeof(PreParams) == 0x50, "PreParams");
 

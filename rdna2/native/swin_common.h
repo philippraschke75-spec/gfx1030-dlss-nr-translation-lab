@@ -8,6 +8,7 @@ typedef _Float16 h2 __attribute__((ext_vector_type(2)));
 
 
 __device__ __forceinline__ float q8(float x) {
+  x = x == x ? x : 0.f;   // NaN publishes as +0 (OpenDLSS-NR numerics.md), not as the saturated 448
   float a = fminf(fabsf(x), 448.f);
   uint32_t b = __float_as_uint(a);
   float rn = __uint_as_float((b + 0x7FFFFu + ((b >> 20) & 1u)) & 0xFFF00000u);

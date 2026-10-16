@@ -152,7 +152,7 @@ def tsym(op, A, C=None):   # the translated (host ABI) symbol of an op
             'attn': '_Z11k_qkv_attn210AttnParams', 'convpl': '_Z16k_conv_res_views12ConvPlParams', 'head': '_Z12k_final_head10HeadParams',
             'repack': '_Z8k_repack12RepackParams', 'expand': '_Z9k_expand212ExpandParams', 'contract': '_Z11k_contract212ConvParams1d',
             'qkv': '_Z6k_qkv29QkvParams', 'attn1d': '_Z12k_attention212AttnParams1d', 'decup': '_Z14k_dec_upsample11DecUpParams',
-            'export': '_Z8k_export12ExportParams'}[op]
+            'export': '_Z8k_export12ExportParams', 'mirror': 'k_mirror_pad'}[op]   # mirror: native only
 
 
 def native_candidates(op, A, C, grid):
@@ -166,7 +166,8 @@ def native_candidates(op, A, C, grid):
         if C >= 256: out.append(('native_swinvar.co', 'k_swin_c%ds' % C, (gx, gy, 2), 256, None))
         out.append(('native_swinvar.co', 'k_swin_c%d' % C, grid, 256, None if C % 32 == 0 else 'needs C % 32 == 0'))
         return out
-    nat = {'pre': ('native_pre_native.co', 'k_pre_native', grid, 64, None if A['c0'] == 32 else 'hardwired C0 = 32'),
+    nat = {'mirror': ('native_mirror.co', 'k_mirror_pad', grid, 256, None),
+           'pre': ('native_pre_native.co', 'k_pre_native', grid, 64, None if A['c0'] == 32 else 'hardwired C0 = 32'),
            'post': ('native_post_native.co', 'k_post_native', grid, 64, None if A['c0'] == 32 and A['post_ok'] else
                     'hardwired C0 = 32 and the 310.8 block%d record layout (k_post_native_prep reads it at load)' % A['post']),
            # native_io.co (no-translated). k_final_head_n / k_conv_res_views_n read their tile count T at kernarg 0x18 / 0x48,
@@ -212,11 +213,33 @@ def choose(op, A, C, grid, kdir, cache):
     raise PlanError('no kernel for %s%s: %s' % (op, '' if C is None else ' C=%d' % C, '; '.join(tried)))
 
 
+def geometry(W, H, levels):
+    """Padded field and level extents as NVIDIA (OpenDLSS-NR Geometry::fromValid, = dlssnr-pytorch plan.padding/_walk):
+    level[k] = alignUp(ceil(level[k-1] / 2), 4) from the field; the field is the valid size aligned to 2^reductions
+    (floor 320), plus one alignment unit in x when both axes are 4-unit aligned. Returns (PH, PW, [(h, w) per level])."""
+    up = lambda n, a: -(-n // a) * a
+
+    def reductions(v):
+        r, size = 0, v
+        for level in range(levels):
+            half = up(-(-size // 2), 4)
+            if half < size: r += 1
+            if level == 0 and half % 8: r += 1
+            size = half
+        return r
+    ah, aw = 1 << reductions(H), 1 << reductions(W)
+    PH, PW = max(320, up(H, ah)), max(320, up(W, aw))
+    if PW % (4 * aw) == 0 and PH % (4 * ah) == 0: PW += aw
+    ext = [(PH, PW)]
+    for _ in range(levels): ext.append((up(-(-ext[-1][0] // 2), 4), up(-(-ext[-1][1] // 2), 4)))
+    return PH, PW, ext[1:]
+
+
 # ------------------------------------------------------------------ plan
 def plan(A, W, H, kdir, structs):
-    n = A['n']; P = 1 << (n + 3)
-    PH, PW = -(-H // P) * P, -(-W // P) * P
-    hw = lambda k: (PH >> (k + 1), PW >> (k + 1))                 # level k extent
+    n = A['n']
+    PH, PW, ext = geometry(W, H, n + 2)
+    hw = lambda k: ext[k]                                          # level k extent (n = C_mid stage, n + 1 = ViT)
     act = lambda C, h, w: C * -(-h // 4) * -(-w // 4) * 16 * 2      # 4x4-tile activation, 2 B/element (headroom)
     bufs, top = [], 0
 
@@ -228,7 +251,8 @@ def plan(A, W, H, kdir, structs):
     full = buf('pre out full', act(A['c0'], PH, PW))
     half = buf('pre out half', act(2 * A['c0'], *hw(0)))
     enc_b = [[buf('enc%d %s' % (k, s), act(C, *hw(k))) for s in ('ping', 'pong', 'pool')] for k, (C, _) in enumerate(A['enc'])]
-    H5, W5 = hw(n); H6, W6 = hw(n + 1)
+    H5, W5 = hw(n); PH6, PW6 = (H5 + 1) // 2, (W5 + 1) // 2   # pooled extent convpl writes; the ViT extent rounds it up to 4
+    H6, W6 = hw(n + 1)                                             # (the extra tokens are zero and take part in the attention)
     NM, NV = act(A['c_mid'], H5, W5), act(A['c_vit'], H5, W5)
     T5 = -(-H5 // 4) * -(-W5 // 4); T6 = -(-H6 // 4) * -(-W6 // 4); NTOK = -(-(H6 * W6) // 64) * 64
     m1 = [buf('mid enc w%d' % i, NM) for i in range(4)]
@@ -248,15 +272,17 @@ def plan(A, W, H, kdir, structs):
     steps = []   # (op, C, struct, {field: value}, grid)
     S = lambda op, st, f, grid, C=None: steps.append((op, C, st, f, tuple(grid) + (1,) * (3 - len(grid))))
     S('import', 'ImportParams', dict(src=src, src_pitch=W * 8, src_format=0, src_h=H, src_w=W, pad_h=PH, pad_w=PW, rgb=rgb, mode=0, scale=1.0), (-(-PW // 256), PH))
-    S('pre', 'PreParams', dict(rgb=rgb, out_full=full, w=wl(0, 0), h=PH, w_=PW, in_scale=0.0625, out_half=half, a=1.0, b=1.0), (PW // 8, PH // 8))
+    S('mirror', 'MirrorParams', dict(rgb=rgb, h=H, w_=W, pad_h=PH, pad_w=PW), (-(-PW // 256), PH))
+    S('pre', 'PreParams', dict(rgb=rgb, out_full=full, w=wl(0, 0), h=PH, w_=PW, in_scale=0.0625, tone=1.0, structure=1.0, out_half=half, a=1.0, b=1.0), (PW // 8, PH // 8))   # NVIDIA's default conditioning (tone 1; auto mask: 1, skin 1, structure 1); runtime: nr_set_conditioning
     scratch = [None]
 
     def swin(C, k_hw, blocks, inp, pp, pool, dec, prev=None):
         h, w = k_hw; out = []
+        start = 2 if dec and len(blocks) % 4 == 2 else 0   # a decoder level of 6 blocks starts its shift cycle at mode 2 (as dlssnr-pytorch-flex plan._rows)
         for i, b in enumerate(blocks):
-            ox, oy = MODES[i % 4]; last = i == len(blocks) - 1
+            ox, oy = MODES[(start + i) % 4]; last = i == len(blocks) - 1
             flags = ((8 if i == 0 else 0) | (2 if last else 0)) if dec else ((1 if i == 0 else 0) | (4 if last else 0))
-            f = dict(**{'in': inp if i == 0 else pp[(i + 1) % 2]}, out=pp[i % 2], w=wl(b, 0), H=h, W=w, X0=oy, Y0=ox, flags=flags)   # (X0, Y0) = (oy, ox) of MODES
+            f = dict(**{'in': inp if i == 0 else pp[(i + 1) % 2]}, out=pp[i % 2], w=wl(b, 0), H=h, W=w, X0=ox, Y0=oy, flags=flags)   # X0 = column origin (native c0 = X0 + 8 bx), matches the grid; the DLL capture had them swapped (window shift on the wrong axis, see handover/accuracy)
             if dec and i == 0: f['p30'] = prev
             else: f['p38'] = pool
             S('var', 'VarParams', f, ((w - ox + 7) // 8, (h - oy + 7) // 8), C)
@@ -278,7 +304,7 @@ def plan(A, W, H, kdir, structs):
             ox, oy = MODES[i % 4]
             S('attn', 'AttnParams', dict(x=work[2], out=work[3], w=wl(b, 2), H=H5, W=W5, ox=ox, oy=oy), ((W5 + 7 - ox) >> 3, (H5 + 7 - oy) >> 3, A['heads']))
             if enc and b == blocks[-1]:
-                S('convpl', 'ConvPlParams', dict(a=work[3], res2=work[2], out=work[0], w=wl(b, 3), h=H5, w_=W5, pooled=pooled, ph=H6, pw=W6), (-(-NM // 16384), 1))
+                S('convpl', 'ConvPlParams', dict(a=work[3], res2=work[2], out=work[0], w=wl(b, 3), h=H5, w_=W5, pooled=pooled, ph=PH6, pw=PW6), (-(-NM // 16384), 1))
             else:
                 S('conv2', 'Conv2Params', dict(x=work[3], res=work[2], out=work[0], out2=decin if (not enc and b == blocks[-1]) else None, w=wl(b, 3), H=H5, W=W5, T=T5), g4)
     bn_lo = len(steps)
