@@ -21,6 +21,7 @@ __device__ __forceinline__ uint32_t e4x2(uint32_t u) {   // two e4m3 bytes (low 
 }
 __device__ __forceinline__ uint2 cvt4(uint32_t d) { return make_uint2(e4x2(d & 0xFFFFu), e4x2(d >> 16)); }
 __device__ __forceinline__ float q8(float x) {   // f32 -> nearest e4m3 (RNE, saturating), from native-mid
+  x = x == x ? x : 0.f;   // NaN publishes as +0 (OpenDLSS-NR numerics.md), not as the saturated 448
   float a = fminf(fabsf(x), 448.f);
   uint32_t b = __float_as_uint(a);
   float rn = __uint_as_float((b + 0x7FFFFu + ((b >> 20) & 1u)) & 0xFFF00000u);
