@@ -315,9 +315,11 @@ NR_API int nr_ext_open(nr_ctx* c, void* io, unsigned long long io_alloc, unsigne
   if (!import_buf(io, io_alloc, io_size, &c->em_io, &c->io) || !import_buf(sig, sig_alloc, sig_size, &c->em_sig, &c->sig)) {
     snprintf(err, errlen, "hipImportExternalMemory (D3D12Resource) failed"); nr_ext_close(c, 0); return 4; }
   c->out_off = out_off; c->flag_off = flag_off; c->io_size = io_size;
-  if (hipStreamCreateWithFlags(&c->s, hipStreamNonBlocking) != hipSuccess || hipStreamCreateWithFlags(&c->ps, hipStreamNonBlocking) != hipSuccess ||
+  int prio = 0; { char pv[8] = ""; if (GetEnvironmentVariableA("NR_HIP_PRIORITY", pv, sizeof pv) && !_stricmp(pv, "low")) { int lo = 0, hi = 0; if (hipDeviceGetStreamPriorityRange(&lo, &hi) == hipSuccess) prio = lo; } }   // DLL hip_priority=low: least priority, the game's work first
+  if (hipStreamCreateWithPriority(&c->s, hipStreamNonBlocking, prio) != hipSuccess || hipStreamCreateWithFlags(&c->ps, hipStreamNonBlocking) != hipSuccess ||
       hipHostMalloc((void**)&c->hf, 4) != hipSuccess) { snprintf(err, errlen, "hipStreamCreate failed"); nr_ext_close(c, 0); return 5; }
   c->th = std::thread(ext_thread, c);
+  if (prio) rlog("nr_ext: HIP stream priority %d (low)", prio);
   return 0;
 #else
   snprintf(err, errlen, "D3D12 interop is Windows only"); return 9;
