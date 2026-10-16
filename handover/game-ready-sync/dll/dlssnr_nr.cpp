@@ -27,6 +27,7 @@
 #include <vector>
 #include "dlssnr_iface.h"
 #include "r11g10.h"
+#include "../runtime/weights_ht.h"
 #include <cmath>
 #include <algorithm>
 #include <d3dcommon.h>
@@ -521,14 +522,67 @@ static float importScale(const std::string& dir) {   // k_import kernarg +0x28 m
     fopen_s(&f, (dir + "\\kernargs.bin").c_str(), "rb"); if (!f) return 0; int mode = 0; float sc = 0; _fseeki64(f, (long long)off + 0x28, SEEK_SET);
     bool ok = fread(&mode, 4, 1, f) == 1 && fread(&sc, 4, 1, f) == 1; fclose(f); return ok && mode != 0 && sc > 0 && sc < 1e6f ? sc : 0;
 }
+// Model guard. The model id of an nvngx_dlssnr.dll = FNV-1a 64 over its WEIGHTS_HT records' names + sizes (nr_model_id,
+// runtime/model_id.py); 310.8 (original and ShortFuse) = 1ff9997855c80dd5. A data dir names the model it was built for in
+// meta.json "model_id" (no field: v0.3 data = 310.8). Weight values are checked by the runtime (weights.map fnv).
+// Layout: nr_data\<model id>\<W>x<H>\ when that folder exists (several models side by side), else the flat v0.3 nr_data\<W>x<H>\.
+// Mismatch / missing / unreadable DLL: NR stays off for the session and evaluate passes the frame through.
+#pragma comment(lib, "version.lib")
+#pragma comment(lib, "bcrypt.lib")
+#include <bcrypt.h>
+static const char* kModel3108 = "1ff9997855c80dd5";
+static std::string fileVersion(const std::wstring& p) {
+    DWORD z = 0, n = GetFileVersionInfoSizeW(p.c_str(), &z); std::vector<uint8_t> vi(n); VS_FIXEDFILEINFO* ff = nullptr; UINT fl = 0; char v[64] = "?";
+    if (n && GetFileVersionInfoW(p.c_str(), 0, n, vi.data()) && VerQueryValueW(vi.data(), L"\\", (void**)&ff, &fl) && ff)
+        snprintf(v, sizeof v, "%u.%u.%u.%u", HIWORD(ff->dwFileVersionMS), LOWORD(ff->dwFileVersionMS), HIWORD(ff->dwFileVersionLS), LOWORD(ff->dwFileVersionLS));
+    return v;
+}
+static std::string sha256Prefix(const std::string& p) {   // first 12 hex digits; "-" if unreadable
+    FILE* f = nullptr; fopen_s(&f, p.c_str(), "rb"); if (!f) return "-";
+    BCRYPT_ALG_HANDLE a = nullptr; BCRYPT_HASH_HANDLE h = nullptr; UCHAR d[32] = {}; std::vector<UCHAR> b(1 << 20); size_t n;
+    bool ok = !BCryptOpenAlgorithmProvider(&a, BCRYPT_SHA256_ALGORITHM, nullptr, 0) && !BCryptCreateHash(a, &h, nullptr, 0, nullptr, 0, 0);
+    while (ok && (n = fread(b.data(), 1, b.size(), f)) > 0) ok = !BCryptHashData(h, b.data(), (ULONG)n, 0);
+    ok = ok && !BCryptFinishHash(h, d, 32, 0); if (h) BCryptDestroyHash(h); if (a) BCryptCloseAlgorithmProvider(a, 0); fclose(f);
+    char s[13] = "-"; if (ok) for (int i = 0; i < 6; i++) snprintf(s + 2 * i, 3, "%02x", d[i]); return s;
+}
+static uint64_t modelIdRaw(const char* p) { return nr_model_id(p); }
+static uint64_t modelIdSafe(const char* p) { __try { return modelIdRaw(p); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; } }   // truncated / broken PE
+static std::string metaModelId(const std::string& dir) {   // meta.json "model_id": "<16 hex>"; absent = v0.3 data = 310.8
+    FILE* f = nullptr; fopen_s(&f, (dir + "\\meta.json").c_str(), "rb"); if (!f) return kModel3108;
+    std::string s; char b[4096]; size_t n; while ((n = fread(b, 1, sizeof b, f)) > 0) s.append(b, n); fclose(f);
+    size_t k = s.find("\"model_id\""); if (k == std::string::npos) return kModel3108;
+    size_t q = s.find('"', s.find(':', k) + 1); return q == std::string::npos ? std::string(kModel3108) : s.substr(q + 1, 16);
+}
+static std::string g_dllId, g_dllDesc;   // the user's DLL: model id ("" = not checked yet, 0...0 = none) and "version x sha256 y"
+static bool pickModelBase(std::string* base) {
+    if (g_dllId.empty()) {
+        std::string from; uint64_t id = 0;
+        for (const std::string& d : {narrow(g_dir), g_dataDir + "\\..\\"}) if (GetFileAttributesA((d + "nvngx_dlssnr.dll").c_str()) != INVALID_FILE_ATTRIBUTES) { from = d + "nvngx_dlssnr.dll"; break; }
+        if (!from.empty()) { id = modelIdSafe(from.c_str()); wchar_t w[MAX_PATH] = L""; MultiByteToWideChar(CP_UTF8, 0, from.c_str(), -1, w, MAX_PATH);
+                             g_dllDesc = "version " + fileVersion(w) + " sha256 " + sha256Prefix(from); }
+        else g_dllDesc = "(not found)";
+        char hx[17]; snprintf(hx, sizeof hx, "%016llx", (unsigned long long)id); g_dllId = hx;
+        logf("model: %s %s, model id %s", from.empty() ? "nvngx_dlssnr.dll" : from.c_str(), g_dllDesc.c_str(), id ? hx : "none (no WEIGHTS_HT / unreadable)");
+    }
+    const std::string m = g_dataDir + "\\" + g_dllId; const DWORD at = GetFileAttributesA(m.c_str());
+    *base = at != INVALID_FILE_ATTRIBUTES && (at & FILE_ATTRIBUTE_DIRECTORY) ? m : g_dataDir;
+    return true;
+}
+static bool modelMatches(const std::string& dir) {   // the step dir create picked was built for the user's DLL
+    const std::string want = metaModelId(dir); if (!_stricmp(want.c_str(), g_dllId.c_str())) return true;
+    seterr("nvngx_dlssnr.dll %s has a different model than this port supports (%s). NR stays off; update the port. (DLL model id %s, data %s)",
+           g_dllDesc.c_str(), want == kModel3108 ? "310.8" : want.c_str(), g_dllId.c_str(), dir.c_str());
+    return false;
+}
 static std::string pickModelDir(unsigned w, unsigned h) {
-    unsigned mw, mh; if (readMeta(g_dataDir, &mw, &mh)) return g_dataDir;
-    std::vector<std::pair<unsigned, unsigned>> st; WIN32_FIND_DATAA fd; HANDLE fh = FindFirstFileA((g_dataDir + "\\*x*").c_str(), &fd);
+    std::string base; if (!pickModelBase(&base)) return "";
+    unsigned mw, mh; if (readMeta(base, &mw, &mh)) return base;
+    std::vector<std::pair<unsigned, unsigned>> st; WIN32_FIND_DATAA fd; HANDLE fh = FindFirstFileA((base + "\\*x*").c_str(), &fd);
     if (fh != INVALID_HANDLE_VALUE) { do { unsigned a, b; if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && sscanf_s(fd.cFileName, "%ux%u", &a, &b) == 2) st.push_back({a, b}); } while (FindNextFileA(fh, &fd)); FindClose(fh); }
     auto name = [](unsigned a, unsigned b) { char n[32]; snprintf(n, sizeof n, "%ux%u", a, b); return std::string(n); };
-    if (st.empty()) return g_dataDir;   // create reports the missing meta.txt
+    if (st.empty()) return base;   // create reports the missing meta.txt
     std::string want = g_modelRes;
-    if (want != "auto" && std::none_of(st.begin(), st.end(), [&](const std::pair<unsigned, unsigned>& p) { return name(p.first, p.second) == want; })) { logf("model_res %s: no such step in %s, using auto", want.c_str(), g_dataDir.c_str()); want = "auto"; }
+    if (want != "auto" && std::none_of(st.begin(), st.end(), [&](const std::pair<unsigned, unsigned>& p) { return name(p.first, p.second) == want; })) { logf("model_res %s: no such step in %s, using auto", want.c_str(), base.c_str()); want = "auto"; }
     if (want == "auto" && !st.empty()) {
         auto best = std::make_pair(1280u, 720u); bool def = std::find(st.begin(), st.end(), best) != st.end(); if (!def) best = st[0];
         if (h) for (auto& p : st) if (abs((int)p.second - (int)h) < abs((int)best.second - (int)h)) best = p;   // ties keep 1280x720
@@ -536,7 +590,7 @@ static std::string pickModelDir(unsigned w, unsigned h) {
     }
     std::string steps; for (auto& p : st) steps += " " + name(p.first, p.second);
     logf("model resolution: %s (model_res=%s, host size %ux%u, steps:%s)", want.c_str(), g_modelRes.c_str(), w, h, steps.c_str());
-    return g_dataDir + "\\" + want;
+    return base + "\\" + want;
 }
 
 // ---------------------------------------------------------------- exports
@@ -554,22 +608,18 @@ __declspec(dllexport) const char* dlssnr_backend_id() { return "rdna2-hip"; }   
 __declspec(dllexport) const char* dlssnr_call_error() { return g_err; }
 __declspec(dllexport) int dlssnr_port_state(void* f) { return f ? ((Feature*)f)->state.load() : -1; }   // diagnostics/tests: 0 loading, 1-3 async, 4 failed, 5 sync
 __declspec(dllexport) void dlssnr_port_stats(void* f, unsigned* nr, unsigned* native, unsigned* reused) { Sync* s = f ? ((Feature*)f)->sy : nullptr; *nr = s ? s->ran : 0; *native = s ? s->busy : 0; *reused = s ? s->reused : 0; }   // tests: sync-path frame counts
+__declspec(dllexport) const char* dlssnr_port_dir(void* f) { return f ? ((Feature*)f)->dir.c_str() : ""; }   // tests: the data dir create picked (model + step)
 __declspec(dllexport) void dlssnr_call_set_float_slot(int) {}
 __declspec(dllexport) void dlssnr_call_probe_float(void*, const char*, float, int) {}
 __declspec(dllexport) void dlssnr_call_set_extras(void*, float, ID3D12Resource*, ID3D12Resource*, ID3D12Resource*, unsigned, unsigned, unsigned, unsigned) {}
 
 // Once per process: our build, the game exe and the calling host module (OptiScaler under its proxy name) with its file version.
-#pragma comment(lib, "version.lib")
 #include <intrin.h>
 static void logHost(void* caller) {
     static bool done = false; if (done) return; done = true;
     wchar_t exe[MAX_PATH] = L"", host[MAX_PATH] = L"?"; GetModuleFileNameW(nullptr, exe, MAX_PATH);
     HMODULE hm = nullptr; if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)caller, &hm)) GetModuleFileNameW(hm, host, MAX_PATH);
-    char ver[64] = "?"; DWORD z = 0, n = GetFileVersionInfoSizeW(host, &z); std::vector<uint8_t> vi(n);
-    VS_FIXEDFILEINFO* ff = nullptr; UINT fl = 0;
-    if (n && GetFileVersionInfoW(host, 0, n, vi.data()) && VerQueryValueW(vi.data(), L"\\", (void**)&ff, &fl) && ff)
-        snprintf(ver, sizeof ver, "%u.%u.%u.%u", HIWORD(ff->dwFileVersionMS), LOWORD(ff->dwFileVersionMS), HIWORD(ff->dwFileVersionLS), LOWORD(ff->dwFileVersionLS));
-    logf("host: dlssnr_nr build %s %s | game %ls | host module %ls (version %s)", __DATE__, __TIME__, exe, host, ver);
+    logf("host: dlssnr_nr build %s %s | game %ls | host module %ls (version %s)", __DATE__, __TIME__, exe, host, fileVersion(host).c_str());
 }
 
 __declspec(dllexport) void* dlssnr_call_create(const wchar_t* snippet, const wchar_t*, ID3D12Device* dev, ID3D12GraphicsCommandList*, void*,
@@ -581,6 +631,8 @@ __declspec(dllexport) void* dlssnr_call_create(const wchar_t* snippet, const wch
         dlssnr_call_last_create = 0;
         if (!dev) { seterr("create: no D3D12 device"); return nullptr; }
         unsigned mw = 0, mh = 0; const std::string dir = pickModelDir(w, h);
+        if (dir.empty() || !modelMatches(dir)) {   // unknown / missing nvngx_dlssnr.dll: a feature that only passes frames through (returns 1; OptiScaler ends NR on 0)
+            auto* F = new Feature; F->state = S_FAILED; F->W = w; F->H = h; F->pass = g_live++; dlssnr_call_last_create = 1; return F; }
         if (!readMeta(dir, &mw, &mh)) { seterr("create: no meta.txt in '%s' (run gen_runtime_data.py, see INSTALL.md)", dir.c_str()); return nullptr; }
         if ((mw != w || mh != h) && g_sync) { logf("create: frame %ux%u, model %ux%u - sync path resamples (universal for any resolution / upscaler mode)", w, h, mw, mh); w = mw; h = mh; }
         if (mw != w || mh != h) { seterr("create: model size %ux%u but data dir '%s' is for %ux%u - generate data for this size", w, h, dir.c_str(), mw, mh); return nullptr; }
@@ -626,7 +678,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
     try {
         auto* F = (Feature*)f; int n = ++g_evalCalls;
         if (!F || !cmd || !color || !out) return 0;
-        if (F->state == S_FAILED) return 0;
+        if (F->state == S_FAILED) return passThrough(cmd, color, out, w, h);   // NR off for this session (model guard, runtime failure): native frame
         if ((w != F->W || h != F->H) && F->state != S_SYNC) { if (!F->warnedSize) { F->warnedSize = true; logf("evaluate: frame %ux%u, model %ux%u - native frame until the runtime has loaded", w, h, F->W, F->H); } return passThrough(cmd, color, out, w, h); }
         D3D12_RESOURCE_DESC cd = color->GetDesc(), od = out->GetDesc();
         // R9G9B9E5 output (RE Engine): sync path only, packed in a shader and copied in. Only when the host created the texture

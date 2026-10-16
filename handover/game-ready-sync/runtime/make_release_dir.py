@@ -5,7 +5,8 @@
 # usage: python make_release_dir.py <gen dir> <dst dir> <dir with the .co files + overrides.txt (e.g. fo4_1280x720_native)>
 import sys, os, json, shutil, mmap, collections, struct, ctypes as C, numpy as np
 sys.path.insert(0, r'E:/dlss 5/rdna2/emu'); import weights_ht
-DLL = r'C:/Program Files (x86)/Steam/steamapps/common/Fallout 4/nvngx_dlssnr.dll'
+DLL = os.environ.get('NVNGX_DLL', r'C:/Program Files (x86)/Steam/steamapps/common/Fallout 4/nvngx_dlssnr.dll')   # the model's vendor DLL
+# meta.json gets the DLL's model_id (the DLL refuses data built for another model). Multi-model layout: nr_data\<model_id>\<W>x<H>\.
 src, dst, kref = sys.argv[1:4]
 os.makedirs(dst + '/kernels', exist_ok=True)
 base = lambda p: p.replace('/', '\\').rsplit('\\', 1)[-1]
@@ -25,6 +26,7 @@ open(dst + '/overrides.txt', 'w').write(''.join('|'.join(t) + '\n' for t in ovr)
 for k in {t[0] for t in man if t[1] not in {o[0] for o in ovr}} | {t[1] for t in ovr}:   # overridden manifest modules are not shipped
  shutil.copy2(kref + '/kernels/' + base(k), dst + '/' + k.replace('\\', '/'))
 for f in ('meta.txt', 'meta.json'): shutil.copy2(src + '/' + f, dst + '/' + f)
+import model_id; model_id.stamp(DLL, dst)
 
 # weights: find every WEIGHTS_HT record inside the placements (wmap.py), map by name, zero them
 FH = open(DLL, 'rb'); m = mmap.mmap(FH.fileno(), 0, access=mmap.ACCESS_READ); recs = weights_ht.records(m)

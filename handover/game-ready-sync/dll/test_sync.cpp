@@ -100,14 +100,18 @@ int main(int argc, char** argv) {
     al->Reset(); cl->Reset(al, nullptr); void* f = create(L"nvngx_dlssnr.dll", L"data", dev, cl, nullptr, W, H, 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1); cl->Close();
     { ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); } if (!wait(5000)) { puts("FAIL timeout"); return 2; }
     if (!f) { printf("FAIL create: %s\n", err()); return 3; }
-    char e2[512] = ""; void* ref = rcreate(dd, (int)MW, (int)MH, 1, e2, sizeof e2); if (!ref) { printf("FAIL reference nr_create: %s\n", e2); return 3; }
+    if (auto pdir = (const char* (*)(void*))GetProcAddress(m, "dlssnr_port_dir")) if (*pdir(f)) { snprintf(dd, sizeof dd, "%s", pdir(f)); printf("data dir (picked by the DLL): %s\n", dd); }   // model folder + step
+    if (getenv("NR_TEST_GUARD")) { double t = now(); while (state(f) == 0 && now() - t < 90000) Sleep(50); }   // also catch a runtime-side refusal (weights.map)
+    const bool guard = state(f) == 4;   // model guard: unknown nvngx_dlssnr.dll, NR off -> pass-through test below
+    if (guard) printf("NR off at create: %s\n", err());
+    char e2[512] = ""; void* ref = guard ? nullptr : rcreate(dd, (int)MW, (int)MH, 1, e2, sizeof e2); if (!ref && !guard) { printf("FAIL reference nr_create: %s\n", e2); return 3; }
     // NR_TEST_PASSES=2 (flicker mode): OptiScaler "2 passes" -- a second feature, evaluated in the same list on pass 1's output (janblade DlssNr_Dx12.cpp)
     const bool two = getenv("NR_TEST_PASSES") && atoi(getenv("NR_TEST_PASSES")) > 1; void* f2 = nullptr; ID3D12Resource* out2 = nullptr;
     if (two) { al->Reset(); cl->Reset(al, nullptr); f2 = create(L"nvngx_dlssnr.dll", L"data", dev, cl, nullptr, W, H, 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1); cl->Close();
         { ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); } if (!wait(5000) || !f2) { printf("FAIL create pass 2: %s\n", err()); return 3; }
         out2 = tex(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, OFMT); }
     double t0 = now(); while ((state(f) == 0 || (f2 && state(f2) == 0)) && now() - t0 < 90000) Sleep(50);
-    printf("dll state %d after %.0f ms (5 = sync)\n", state(f), now() - t0); if (state(f) != 5) { printf("FAIL sync path not active: %s\n", err()); return 4; }
+    printf("dll state %d after %.0f ms (5 = sync)\n", state(f), now() - t0); if (state(f) != 5 && !guard) { printf("FAIL sync path not active: %s\n", err()); return 4; }
     printf("device after create: 0x%08lx\n", (unsigned long)dev->GetDeviceRemovedReason());
 
     std::vector<uint16_t> in((size_t)MW * MH * 4), refo((size_t)MW * MH * 4);
@@ -162,6 +166,13 @@ int main(int argc, char** argv) {
                 double e = fabs(ov[c] - bv);
                 { double iv = h2f(in[((size_t)y * MW + x) * 4 + c]); se_o += std::min(e * e, 1.0); se_i += std::min((iv - bv) * (iv - bv), 1.0); }   // UP > 1 metric: PSNR (peak 1, clamped) of NR result vs reference, against doing nothing
                 if (e > *maxerr) *maxerr = e; if (e > 0.004 + (r11 ? 0.035 : 0.004) * fabs(bv)) { (*beyond)++; bx0 = std::min(bx0, x); by0 = std::min(by0, y); bx1 = std::max(bx1, x); by1 = std::max(by1, y); } } } };   // r11: 5-6 bit mantissa
+    if (guard) {   // every frame must come back as the native input, evaluate returning 1
+        int bad = 0; double ms = 0;
+        for (int k = 0; k < 5; k++) { makeFrame(k); int r = frame(k, true, &ms); if (r == -100) { puts("FAIL GPU wait timed out"); return 7; }
+            size_t diff = 0; for (UINT y = 0; y < H; y++) diff += memcmp(rbp + (size_t)y * opitch, upp + (size_t)y * pitch, (size_t)W * BPP) != 0;
+            printf("frame %d: evaluate %d, %zu rows differ from the input\n", k, r, diff); bad += r != 1 || diff; }
+        release(f); printf("device 0x%08lx\n", (unsigned long)dev->GetDeviceRemovedReason());
+        puts(bad || dev->GetDeviceRemovedReason() != S_OK ? "FAIL passthrough" : "PASSTHROUGH PASS (NR off, native frames)"); return bad ? 9 : 0; }
 
     if (getenv("NR_TEST_PACE")) {   // pacing: a game submitting every NR_TEST_CPU_MS with up to 2 frames queued; frame time = gap between GPU completions
         const int n = atoi(getenv("NR_TEST_PACE")); const int QD = getenv("NR_TEST_QUEUE") ? std::max(1, std::min(7, atoi(getenv("NR_TEST_QUEUE")))) : 2, NQ = QD + 1; const double cpu = getenv("NR_TEST_CPU_MS") ? atof(getenv("NR_TEST_CPU_MS")) : 8.0;

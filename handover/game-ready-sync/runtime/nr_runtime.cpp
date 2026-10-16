@@ -23,6 +23,9 @@
 #include <compressapi.h>
 #endif
 #include "nr_override.h"
+#ifdef _WIN32
+#include "weights_ht.h"
+#endif
 
 struct Step { hipFunction_t fn; std::vector<uint8_t> ka; unsigned gx, gy, gz, thr; bool pre = false, post = false;   // pre = k_pre_block (its kernarg holds the strength fields)
               const NrOverride* ov = nullptr; std::vector<uint8_t> src; };   // ov: native replacement; src = original rebased kernarg it is built from
@@ -84,27 +87,24 @@ static bool upload_arena(nr_ctx* c) {   // pristine arena between two 0xA5 guard
   if (a.size() != c->arena) return false;
   // weights.map: the release ships no vendor weights; copy them by record name from the WEIGHTS_HT resource of the
   // user's nvngx_dlssnr.dll (next to the data dir), so any DLL build carrying the same weights works.
-  // Record: u64 name_len, name, u64, u64, u64 D, u32 1, data[D], 20-byte trailer (see rdna2/emu/weights_ht.py).
+  // weights.map: "fnv <hash> <count>", then "<arena offset> <record name> <bytes>" per record (make_release_dir.py).
 #ifdef _WIN32
   if (FILE* m = fopen((c->dir + "/weights.map").c_str(), "r")) {
-    std::map<std::string, std::pair<const uint8_t*, uint64_t>> rec;
-    HMODULE dll = nullptr;   // beside the data dir, or one level up (nr_data\<W>x<H>\ step dirs)
-    for (const char* up : {"/../", "/../../"}) if (!dll) dll = LoadLibraryExA((c->dir + up + "nvngx_dlssnr.dll").c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
-    HRSRC r = dll ? FindResourceA(dll, "WEIGHTS_HT", MAKEINTRESOURCEA(10)) : nullptr;
-    const uint8_t* b = r ? (const uint8_t*)LockResource(LoadResource(dll, r)) : nullptr; uint64_t sz = r ? SizeofResource(dll, r) : 0, o = 8;
-    while (b && o + 8 <= sz) {
-      uint64_t L, D; memcpy(&L, b + o, 8); if (o + 8 + L + 28 > sz) break;
-      std::string nm((const char*)b + o + 8, L); memcpy(&D, b + o + 8 + L + 16, 8);
-      o += 8 + L + 28; if (o + D + 20 > sz) break; rec[nm] = {b + o, D}; o += D + 20;
-    }
+    struct E { unsigned long long ao, n; bool done; }; std::multimap<std::string, E> want_rec; std::vector<std::multimap<std::string, E>::iterator> order;
     unsigned long long want = 0, h = 0xcbf29ce484222325ull, ao, n; int cnt = 0; char nm[256];
-    bool ok = !rec.empty() && fscanf(m, "fnv %llu %d", &want, &cnt) == 2;
-    for (int i = 0; ok && i < cnt; i++) {
-      ok = fscanf(m, "%llu %255s %llu", &ao, nm, &n) == 3 && rec.count(nm) && rec[nm].second == n && ao + n <= a.size();
-      if (ok) memcpy(a.data() + ao, rec[nm].first, n);
-      for (unsigned long long k = 0; ok && k < n; k++) h = (h ^ a[ao + k]) * 0x100000001b3ull;
+    bool ok = fscanf(m, "fnv %llu %d", &want, &cnt) == 2;
+    for (int i = 0; ok && i < cnt; i++)
+      if ((ok = fscanf(m, "%llu %255s %llu", &ao, nm, &n) == 3 && ao + n <= a.size())) order.push_back(want_rec.insert({nm, {ao, n, false}}));
+    fclose(m);
+    // nvngx_dlssnr.dll beside the data dir, or up to three levels up (nr_data\<W>x<H>\ and nr_data\<model>\<W>x<H>\ step dirs)
+    for (const char* up : {"/../", "/../../", "/../../../"})
+      if (ok && nr_weights_ht(c->dir + up + "nvngx_dlssnr.dll", [&](const std::string& r, const uint8_t* d, uint64_t dn) {
+            auto rg = want_rec.equal_range(r);
+            for (auto it = rg.first; it != rg.second; ++it) if (it->second.n == dn) { memcpy(a.data() + it->second.ao, d, dn); it->second.done = true; } })) break;
+    for (auto it : order) {
+      ok = ok && it->second.done;
+      for (unsigned long long k = 0; ok && k < it->second.n; k++) h = (h ^ a[it->second.ao + k]) * 0x100000001b3ull;
     }
-    fclose(m); if (dll) FreeLibrary(dll);
     if (!ok || h != want) return false;   // missing nvngx_dlssnr.dll or one with different weights
   }
 #endif
