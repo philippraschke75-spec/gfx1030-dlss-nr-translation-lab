@@ -220,7 +220,14 @@ def plan(A, W, H, kdir, structs):
     full = buf('pre out full', act(A['c0'], PH, PW))
     half = buf('pre out half', act(2 * A['c0'], *hw(0)))
     enc_b = [[buf('enc%d %s' % (k, s), act(C, *hw(k))) for s in ('ping', 'pong', 'pool')] for k, (C, _) in enumerate(A['enc'])]
-    H5, W5 = hw(n); H6, W6 = hw(n + 1)
+    H5, W5 = hw(n)
+    # Pooled extent convpl writes: only the cells that hold frame pixels (ceil(H / 2^(n+2))). In the reference the cells past
+    # them pool zero padding, so they are near zero; ours would pool our larger padding (real image content) instead, and
+    # through the global ViT attention those tokens change the whole frame. Left unwritten they stay zero (arena init).
+    PH6, PW6 = min(hw(n + 1)[0], -(-H // (1 << (n + 2)))), min(hw(n + 1)[1], -(-W // (1 << (n + 2))))
+    # ViT extent: the pooled extent rounded up to whole 4x4 tiles, as the reference (dlssnr-pytorch-flex plan._walk,
+    # FINAL_HEAD). The extra rows/columns hold zero tokens that take part in the global attention (nreal counts them).
+    H6, W6 = -(-hw(n + 1)[0] // 4) * 4, -(-hw(n + 1)[1] // 4) * 4
     NM, NV = act(A['c_mid'], H5, W5), act(A['c_vit'], H5, W5)
     T5 = -(-H5 // 4) * -(-W5 // 4); T6 = -(-H6 // 4) * -(-W6 // 4); NTOK = -(-(H6 * W6) // 64) * 64
     m1 = [buf('mid enc w%d' % i, NM) for i in range(4)]
@@ -245,10 +252,11 @@ def plan(A, W, H, kdir, structs):
 
     def swin(C, k_hw, blocks, inp, pp, pool, dec, prev=None):
         h, w = k_hw; out = []
+        start = 2 if dec and len(blocks) % 4 == 2 else 0   # a decoder level of 6 blocks starts its shift cycle at mode 2 (as dlssnr-pytorch-flex plan._rows)
         for i, b in enumerate(blocks):
-            ox, oy = MODES[i % 4]; last = i == len(blocks) - 1
+            ox, oy = MODES[(start + i) % 4]; last = i == len(blocks) - 1
             flags = ((8 if i == 0 else 0) | (2 if last else 0)) if dec else ((1 if i == 0 else 0) | (4 if last else 0))
-            f = dict(**{'in': inp if i == 0 else pp[(i + 1) % 2]}, out=pp[i % 2], w=wl(b, 0), H=h, W=w, X0=oy, Y0=ox, flags=flags)   # (X0, Y0) = (oy, ox) of MODES
+            f = dict(**{'in': inp if i == 0 else pp[(i + 1) % 2]}, out=pp[i % 2], w=wl(b, 0), H=h, W=w, X0=ox, Y0=oy, flags=flags)   # X0 = column origin (native c0 = X0 + 8 bx), matches the grid; the DLL capture had them swapped (window shift on the wrong axis, see handover/accuracy)
             if dec and i == 0: f['p30'] = prev
             else: f['p38'] = pool
             S('var', 'VarParams', f, ((w - ox + 7) // 8, (h - oy + 7) // 8), C)
@@ -270,7 +278,7 @@ def plan(A, W, H, kdir, structs):
             ox, oy = MODES[i % 4]
             S('attn', 'AttnParams', dict(x=work[2], out=work[3], w=wl(b, 2), H=H5, W=W5, ox=ox, oy=oy), ((W5 + 7 - ox) >> 3, (H5 + 7 - oy) >> 3, A['heads']))
             if enc and b == blocks[-1]:
-                S('convpl', 'ConvPlParams', dict(a=work[3], res2=work[2], out=work[0], w=wl(b, 3), h=H5, w_=W5, pooled=pooled, ph=H6, pw=W6), (-(-NM // 16384), 1))
+                S('convpl', 'ConvPlParams', dict(a=work[3], res2=work[2], out=work[0], w=wl(b, 3), h=H5, w_=W5, pooled=pooled, ph=PH6, pw=PW6), (-(-NM // 16384), 1))
             else:
                 S('conv2', 'Conv2Params', dict(x=work[3], res=work[2], out=work[0], out2=decin if (not enc and b == blocks[-1]) else None, w=wl(b, 3), H=H5, W=W5, T=T5), g4)
     bn_lo = len(steps)
