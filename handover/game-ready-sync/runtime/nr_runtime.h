@@ -78,3 +78,6 @@ NR_API int nr_dbg_steps(nr_ctx*, int n);
 NR_API int nr_dbg_read(nr_ctx*, unsigned long long off, unsigned long long size, void* dst);
 // Log sink for the hardware line at create and the output self-check (default stderr). A failed self-check makes nr_ext_enqueue* return -2.
 NR_API void nr_set_log(void (*cb)(const char*));
+// Optional, before nr_create: luid = the host's D3D12 adapter LUID (8 bytes, ID3D12Device::GetAdapterLuid) or NULL; allow_any = 1 runs on
+// GPUs other than RDNA2 dGPUs (gfx1030-1032). Without it nr_create picks the dGPU with the most CUs.
+NR_API void nr_select_device(const void* luid, int allow_any);

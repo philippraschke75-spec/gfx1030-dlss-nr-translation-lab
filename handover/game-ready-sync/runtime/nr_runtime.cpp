@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <cctype>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -47,6 +48,7 @@ struct nr_ctx {
   std::vector<hipEvent_t> prof; std::vector<std::string> names;   // NR_PROF only
   int ksplit[2] = {0, 0};   // nr_ext_split: first dispatch of part 2 for a full / a skipping (vit_every) frame; 0 = no split
   std::atomic<bool> broken{false}; long checked = 0;   // output self-check (ext path): broken -> nr_ext_enqueue* returns -2, the DLL stays native
+  int devid = 0;   // HIP device of this context; HIP's current device is per thread, so every entry point selects it
 };
 #ifndef NR_BUILD_ID
 #define NR_BUILD_ID __DATE__ " " __TIME__
@@ -54,6 +56,36 @@ struct nr_ctx {
 static void (*g_logcb)(const char*) = nullptr;   // nr_set_log: the DLL's log (dlssnr_nr.log); stderr when unset
 static void rlog(const char* fmt, ...) { char b[512]; va_list a; va_start(a, fmt); vsnprintf(b, sizeof b, fmt, a); va_end(a); if (g_logcb) g_logcb(b); else fprintf(stderr, "%s\n", b); }
 NR_API void nr_set_log(void (*cb)(const char*)) { g_logcb = cb; }
+// GPU choice: the HIP device whose LUID matches the host's D3D12 adapter (nr_select_device). Without a match: the dGPU with the most CUs,
+// never an iGPU while a dGPU exists. Only RDNA2 dGPUs (gfx1030-1032) unless allow_any. Env NR_HIP_DEVICE=n forces device n, -1 ignores the LUID (tests).
+static unsigned char g_luid[8]; static bool g_haveLuid = false; static int g_allowAny = 0;
+NR_API void nr_select_device(const void* luid, int allow_any) { g_haveLuid = luid != nullptr; if (luid) memcpy(g_luid, luid, 8); g_allowAny = allow_any; }
+static bool is_igpu(const hipDeviceProp_t& p) {
+  static const char* ig[] = {"gfx1035", "gfx1036", "gfx1037", "gfx1103", "gfx1150", "gfx1151", "gfx1152", "gfx90c", "gfx902", "gfx909"};
+  for (auto a : ig) if (!strncmp(p.gcnArchName, a, strlen(a)) && !isalnum((unsigned char)p.gcnArchName[strlen(a)])) return true;
+  return p.integrated != 0;
+}
+static int pick_device(char* err, int errlen) {
+  int n = 0; if (hipGetDeviceCount(&n) != hipSuccess || n < 1) { snprintf(err, errlen, "no HIP device"); return -1; }
+  int pick = -1, best = -1, bestCu = -1;
+  for (int i = 0; i < n; i++) {
+    hipDeviceProp_t p{}; if (hipGetDeviceProperties(&p, i) != hipSuccess) continue;
+    const bool m = g_haveLuid && !memcmp(p.luid, g_luid, 8) && !(getenv("NR_HIP_DEVICE") && atoi(getenv("NR_HIP_DEVICE")) < 0);   // -1: simulate a LUID mismatch (tests)
+    rlog("runtime: HIP device %d: %s (%s), %d CUs, %zu MB%s%s", i, p.name, p.gcnArchName, p.multiProcessorCount, p.totalGlobalMem >> 20, is_igpu(p) ? ", integrated" : "", m ? " <- LUID matches the D3D12 device" : "");
+    if (m && pick < 0) pick = i;
+    const int cu = is_igpu(p) ? -1 : p.multiProcessorCount; if (cu > bestCu) { bestCu = cu; best = i; }
+  }
+  if (const char* e = getenv("NR_HIP_DEVICE"); e && atoi(e) >= 0) { pick = atoi(e); rlog("runtime: NR_HIP_DEVICE=%d forces the device", pick); if (pick < 0 || pick >= n) { snprintf(err, errlen, "NR_HIP_DEVICE=%d out of range (%d devices)", pick, n); return -1; } }
+  else if (pick < 0) {
+    if (bestCu < 0) { snprintf(err, errlen, "only integrated GPUs found - NR stays off"); return -1; }
+    pick = best; rlog("runtime: %s - using HIP device %d (dGPU with the most CUs)", g_haveLuid ? "no HIP device matches the D3D12 adapter LUID" : "no D3D12 adapter LUID given", pick);
+  }
+  hipDeviceProp_t p{}; hipGetDeviceProperties(&p, pick);
+  const bool ok = !is_igpu(p) && (!strncmp(p.gcnArchName, "gfx1030", 7) || !strncmp(p.gcnArchName, "gfx1031", 7) || !strncmp(p.gcnArchName, "gfx1032", 7));
+  if (!ok && !g_allowAny) { snprintf(err, errlen, "GPU %s (%s) not supported (RDNA2 dGPU gfx1030-1032 required; allow_any_gpu=1 in the ini overrides)", p.name, p.gcnArchName); return -1; }
+  return pick;
+}
+static void use_dev(nr_ctx* c) { if (c) hipSetDevice(c->devid); }
 static const size_t kStrOff0 = 0x28, kStrOff1 = 0x48;
 static const size_t PAD = 1 << 16;
 #define FAIL(...) do { snprintf(err, errlen, __VA_ARGS__); nr_destroy(c); return nullptr; } while (0)
@@ -148,7 +180,8 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
   c->off_dst = num("off_dst"); c->dst_size = num("dst_size"); c->vit_lo = (int)num("vit_lo"); c->vit_hi = (int)num("vit_hi");
   if (!bn && c->vit_every > 1 && num("off_vitres") == num("off_headb")) FAIL("vit_every>1 needs data generated with VIT_OWN=1");
 
-  hipDeviceProp_t p{}; HK(hipGetDeviceProperties(&p, 0));
+  c->devid = pick_device(err, errlen); if (c->devid < 0) { c->devid = 0; nr_destroy(c); return nullptr; }
+  HK(hipSetDevice(c->devid)); hipDeviceProp_t p{}; HK(hipGetDeviceProperties(&p, c->devid));
   { size_t fr = 0, tot = 0; hipMemGetInfo(&fr, &tot); int rv = 0, dv = 0; hipRuntimeGetVersion(&rv); hipDriverGetVersion(&dv);
     rlog("runtime: build %s | GPU %s (%s), %d CUs (HIP count, WGPs on RDNA), VRAM %zu MB total / %zu MB free | HIP runtime %d, driver %d",
          NR_BUILD_ID, p.name, p.gcnArchName, p.multiProcessorCount, tot >> 20, fr >> 20, rv, dv);
@@ -313,6 +346,7 @@ static bool launch_all(nr_ctx* c, hipStream_t st) { return launch_range(c, st, 0
 
 NR_API int nr_run(nr_ctx* c, const void* in, void* out, float* gpu_ms) { return nr_run2(c, in, out, gpu_ms, 0); }
 NR_API int nr_run2(nr_ctx* c, const void* in, void* out, float* gpu_ms, int hist_valid) {
+  use_dev(c);
   apply_strength(c);
   if (!hist_begin(c, nullptr, hist_valid, nullptr)) return 5;
   if (hipMemcpy(c->d + PAD + c->off_src, in, c->src_size, hipMemcpyHostToDevice) != hipSuccess) return 1;
@@ -338,7 +372,7 @@ NR_API int nr_dbg_steps(nr_ctx* c, int n) { if (!c) return 1; c->dbg_n = n; retu
 NR_API int nr_dbg_read(nr_ctx* c, unsigned long long off, unsigned long long size, void* dst) {
   if (!c || off + size > c->arena) return 1; return hipMemcpy(dst, c->d + PAD + off, size, hipMemcpyDeviceToHost) != hipSuccess;
 }
-NR_API int nr_reset(nr_ctx* c) { c->frame = 0; c->have_prev = false; return upload_arena(c) ? 0 : 1; }
+NR_API int nr_reset(nr_ctx* c) { use_dev(c); c->frame = 0; c->have_prev = false; return upload_arena(c) ? 0 : 1; }
 
 static void ext_thread(nr_ctx* c);
 #ifdef _WIN32
@@ -352,6 +386,7 @@ static bool import_buf(void* h, size_t alloc, size_t size, hipExternalMemory_t* 
 #endif
 NR_API int nr_ext_open(nr_ctx* c, void* io, unsigned long long io_alloc, unsigned long long io_size, unsigned long long out_off,
                        unsigned long long flag_off, void* sig, unsigned long long sig_alloc, unsigned long long sig_size, char* err, int errlen) {
+  use_dev(c);
 #ifdef _WIN32
   if (!c || c->s) { snprintf(err, errlen, "no context or already open"); return 1; }
   if (out_off < c->src_size || out_off + c->dst_size > flag_off || flag_off + 4 > io_size || sig_size < 4) { snprintf(err, errlen, "io layout too small"); return 2; }
@@ -391,6 +426,7 @@ static void self_check(nr_ctx* c) {
 }
 static const int kExtWaitMs = 500;   // flag_in wait bound; longer than the D3D12 spin bound, so a late frame is dropped on both sides
 static void ext_thread(nr_ctx* c) {
+  use_dev(c);
   for (;;) {
     unsigned seq; int hv, part;
     { std::unique_lock<std::mutex> g(c->mx); c->cv.wait(g, [&] { return c->stop || !c->q.empty(); }); if (c->stop) return; seq = c->q.front().seq; hv = c->q.front().hv; part = c->q.front().part; c->q.pop_front(); }
@@ -440,6 +476,7 @@ NR_API int nr_ext_enqueue3(nr_ctx* c, unsigned seq, int max_inflight, int hist_v
 // arena only sees two extra frames on its pristine input before the first real one), or fixed by the caller. Skipping frames (vit_every)
 // get their own k over the dispatches they run.
 NR_API int nr_ext_split(nr_ctx* c, int* k_full, int* k_skip, float* ms) {
+  use_dev(c);
   if (!c || !c->s || !k_full || !k_skip) return 1;
   const int n = (int)c->steps.size(); std::vector<double> t(n, 0.0);
   if (*k_full <= 0 || *k_skip <= 0) {
@@ -463,20 +500,23 @@ NR_API int nr_ext_split(nr_ctx* c, int* k_full, int* k_skip, float* ms) {
   return 0;
 }
 NR_API int nr_ext_close(nr_ctx* c, int) {
+  use_dev(c);
   if (!c) return 0;
   if (c->th.joinable()) { { std::lock_guard<std::mutex> g(c->mx); c->stop = true; c->q.clear(); } c->cv.notify_all(); c->th.join(); }   // bounded: one poll <= kExtWaitMs
   if (c->s) { hipStreamSynchronize(c->s); hipStreamDestroy(c->s); c->s = nullptr; }
   if (c->ps) { hipStreamDestroy(c->ps); c->ps = nullptr; }
   if (c->hf) { hipHostFree(c->hf); c->hf = nullptr; }
+  if (c->io) hipFree(c->io); if (c->sig) hipFree(c->sig);   // mapped buffers of imported memory need their own free (CUDA semantics), else ~20 MB leak per open
   if (c->em_io) hipDestroyExternalMemory(c->em_io); if (c->em_sig) hipDestroyExternalMemory(c->em_sig);
   c->em_io = c->em_sig = nullptr; c->io = c->sig = nullptr; c->hin = c->hout = 0; c->stop = false; c->inflight = 0; return 0;
 }
 
 NR_API void nr_destroy(nr_ctx* c) {
-  if (!c) return;
+  if (!c) return; use_dev(c);
   if (nr_ext_close(c, 2000)) return;   // GPU still busy with our memory: leak the context instead of freeing under it
   for (auto m : c->mods) hipModuleUnload(m);
   if (c->d) hipFree(c->d);
   if (c->hist) hipFree(c->hist);
+  if (c->e0) hipEventDestroy(c->e0); if (c->e1) hipEventDestroy(c->e1); for (auto e : c->prof) if (e) hipEventDestroy(e);
   delete c;
 }

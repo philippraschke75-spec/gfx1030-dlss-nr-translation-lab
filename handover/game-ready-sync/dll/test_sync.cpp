@@ -105,6 +105,31 @@ int main(int argc, char** argv) {
     const bool guard = state(f) == 4;   // model guard: unknown nvngx_dlssnr.dll, NR off -> pass-through test below
     if (guard) printf("NR off at create: %s\n", err());
     char e2[512] = ""; void* ref = guard ? nullptr : rcreate(dd, (int)MW, (int)MH, 1, e2, sizeof e2); if (!ref && !guard) { printf("FAIL reference nr_create: %s\n", e2); return 3; }
+    if (getenv("NR_TEST_RECREATE")) {   // VRAM leak test: N cycles of create -> load -> evaluate -> release, alternating frame sizes. Every 3rd cycle releases
+        // while the runtime is still loading, every 3rd abandons the feature without release (MSFS 2024 host) -> the next create must evict it.
+        // Free VRAM (hipMemGetInfo) is sampled once each fully loaded cycle has its feature live; PASS = spread <= 100 MB (+-50) after warm-up.
+        typedef int (*P_mem)(size_t*, size_t*); HMODULE hip = GetModuleHandleA("amdhip64_6.dll"); auto mem = hip ? (P_mem)GetProcAddress(hip, "hipMemGetInfo") : nullptr;
+        if (!mem) { puts("FAIL no hipMemGetInfo"); return 1; }
+        release(f); const int N = atoi(getenv("NR_TEST_RECREATE")); std::vector<void*> abandoned; size_t lo = SIZE_MAX, hi = 0;
+        for (int i = 0; i < N; i++) {
+            const UINT fw = i % 2 ? W * 3 / 4 : W, fh = i % 2 ? H * 3 / 4 : H; const int kind = i % 3;   // 0 normal, 1 abandon, 2 release while loading
+            if (i && (i - 1) % 3 == 1) Sleep(2100);   // the abandoned one must be idle >= evict_idle_ms (2000) when the next create loads
+            al->Reset(); cl->Reset(al, nullptr); void* g = create(L"nvngx_dlssnr.dll", L"data", dev, cl, nullptr, fw, fh, 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1); cl->Close();
+            { ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); } if (!wait(5000) || !g) { printf("FAIL recreate %d: %s\n", i, err()); return 3; }
+            if (kind == 2) { release(g); printf("cycle %2d %ux%u released while loading\n", i, fw, fh); continue; }
+            const double t1 = now(); while (state(g) == 0 && now() - t1 < 30000) Sleep(20);
+            if (state(g) != 5) { printf("FAIL recreate %d: state %d (%s)\n", i, state(g), err()); return 4; }
+            for (int k = 0; k < 3; k++) { al->Reset(); cl->Reset(al, nullptr); eval(cl, g, nullptr, color, nullptr, nullptr, out, fw, fh, 0, 0, 0, 0, 0, 0, 0, 0, 0, k == 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1.f, 1.f); cl->Close();
+                ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); if (!wait(5000)) { puts("FAIL recreate: GPU timeout"); return 2; } }
+            size_t fr = 0, tot = 0; mem(&fr, &tot); if (i >= 3) { lo = std::min(lo, fr); hi = std::max(hi, fr); }
+            printf("cycle %2d %ux%u loaded in %.0f ms, free VRAM %zu MB%s\n", i, fw, fh, now() - t1, fr >> 20, kind == 1 ? " (abandoned, no release)" : "");
+            if (kind == 1) abandoned.push_back(g); else release(g);
+        }
+        for (void* g : abandoned) release(g);
+        Sleep(3000); size_t fr = 0, tot = 0; mem(&fr, &tot); printf("after all releases: free VRAM %zu MB\n", fr >> 20);
+        const size_t spread = hi > lo ? (hi - lo) >> 20 : 0; printf("%s recreate: %d cycles, free VRAM spread %zu MB over the loaded cycles\n", spread <= 100 ? "PASS" : "FAIL", N, spread);
+        return spread <= 100 ? 0 : 9;
+    }
     // NR_TEST_PASSES=2 (flicker mode): OptiScaler "2 passes" -- a second feature, evaluated in the same list on pass 1's output (janblade DlssNr_Dx12.cpp)
     const bool two = getenv("NR_TEST_PASSES") && atoi(getenv("NR_TEST_PASSES")) > 1; void* f2 = nullptr; ID3D12Resource* out2 = nullptr;
     if (two) { al->Reset(); cl->Reset(al, nullptr); f2 = create(L"nvngx_dlssnr.dll", L"data", dev, cl, nullptr, W, H, 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1); cl->Close();
