@@ -149,8 +149,9 @@ int main(int argc, char** argv) {
         if (!exec) return r;                                  // the host dropped this list
         double a = now(); ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); if (!wait(5000)) return -100; *ms = now() - a; return r; };
     double se_o = 0, se_i = 0; auto psnr = [&](double se) { return 10 * log10(3.0 * MW * MH / std::max(se, 1e-12)); };
+    UINT bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;   // bounding box of the values beyond tolerance (printed on MISMATCH)
     auto compare = [&](size_t* beyond, double* maxerr) {
-        *beyond = 0; *maxerr = 0; se_o = se_i = 0;
+        *beyond = 0; *maxerr = 0; se_o = se_i = 0; bx0 = by0 = ~0u; bx1 = by1 = 0;
         for (UINT y = 0; y < MH; y++) for (UINT x = 0; x < MW; x++) {
             double ov[3] = {0, 0, 0};   // UP > 1: mean of the UPxUP frame block (bilinear up + box down ~ identity)
             for (UINT j = 0; j < UP * UP; j++) { size_t fy = y * UP + j / UP, fx = x * UP + j % UP; uint16_t o[4];
@@ -160,7 +161,7 @@ int main(int argc, char** argv) {
                 uint16_t b = refo[((size_t)y * MW + x) * 4 + c]; double bv = (b & 0x7C00) == 0x7C00 ? 0 : std::max(0.0, h2f(b));
                 double e = fabs(ov[c] - bv);
                 { double iv = h2f(in[((size_t)y * MW + x) * 4 + c]); se_o += std::min(e * e, 1.0); se_i += std::min((iv - bv) * (iv - bv), 1.0); }   // UP > 1 metric: PSNR (peak 1, clamped) of NR result vs reference, against doing nothing
-                if (e > *maxerr) *maxerr = e; if (e > 0.004 + (r11 ? 0.035 : 0.004) * fabs(bv)) (*beyond)++; } } };   // r11: 5-6 bit mantissa
+                if (e > *maxerr) *maxerr = e; if (e > 0.004 + (r11 ? 0.035 : 0.004) * fabs(bv)) { (*beyond)++; bx0 = std::min(bx0, x); by0 = std::min(by0, y); bx1 = std::max(bx1, x); by1 = std::max(by1, y); } } } };   // r11: 5-6 bit mantissa
 
     if (getenv("NR_TEST_PACE")) {   // pacing: a game submitting every NR_TEST_CPU_MS with up to 2 frames queued; frame time = gap between GPU completions
         const int n = atoi(getenv("NR_TEST_PACE")); const int QD = getenv("NR_TEST_QUEUE") ? std::max(1, std::min(7, atoi(getenv("NR_TEST_QUEUE")))) : 2, NQ = QD + 1; const double cpu = getenv("NR_TEST_CPU_MS") ? atof(getenv("NR_TEST_CPU_MS")) : 8.0;
@@ -418,6 +419,7 @@ int main(int argc, char** argv) {
         ts_.push_back(ms); size_t bad; double mx; compare(&bad, &mx);
         bool ok = UP > 1 ? psnr(se_o) >= 30 : bad <= (size_t)MW * MH * 3 / 1000; failed += !ok;   // UP > 1 (resampled): compare quality, not values
         if (k < 3 || k % 50 == 0 || !ok) printf("frame %d: %.1f ms list (ref nr_run %.1f ms) | %zu rgb values beyond tol, max err %.4g %s\n", k, ms, tr.back(), bad, mx, ok ? "ok" : "MISMATCH");
+        if (!ok) printf("  beyond-tol box x %u..%u y %u..%u\n", bx0, bx1, by0, by1);
         static const bool psall = getenv("NR_TEST_PSNR") != nullptr;   // NR_TEST_PSNR=1: PSNR vs the vit_every=1 reference every frame (lossy ini settings)
         if (psall) printf("psnr %d %.2f %.2f\n", k, psnr(se_o), ms);
         if (UP > 1 && (k < 3 || !ok)) printf("  psnr vs reference: NR %.1f dB, no NR %.1f dB\n", psnr(se_o), psnr(se_i));
