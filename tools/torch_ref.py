@@ -36,6 +36,7 @@ def ours(dlldir, data, W, H, out):
 
 def torch_ref(dll, W, H, ours_npy):
     import torch, contextlib, io
+    import dlssnr.extract as ex; ex.RESOURCE_NAME = os.environ.get('WEIGHTS_RES', ex.RESOURCE_NAME)   # WEIGHTS_CC_SMALL_FP8: 310.9 small model
     from dlssnr.extract import extract
     from dlssnr.io import Controls, _mirror
     from dlssnr.model import NRNet, _main
