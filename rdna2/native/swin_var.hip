@@ -636,7 +636,7 @@ __device__ __forceinline__ void swin_block(const VarParams& P) {
         r = __builtin_elementwise_min(r, (h2){(_Float16)1.5693359375f, (_Float16)1.5693359375f});
         num[jj] = (__builtin_bit_cast(uint32_t, r) & 0x03FF03FFu) << 5;
       }
-      __syncthreads();   // SMALL: Pm replaces kn
+      if constexpr (SMALL) __syncthreads();   // SMALL: Pm replaces kn (else Pm overlays q f32, last read before the previous barrier)
 #pragma unroll
       for (int jj = 0; jj < 8; jj++) Pm[(kq * 8 + jj) * 64 + t] = num[jj];
     }
@@ -668,7 +668,14 @@ __device__ __forceinline__ void swin_block(const VarParams& P) {
       for (int n = 0; n < 8; n++) {
         const int j = group * 8 + n;
         const uint32_t u = Pm[j * 64 + t];
-        Pm[j * 64 + t] = pk(q8(f16r(__fmul_rn(lo(u), rc))), q8(f16r(__fmul_rn(hi(u), rc))));
+        // q8(f16r()) of both halves at once, on the f16 grid (q8h from pre/post_native, proof q8h_cpu.py)
+        const uint32_t xb = pk(__fmul_rn(lo(u), rc), __fmul_rn(hi(u), rc));
+        typedef unsigned short u2 __attribute__((ext_vector_type(2)));
+        const u2 ab = __builtin_elementwise_min(__builtin_bit_cast(u2, xb & 0x7FFF7FFFu), (u2){0x5F00, 0x5F00});
+        const u2 eb = __builtin_elementwise_max(ab & (u2){0x7C00, 0x7C00}, (u2){0x2400, 0x2400});
+        const h2 K = __builtin_bit_cast(h2, eb) * (h2){(_Float16)128.f, (_Float16)128.f};
+        const h2 r = (__builtin_bit_cast(h2, ab) + K) - K;
+        Pm[j * 64 + t] = (__builtin_bit_cast(uint32_t, r) & 0x7FFF7FFFu) | (xb & 0x80008000u);
       }
     }
     __syncthreads(); // all channel groups consume all 32 normalised pairs
