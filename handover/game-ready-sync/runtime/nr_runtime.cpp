@@ -117,12 +117,14 @@ static bool upload_arena(nr_ctx* c) {   // pristine arena between two 0xA5 guard
 #endif
   }
   if (a.size() != c->arena) return false;
-  // weights.map: the release ships no vendor weights; copy them by record name from the WEIGHTS_HT resource of the
+  // weights.map: the release ships no vendor weights; copy them by record name from the WEIGHTS_HT (or weights.map 'res') resource of the
   // user's nvngx_dlssnr.dll (next to the data dir), so any DLL build carrying the same weights works.
   // weights.map: "fnv <hash> <count>", then "<arena offset> <record name> <bytes>" per record (make_release_dir.py).
 #ifdef _WIN32
   if (FILE* m = fopen((c->dir + "/weights.map").c_str(), "r")) {
     struct E { unsigned long long ao, n; bool done; }; std::multimap<std::string, E> want_rec; std::vector<std::multimap<std::string, E>::iterator> order;
+    char res[64] = "WEIGHTS_HT"; long at = ftell(m);   // optional first line "res <name>" (310.9 small model: WEIGHTS_CC_SMALL_FP8, same framing)
+    if (fscanf(m, "res %63s ", res) != 1) fseek(m, at, SEEK_SET);
     unsigned long long want = 0, h = 0xcbf29ce484222325ull, ao, n; int cnt = 0; char nm[256];
     bool ok = fscanf(m, "fnv %llu %d", &want, &cnt) == 2;
     for (int i = 0; ok && i < cnt; i++)
@@ -130,7 +132,7 @@ static bool upload_arena(nr_ctx* c) {   // pristine arena between two 0xA5 guard
     fclose(m);
     // nvngx_dlssnr.dll beside the data dir, or up to three levels up (nr_data\<W>x<H>\ and nr_data\<model>\<W>x<H>\ step dirs)
     for (const char* up : {"/../", "/../../", "/../../../"})
-      if (ok && nr_weights_ht(c->dir + up + "nvngx_dlssnr.dll", [&](const std::string& r, const uint8_t* d, uint64_t dn) {
+      if (ok && nr_weights_ht(c->dir + up + "nvngx_dlssnr.dll", res, [&](const std::string& r, const uint8_t* d, uint64_t dn) {
             auto rg = want_rec.equal_range(r);
             for (auto it = rg.first; it != rg.second; ++it) if (it->second.n == dn) { memcpy(a.data() + it->second.ao, d, dn); it->second.done = true; } })) break;
     for (auto it : order) {

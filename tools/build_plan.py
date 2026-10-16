@@ -1,6 +1,7 @@
 """Build the DLSS-NR frame plan (nr_data/<W>x<H>/) from nvngx_dlssnr.dll alone.
 
     py -I tools/build_plan.py <nvngx_dlssnr.dll> <WxH>[,<WxH>...] <out nr_data dir> [--kernels DIR] [--no-flex]
+    --res WEIGHTS_CC_SMALL_FP8 picks the 310.9 small model (default WEIGHTS_HT = the 310.8 model, also in 310.9)
     py -I tools/build_plan.py --selftest [nvngx_dlssnr.dll]      (synthetic shrunk models, no GPU, no output)
 
 Inputs: the WEIGHTS_HT records of the DLL (names + sizes; the bytes only for blend_scale and the weights.map hash),
@@ -22,6 +23,7 @@ DEFAULT_KERNELS = Path(r'E:/dlss-runtime/c32fix/nr_data/960x540/kernels')
 BASE = 0x7500_0000_0000      # virtual arena base in kernargs.bin; nr_runtime rebases every qword in [BASE, BASE+arena)
 ALIGN = 1 << 16              # buffer alignment in the arena
 SLOT = 424                   # NR_KA_SLOT
+RES = 'WEIGHTS_HT'           # weights resource; set by --res
 MODES = [(0, 0), (-4, -4), (-4, 0), (0, -4)]   # (ox, oy) window origin by block index within a level
 
 
@@ -62,7 +64,7 @@ def parse_header(path=HEADER):
 def dll_records(dll):
     sys.path.insert(0, str(REPO / 'rdna2' / 'emu')); import weights_ht
     f = open(dll, 'rb'); m = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-    recs = {r['name']: (r['file_offset'], r['bytes']) for r in weights_ht.records(m)}
+    recs = {r['name']: (r['file_offset'], r['bytes']) for r in weights_ht.records(m, RES)}
     return recs, m, f
 
 
@@ -129,10 +131,10 @@ def derive(size):
 def flex_check(dll, A):
     """Cross-check against the MIT reference (dlssnr-pytorch-flex Arch.from_weights). Skipped if its venv is missing."""
     if not FLEX_PY.exists(): print('flex: venv not found, cross-check skipped'); return
-    code = ('import json,sys,contextlib,io\nfrom dlssnr.extract import extract\nfrom dlssnr.plan import Arch\n'
+    code = ('import json,sys,contextlib,io\nimport dlssnr.extract as ex\nex.RESOURCE_NAME = sys.argv[2]\nfrom dlssnr.extract import extract\nfrom dlssnr.plan import Arch\n'
             'with contextlib.redirect_stdout(io.StringIO()): w = extract(sys.argv[1], None)\n'
             'a = Arch.from_weights(w); print(json.dumps([a.levels, a.split_channels, a.split_blocks, a.vit_channels, a.vit_hidden, a.vit_blocks]))')
-    r = subprocess.run([str(FLEX_PY), '-c', code, str(dll)], cwd=FLEX, capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=str(FLEX), DLSSNR_TRITON='0'))
+    r = subprocess.run([str(FLEX_PY), '-c', code, str(Path(dll).resolve()), RES], cwd=FLEX, capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=str(FLEX), DLSSNR_TRITON='0'))
     if r.returncode: raise PlanError('dlssnr-pytorch-flex could not read the weights:\n' + r.stderr[-2000:])
     lv, sc, sb, vc, vh, vb = json.loads(r.stdout.strip().splitlines()[-1])
     mine = [[[c // 32 or 1, c, len(s)] for c, s in A['enc']], A['c_mid'], len(A['c1']), A['c_vit'], A['hid'], len(A['vit'])]
@@ -389,6 +391,10 @@ def write_dir(P, out, kdir, mm, recs):
     (out / 'kernargs.bin').write_bytes(P['kernargs'])
     (out / 'overrides.txt').write_text(''.join(l + '\n' for l in P['overrides']))
     m = P['meta']
+    mid = 0xcbf29ce484222325   # model id (runtime/model_id.py, weights_ht.h nr_model_id): FNV-1a over record names + u64 sizes
+    for nm, (_, n) in recs.items():
+        for x in nm.encode() + b'\0' + struct.pack('<Q', n): mid = ((mid ^ x) * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+    m = dict(m, model_id='%016x' % mid, weights_res=RES)
     (out / 'meta.json').write_text(json.dumps(m, indent=1))
     (out / 'meta.txt').write_text(''.join('%s=%s\n' % (k, v) for k, v in m.items() if k != 'placements'))
     for mod in P['modules']: shutil.copy2(kdir / mod.split('\\')[-1], out / 'kernels')
@@ -397,7 +403,8 @@ def write_dir(P, out, kdir, mm, recs):
         fo, n = recs[nm]
         for x in mm[fo:fo + n]: h = ((h ^ x) * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
         rows.append('%d %s %d\n' % (o, nm, n))
-    (out / 'weights.map').write_text('fnv %d %d\n' % (h, len(rows)) + ''.join(rows))
+    res = '' if RES == 'WEIGHTS_HT' else 'res %s\n' % RES   # runtimes without 'res' support fail cleanly on it
+    (out / 'weights.map').write_text(res + 'fnv %d %d\n' % (h, len(rows)) + ''.join(rows))
     lzms(bytes(m['arena_size']), out / 'arena.lzms')
 
 
@@ -489,8 +496,9 @@ if __name__ == '__main__':
     try:
         if a and a[0] == '--selftest':
             sys.exit(0 if selftest(a[1] if len(a) > 1 else r'C:/Program Files (x86)/Steam/steamapps/common/Fallout 4/nvngx_dlssnr.dll') else 1)
+        if '--res' in a: RES = a[a.index('--res') + 1]
         kdir = Path(a[a.index('--kernels') + 1]) if '--kernels' in a else DEFAULT_KERNELS
-        pos = [x for i, x in enumerate(a) if not x.startswith('--') and (i == 0 or a[i - 1] != '--kernels')]
+        pos = [x for i, x in enumerate(a) if not x.startswith('--') and (i == 0 or a[i - 1] not in ('--kernels', '--res'))]
         if len(pos) != 3: sys.exit(__doc__)
         build(pos[0], [tuple(int(v) for v in s.split('x')) for s in pos[1].split(',')], pos[2], kdir, '--no-flex' not in a)
     except PlanError as e:
