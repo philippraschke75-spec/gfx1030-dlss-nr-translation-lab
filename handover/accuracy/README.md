@@ -31,4 +31,30 @@ PyTorch but is the next step towards NVIDIA bit-exactness. Requant order (f16 th
 Release config (960x540, history, vit_every=2): flicker x1.23 -> x1.20, visible flicker 1.97% -> 1.77%.
 nr_bench 960x540 (exclusive): 24.48 ms before and after.
 
-PNGs: 2560x1440 (1080p capture resized), conditioning 1/1/1/1, gamma 2.2 for viewing: before, after, PyTorch.
+## Round 2 (geometry, conditioning, NaN)
+
+- Geometry: `build_plan.geometry()` = OpenDLSS-NR Geometry::fromValid (field aligned to 2^reductions, levels
+  alignUp(ceil/2, 4)); new native `k_mirror_pad` (rdna2/native/mirror.hip) mirrors the padding after k_import; the swin
+  pool writer (+0x38) and decoder upsample reader (+0x30) use the consuming level's pitch alignUp(W/2, 4) (unchanged
+  where W/2 is already 4-aligned). Build plan data with `--kernels` pointing at the rebuilt native modules.
+- Conditioning: data dirs bake NVIDIA's default (tone 1, structure 1, skin = structure, auto mask, style 0). Runtime
+  `nr_set_conditioning`; the DLL passes the host's intensity/style/localStructure/localTone/skinStructure/useAutoMask
+  (create + evaluate_v2); intensity is now the output blend (gain x intensity). ini overrides: `intensity`, `style`,
+  `local_tone`, `local_structure`, `skin_structure`, `auto_mask` (empty = host value).
+- NaN -> +0 in q8 / e4m3_byte of the native modules (pre/post are prebuilt from vendor tables, not rebuilt).
+
+| dB vs PyTorch (default conditioning both sides) | 540p | 720p | 1080p | 1440p |
+| --- | --- | --- | --- | --- |
+| v0.3.1 | 37.2 | 35.0 | - | 39.4 |
+| round 1 | 41.0 | 27.9 | - | 42.5 |
+| round 2 | 43.2 | 43.5 | 43.8 | 46.0 |
+
+nr_bench (exclusive, vit_every=1): 540p 25.0 -> 22.0 ms (field 576x960 instead of 640x1024), 720p 33.7 -> 35.9 ms
+(768x1344 instead of 768x1280). Strict test_sync 720p: 300/300 frames matched.
+
+Flicker (release config): 540p 1.97 % visible (x1.23) -> 3.12 % (x1.33); 720p 2.13 % (x1.22) -> 3.50 % (x1.41). This is
+the conditioning, not the geometry: with `local_tone=0` the 540p run is 1.83 % (x1.21), better than v0.3.1. NVIDIA's
+default tone 1 makes the edit about twice as strong (1440p mean |edit| 0.011 -> 0.024).
+
+PNGs (2560x1440, 1080p capture resized, gamma 2.2 for viewing): before = v0.3.1 with its default, after = this branch
+with NVIDIA's default, and the PyTorch reference.

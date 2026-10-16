@@ -20,6 +20,7 @@ typedef _Float16 h2 __attribute__((ext_vector_type(2)));
 
 
 __device__ __forceinline__ float q8(float x) {
+  x = x == x ? x : 0.f;   // NaN publishes as +0 (OpenDLSS-NR numerics.md), not as the saturated 448
   float a = fminf(fabsf(x), 448.f);
   uint32_t b = __float_as_uint(a);
   float rn = __uint_as_float((b + 0x7FFFFu + ((b >> 20) & 1u)) & 0xFFF00000u);
@@ -150,15 +151,15 @@ __device__ __forceinline__ void swin_block(const VarParams& P) {
 
   // ---- upsample: Pj[16 pix][C] = f16(Wr . coarse) for the 4x4 coarse pixels under the window (K = 2C)
   if (up) {
-    const int H2 = H >> 1, W2 = W >> 1, pr0 = r0 >> 1, pc0 = c0 >> 1;
+    const int H2 = H >> 1, W2 = W >> 1, Hs = (H2 + 3) & ~3, Ws = (W2 + 3) & ~3, pr0 = r0 >> 1, pc0 = c0 >> 1;
     if (tid < C) {   // (pixel, 32-channel chunk of 2C)
       const int px = tid & 15, ch = tid >> 4;
       const int pr = pr0 + (px >> 2), pc = pc0 + (px & 3);
       uint32_t b[8] = {};
       if (pr >= 0 && pr < H2 && pc >= 0 && pc < W2) {
-        const uint8_t* src = P.p30 + (size_t)(ch * 2) * H2 * W2 * 16 + (size_t)(pr * W2 + pc) * 16;
+        const uint8_t* src = P.p30 + (size_t)(ch * 2) * Hs * Ws * 16 + (size_t)(pr * Ws + pc) * 16;
 #pragma unroll
-        for (int g = 0; g < 4; g++) { b[2 * g] = *(const uint32_t*)(src + 4 * g); b[2 * g + 1] = *(const uint32_t*)(src + (size_t)H2 * W2 * 16 + 4 * g); }
+        for (int g = 0; g < 4; g++) { b[2 * g] = *(const uint32_t*)(src + 4 * g); b[2 * g + 1] = *(const uint32_t*)(src + (size_t)Hs * Ws * 16 + 4 * g); }
       }
 #pragma unroll
       for (int g = 0; g < 4; g++)
@@ -656,7 +657,7 @@ __device__ __forceinline__ void swin_block(const VarParams& P) {
           for (int c = 0; c < CP2; c++) acc[r][c] = dot2(av[r], bv[c], acc[r][c]);
       }
     }
-    const int H2 = H >> 1, W2 = W >> 1;
+    const int H2 = H >> 1, W2 = W >> 1, Hs = (H2 + 3) & ~3, Ws = (W2 + 3) & ~3;
 #pragma unroll
     for (int r = 0; r < 4; r++) {
       int pix = ty6 * 4 + r, pr = (r0 >> 1) + (pix >> 2), pc = (c0 >> 1) + (pix & 3);
@@ -664,7 +665,7 @@ __device__ __forceinline__ void swin_block(const VarParams& P) {
 #pragma unroll
       for (int c = 0; c < CP2; c++) {
         int ch = tx6 * CP2 + c, mc = ipi32(ch & 31);
-        P.p38[(size_t)((ch >> 5) * 2 + (mc >> 4)) * H2 * W2 * 16 + (size_t)(pr * W2 + pc) * 16 + (mc & 15)] =
+        P.p38[(size_t)((ch >> 5) * 2 + (mc >> 4)) * Hs * Ws * 16 + (size_t)(pr * Ws + pc) * 16 + (mc & 15)] =
             (uint8_t)to_e4m3(q8(f16r(acc[r][c] * 256.f)));
       }
     }

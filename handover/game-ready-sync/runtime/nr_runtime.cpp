@@ -31,7 +31,7 @@ struct nr_ctx {
   size_t off_src = 0, src_size = 0, off_dst = 0, dst_size = 0; int vit_lo = 0, vit_hi = 0, vit_every = 1; long frame = 0;
   std::vector<Step> steps; std::vector<hipModule_t> mods; unsigned mach = 0x36; std::deque<std::vector<uint8_t>> imgs; hipEvent_t e0 = nullptr, e1 = nullptr;
   // strength = the two f32 pairs of k_pre_block PreParams: +0x28 (LocalTone, LocalStructure) and +0x48 (a, b). Set from any thread, applied at the start of the next run.
-  std::mutex mx; float str[4] = {0, 0, 1, 1}; float pend[4] = {0, 0, 1, 1}; bool dirty = false;
+  std::mutex mx; float str[5] = {1, 1, 1, 1, 0}; float pend[5] = {1, 1, 1, 1, 0}; bool dirty = false;   // str/pend: pre-block features 11, 12 (+0x28), 13, 14 (+0x48), 10 (+0x30)
   // D3D12 interop (nr_ext_*): imported shared buffers, own non-blocking stream, one event per queued frame
   hipExternalMemory_t em_io = nullptr, em_sig = nullptr; uint8_t *io = nullptr, *sig = nullptr; size_t out_off = 0, flag_off = 0;
   // No GPU-side cross-API wait (hipStreamWaitValue32 hung the HIP queue forever when D3D12 never wrote flag_in -> TDR/PC freeze on 2026-10-08):
@@ -190,7 +190,7 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
       st.src.swap(st.ka); if (!nr_apply_override(o, st.src, st.ka)) { fclose(f); FAIL("override for %s copies past the original kernarg", t[1].c_str()); }
     }
     if (st.pre && (st.ov ? st.src : st.ka).size() >= kStrOff1 + 8) {          // remember the data dir's own values as the current strength
-      const auto& k = st.ov ? st.src : st.ka; memcpy(&c->str[0], k.data() + kStrOff0, 8); memcpy(&c->str[2], k.data() + kStrOff1, 8);
+      const auto& k = st.ov ? st.src : st.ka; memcpy(&c->str[0], k.data() + kStrOff0, 8); memcpy(&c->str[2], k.data() + kStrOff1, 8); memcpy(&c->str[4], k.data() + kStrOff0 + 8, 4);
       memcpy(c->pend, c->str, sizeof c->str);
     }
     if (st.post) { const auto& k = st.ov ? st.src : st.ka; memcpy(&c->netout, k.data() + 0x10, 8); memcpy(&c->ph, k.data() + 0x20, 4); memcpy(&c->pw, k.data() + 0x24, 4); }
@@ -243,12 +243,21 @@ static bool hist_end(nr_ctx* c, hipStream_t s) {   // RGBA f32 (16 B/px) -> RGB 
 static void apply_strength(nr_ctx* c) {                    // between frames, from the run thread: patch the pre-block kernarg copies
   std::lock_guard<std::mutex> g(c->mx); if (!c->dirty) return;
   for (auto& st : c->steps) { auto& k = st.ov ? st.src : st.ka;   // strength offsets are in the original layout
-    if (st.pre && k.size() >= kStrOff1 + 8) { memcpy(k.data() + kStrOff0, &c->pend[0], 8); memcpy(k.data() + kStrOff1, &c->pend[2], 8); if (st.ov) nr_apply_override(*st.ov, st.src, st.ka); } }
+    if (st.pre && k.size() >= kStrOff1 + 8) { memcpy(k.data() + kStrOff0, &c->pend[0], 8); memcpy(k.data() + kStrOff1, &c->pend[2], 8); memcpy(k.data() + kStrOff0 + 8, &c->pend[4], 4); if (st.ov) nr_apply_override(*st.ov, st.src, st.ka); } }
   memcpy(c->str, c->pend, sizeof c->str); c->dirty = false;
 }
 NR_API int nr_set_strength(nr_ctx* c, float tone, float structure, float a, float b) {
   if (!c) return 1; if (!(tone >= 0 && tone <= 64 && structure >= 0 && structure <= 64 && a >= 0 && a <= 64 && b >= 0 && b <= 64)) return 2;   // rejects NaN and absurd values
   std::lock_guard<std::mutex> g(c->mx); c->pend[0] = tone; c->pend[1] = structure; c->pend[2] = a; c->pend[3] = b; c->dirty = true; return 0;
+}
+// The host's conditioning, as NVIDIA's library takes it (dlssnr_call_create / evaluate_v2; defaults 0, 1, 1, -1, auto mask on):
+// pre-block features 10 style/128, 11 local tone, 12-14 the structure / skin / other triple (auto mask: 1, skin, structure;
+// without it: structure, -1, -1). Matches dlssnr-pytorch Controls.conditioning and OpenDLSS-NR's preprocess.
+NR_API int nr_set_conditioning(nr_ctx* c, int style, float tone, float structure, float skin, int auto_mask) {
+  if (!c) return 1; if (!(tone >= 0 && tone <= 2 && structure >= 0 && structure <= 2 && skin >= -1 && skin <= 2) || style < 0 || style > 2) return 2;
+  const float sk = skin < 0 ? structure : skin;
+  std::lock_guard<std::mutex> g(c->mx); c->pend[0] = tone; c->pend[1] = auto_mask ? 1.f : structure; c->pend[2] = auto_mask ? sk : -1.f; c->pend[3] = auto_mask ? structure : -1.f;
+  c->pend[4] = style / 128.f; c->dirty = true; return 0;
 }
 NR_API int nr_set_intensity(nr_ctx* c, float i) {          // user-facing 0..2 (measured on the real frame, see own/STRENGTH_RUNTIME.md): 0 = effect off, 1 = default, 2 = largest clean setting
   if (!(i >= 0)) return 2; if (i > 2.f) i = 2.f;                // beyond 2 the picture breaks up (blocky noise, brightness shift), so it is clamped
