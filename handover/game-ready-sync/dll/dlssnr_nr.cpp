@@ -46,6 +46,7 @@ static int g_apply = 1, g_gate = 1, g_ldrIn = 1, g_hdr = 2; static float g_hdrFr
 static int g_allowAny = 0, g_evictMs = 2000; static int g_sync = 1, g_spinMs = 250, g_maxInflight = 3, g_fg = 0, g_fgWaitMs = 4, g_fgMaxAge = 3, g_mv = 0, g_nrEvery = 1; static float g_mvLo = 0.05f, g_mvHi = 0.25f;
 static int g_busy = 0, g_busyWaitMs = 100;   // busy_mode: 0 wait (CPU waits, bounded, for a free HIP slot), 1 reuse (last NR edit, warped) - never a native frame once NR ran
 static float g_pass2Gain = 0.5f; static std::atomic<int> g_live{0}; static UINT g_hdrP0 = 0; static ID3D12Resource* g_hl = nullptr; static float g_hdrKey = 0.18f, g_hdrAdapt = 0.05f, g_hdrBias = 1.f, g_hdrExp = 0.f;   // OptiScaler "2 passes": a later pass (a second feature on pass 1's output) adds its edit at gain * pass2_gain
+static float g_eT = 0.f, g_eL = 0.f; static int g_eFl = 0;   // edit_temporal (blend of the shown edit with the previous one, warped), edit_limit (cap vs local contrast), edit_warp bicubic (flag bit 2)
 static int g_split = 0, g_splitK[2] = {0, 0}; static int g_hist = 0; static float g_hLo = 0.08f, g_hHi = 0.25f;   // history=1: temporal history (previous NR output warped by the game's MVs) into the pre-block's +0x40, see handover/temporal-2026-10-11/DLL.md   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
 
 static void logf(const char* fmt, ...) {
@@ -97,6 +98,9 @@ static void loadSettings() {
     GetPrivateProfileStringA("nr", "history_gate_hi", "0.25", b, sizeof b, narrow(ini).c_str()); g_hHi = (float)atof(b);
     GetPrivateProfileStringA("nr", "pass2_gain", "0.5", b, sizeof b, narrow(ini).c_str()); g_pass2Gain = (float)atof(b); g_pass2Gain = g_pass2Gain == g_pass2Gain ? (std::min)((std::max)(g_pass2Gain, 0.f), 1.f) : 0.5f;
     { const int i8 = (int)GetPrivateProfileIntA("nr", "int8_swin", -1, narrow(ini).c_str()); if (i8 >= 0) SetEnvironmentVariableA("NR_INT8_SWIN", i8 ? "1" : "0"); }   // int8 swin GEMMs; absent = the data dir's meta (build_plan: 1). nr_runtime reads it at nr_create
+    GetPrivateProfileStringA("nr", "edit_temporal", "0", b, sizeof b, narrow(ini).c_str()); g_eT = (float)atof(b); g_eT = g_eT > 0.f ? (std::min)(g_eT, 0.95f) : 0.f;   // 0 = off (bit-exact); blend weight of the previous shown edit (warped, depth-gated, clamped to the 3x3 range of the current edit)
+    GetPrivateProfileStringA("nr", "edit_limit", "0", b, sizeof b, narrow(ini).c_str()); g_eL = (float)atof(b); g_eL = g_eL > 0.f ? (std::min)(g_eL, 100.f) : 0.f;   // 0 = off; |edit| <= edit_limit x (3x3 luma range + 0.02)
+    { char m[16]; GetPrivateProfileStringA("nr", "edit_warp", "bilinear", m, sizeof m, narrow(ini).c_str()); g_eFl = !_stricmp(m, "bicubic") ? 4 : 0; }   // with edit_temporal/edit_limit: Catmull-Rom fetches (sharper, more flicker)
     { const int i8 = (int)GetPrivateProfileIntA("nr", "int8_prepost", -1, narrow(ini).c_str()); if (i8 >= 0) SetEnvironmentVariableA("NR_INT8_PREPOST", i8 ? "1" : "0"); }   // opt-in int8 post-block MLP; absent = meta (default off)
     g_split = (int)GetPrivateProfileIntA("nr", "nr_split", 0, narrow(ini).c_str()); g_split = g_split <= 0 ? 0 : g_split == 1 ? 2 : (std::min)(g_split, 8);   // N >= 2: the network in N parts over N frames (1 = 2, as before), output = last finished NR, warped
     if (g_split) g_nrEvery = g_split;
@@ -188,11 +192,12 @@ static const int kRing = 8, kDesc = 4;                                 // descri
 static const char* kSyncHlsl =
 "Texture2D<float4> col : register(t0);\n"
 "RWTexture2D<float4> outp : register(u0);\n"
-"globallycoherent RWByteAddressBuffer io : register(u1);\n"
-"globallycoherent RWByteAddressBuffer st : register(u2);\n"
+"#ifdef NC\n#define GC\n#else\n#define GC globallycoherent\n#endif\n"   // NC (edit stabilisation on: exp, tea, teb): plain cached views; their reads are all behind UAV barriers (only spin polls)
+"GC RWByteAddressBuffer io : register(u1);\n"
+"GC RWByteAddressBuffer st : register(u2);\n"
 "cbuffer C : register(b0) { uint W; uint H; uint seq; uint maxIt; uint outOff; uint flagOff; float gain; uint FWH; uint minSeq; float gLo; float gHi; uint gate; uint frame; uint maxAge;\n"
 "  uint mvOn; float mvSx; float mvSy; uint mWH; uint mBase; uint dWH; uint dBase; uint dFl; float mLo; float mHi;\n"
-"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; float hk; float hx; float hkb; float hA; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
+"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; float hk; float hx; float hkb; float hA; float eT; float eL; uint tFl; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
 "Texture2D<float4> mot : register(t1);\n"
 "Texture2D<float> dep : register(t2);\n"   // minSeq != 0: fg mode, reuse the edit captured from a frame >= minSeq;   // W,H model; FWH = frame W | H << 16
 "RWByteAddressBuffer ob : register(u3);\n"
@@ -265,10 +270,48 @@ static const char* kSyncHlsl =
 "  st.Store2(256 + W * H * 8 + o, uint2(pk(i.r, i.g), pk(i.b, depAt((id.xy + 0.5) / float2(W, H)))));\n"   // + the model input the edit belongs to (motion gate) and its depth
 "  if (id.x == 0 && id.y == 0) { st.Store(4, seq); st.Store(8, frame); } }\n"
 "float2 accAt(float2 q, uint f); float2 slotAt(float2 q, uint k);\n"
+// ---- edit stabilisation (edit_temporal / edit_limit / edit_warp, tFl bit0 on). tea: the edit exp would show, at model texel centres
+// (split: last job's edit warped + gated as exp does, live colour = the frame pixel at the texel centre; full NR: out - in) + live luma -> st slot 6. teb: cap vs the 3x3 luma range,
+// blend with the previous S (slot 7/8 by frame parity, warped by this frame's vectors, depth-gated) clamped to the 3x3 range of slot 6 -> S.
+// exp shows S (bilinear, model size) instead of its own per-pixel warp and colour gate. Bit2: Catmull-Rom fetches (job edit, history, S).
+"float3 stCR(float2 p, uint off) {\n"   // Catmull-Rom fetch of a half4 model-size image in st
+"  p -= 0.5; float2 f = floor(p), t = p - f; float2 w[4] = { t * (-0.5 + t * (1.0 - 0.5 * t)), 1.0 + t * t * (-2.5 + 1.5 * t), t * (0.5 + t * (2.0 - 1.5 * t)), t * t * (-0.5 + 0.5 * t) }; float3 r = 0;\n"
+"  for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) { int2 q = clamp(int2(f) + int2(i - 1, j - 1), 0, int2(W - 1, H - 1)); uint2 u = st.Load2(off + (q.y * W + q.x) * 8);\n"
+"    r += w[i].x * w[j].y * float3(f16tof32(u.x & 0xFFFF), f16tof32(u.x >> 16), f16tof32(u.y & 0xFFFF)); }\n"
+"  return r; }\n"
+"float3 jobE(float2 p) { return (tFl & 4) ? stCR(p, 256) : stAt(p, 256).rgb; }\n"
+"float4 ld4(uint k, int2 q) { q = clamp(q, 0, int2(W - 1, H - 1)); uint2 u = st.Load2(256 + k * W * H * 8 + (q.y * W + q.x) * 8); return float4(f16tof32(u.x & 0xFFFF), f16tof32(u.x >> 16), f16tof32(u.y & 0xFFFF), f16tof32(u.y >> 16)); }\n"
+"[numthreads(8,8,1)] void tea(uint3 id : SV_DispatchThreadID) {\n"
+"  if (id.x >= W || id.y >= H) return; uint FW = FWH & 0xFFFF, FH = FWH >> 16; float2 uv = (id.xy + 0.5) / float2(W, H), pf = uv * float2(FW, FH); float3 e = 0, l;\n"
+"  if (split != 0) { l = L(col[min((uint2)pf, uint2(FW - 1, FH - 1))]); uint age = frame - st.Load(8);\n"
+"    if ((int)(st.Load(4) - minSeq) >= 0 && age != 0 && ((split & 8) != 0 || age == (split >> 4))) {\n"   // as exp's split branch, at this texel centre
+"      if (mvOn) { uint2 mn = uint2(mWH & 0xFFFF, mWH >> 16); pf += mot[uint2(mBase & 0xFFFF, mBase >> 16) + min((uint2)(uv * mn), mn - 1)].xy * float2(mvSx, mvSy); }\n"
+"      if (split & 2) pf += accAt(pf / float2(FW, FH), frame - 1) * float2(FW, FH);\n"
+"      if (split & 4) pf += slotAt(pf / float2(FW, FH), 5) * float2(FW, FH);\n"
+"      if (all(pf == pf) && all(pf >= 0.0) && all(pf < float2(FW, FH))) { float2 p = pf * float2(W, H) / float2(FW, FH); float4 o = stAt(p, 256 + W * H * 8); float3 a = abs(l - o.rgb);\n"
+"        float wt = 1.0 - smoothstep(mLo, mHi, max(a.r, max(a.g, a.b)));\n"
+"        if (dFl & 1) { float dn = depAt(uv); wt *= 1.0 - smoothstep(0.05, 0.2, abs(dn - o.a) / max(max(dn, o.a), 1e-6)); }\n"
+"        e = wt * jobE(p); } } }\n"
+"  else { float4 i = bil(id.xy + 0.5, 0); l = i.rgb; if (st.Load(0) != 0) e = sn(bil(id.xy + 0.5, outOff) - i).rgb; }\n"   // full NR frame: out - in
+"  st.Store2(256 + 6 * W * H * 8 + (id.y * W + id.x) * 8, uint2(pk(e.r, e.g), pk(e.b, dot(l, float3(0.2126, 0.7152, 0.0722))))); }\n"
+"[numthreads(8,8,1)] void teb(uint3 id : SV_DispatchThreadID) {\n"
+"  if (id.x >= W || id.y >= H) return; uint FW = FWH & 0xFFFF, FH = FWH >> 16; float2 uv = (id.xy + 0.5) / float2(W, H);\n"
+"  float4 c = ld4(6, id.xy); float3 e = c.rgb, mn = e, mx = e; float lo = c.a, hi = c.a;\n"
+"  for (int j = 0; j < 9; j++) { float4 v = ld4(6, int2(id.xy) + int2(j % 3 - 1, j / 3 - 1)); mn = min(mn, v.rgb); mx = max(mx, v.rgb); lo = min(lo, v.a); hi = max(hi, v.a); }\n"
+"  if (eL > 0.0) { float cap = eL * (hi - lo + 0.02); e = clamp(e, -cap, cap); mn = clamp(mn, -cap, cap); mx = clamp(mx, -cap, cap); }\n"
+"  float dn = depAt(uv);\n"
+"  if (eT > 0.0 && (tFl & 8) != 0 && (mvOn | hMv) != 0) {\n"   // bit3: the CPU ran teb on the frame before (no reset since)
+"    uint2 m2 = uint2(mWH & 0xFFFF, mWH >> 16); float2 pf = uv * float2(FW, FH) + mot[uint2(mBase & 0xFFFF, mBase >> 16) + min((uint2)(uv * m2), m2 - 1)].xy * float2(mvSx, mvSy);\n"
+"    if (all(pf == pf) && all(pf >= 0.0) && all(pf < float2(FW, FH))) { float2 ph = pf * float2(W, H) / float2(FW, FH); uint so = 256 + (7 + ((frame - 1) & 1)) * W * H * 8; float4 h = stAt(ph, so); if (tFl & 4) h.rgb = stCR(ph, so); float w = eT;\n"
+"      if (dFl & 1) w *= 1.0 - smoothstep(0.05, 0.2, abs(dn - h.a) / max(max(dn, h.a), 1e-6));\n"   // disocclusion: current edit only
+"      e = lerp(e, clamp(h.rgb, mn, mx), w); } }\n"
+"  st.Store2(256 + (7 + (frame & 1)) * W * H * 8 + (id.y * W + id.x) * 8, uint2(pk(e.r, e.g), pk(e.b, dn))); }\n"
+"float3 tE(uint2 q) { uint FW = FWH & 0xFFFF, FH = FWH >> 16; float2 p = (q + 0.5) * float2(W, H) / float2(FW, FH); uint so = 256 + (7 + (frame & 1)) * W * H * 8; return (tFl & 4) ? stCR(p, so) : stAt(p, so).rgb; }\n"
 "[numthreads(8,8,1)] void exp(uint3 id : SV_DispatchThreadID) {\n"
 "  uint FW = FWH & 0xFFFF, FH = FWH >> 16; if (id.x >= FW || id.y >= FH) return; float4 c = col[id.xy];\n"
 "  if (split != 0) {\n"   // nr_split: the last finished NR edit (st+256, job frame st[8]) moved to this frame: by this frame's vectors, + (bit 2) the acc chain of the frame before, + (bit 4) the anchor (job frame -> frame of the edit before); age expected by the CPU in bits 4+
 "    uint age = frame - st.Load(8); if ((int)(st.Load(4) - minSeq) < 0 || age == 0 || ((split & 8) == 0 && age != (split >> 4))) { put(id.xy, c); return; }\n"   // none since the reset yet / not the edit the CPU expects (spin timeout): live frame; bit 8: chain broken, vectors only, any age
+"    if (tFl & 1) { put(id.xy, float4(cmp(c, gain * tE(id.xy)), c.a)); return; }\n"   // edit stabilisation: the stabilised edit (warped and gated per model texel by tea)
 "    float2 uv = (id.xy + 0.5) / float2(FW, FH), pf = id.xy + 0.5;\n"   // frame px, same arithmetic as the mv reuse branch (age 1 is bit-identical to it)
 "    if (mvOn) { uint2 mn = uint2(mWH & 0xFFFF, mWH >> 16); pf = id.xy + 0.5 + mot[uint2(mBase & 0xFFFF, mBase >> 16) + min((uint2)(uv * mn), mn - 1)].xy * float2(mvSx, mvSy); }\n"
 "    if (split & 2) pf += accAt(pf / float2(FW, FH), frame - 1) * float2(FW, FH);\n"
@@ -298,6 +341,7 @@ static const char* kSyncHlsl =
 "    put(id.xy, c); return; }\n"
 "  if (FW != W || FH != H) {\n"     // resampled: carry the model's change (out - in, model size) up to the frame
 "    float2 p = (id.xy + 0.5) * float2(W, H) / float2(FW, FH); float4 d = sn(bil(p, outOff) - bil(p, 0));\n"
+"    if (tFl & 1) d.rgb = tE(id.xy);\n"
 "    put(id.xy, float4(cmp(c, gain * d.rgb), c.a)); return; }\n"                       // timeout: native frame
 "  uint2 r = io.Load2(outOff + (id.y * W + id.x) * 8);\n"
 "  float3 e = float3(san(f16tof32(r.x & 0xFFFF)), san(f16tof32(r.x >> 16)), san(f16tof32(r.y & 0xFFFF)));\n"
@@ -342,7 +386,7 @@ static const char* kSyncHlsl =
 "  io.Store3(o, asuint(res)); }\n"
 "[numthreads(8,8,1)] void hwp(uint3 id : SV_DispatchThreadID) { hwpB(id, 1); }\n"   // previous frame was NR (bit-exact to the one-frame history)
 "[numthreads(8,8,1)] void hwp2(uint3 id : SV_DispatchThreadID) { hwpB(id, histOk); }\n";   // older NR output (nr_every > 1): histOk = its age in frames
-static const int kSyncRing = 16, kCb = 38;                                     // descriptor pairs (colour SRV, output UAV) in flight
+static const int kSyncRing = 16, kCb = 41;                                     // descriptor pairs (colour SRV, output UAV) in flight
 
 // ---------------------------------------------------------------- feature
 enum { S_LOADING = 0, S_IDLE = 1, S_WAIT_COPY = 2, S_RUNNING = 3, S_FAILED = 4, S_SYNC = 5 };
@@ -354,6 +398,7 @@ struct Sync {                                       // D3D12 side of the sync pa
     ID3D12PipelineState *hwp = nullptr, *hst = nullptr, *acc = nullptr, *hwp2 = nullptr, *lat = nullptr; UINT64 histOff = 0, histOut = 0; float impScale = 0;   // k_import of the data dir: 0 = mode 0 (raw), else its +0x2c scale (mode != 0 tonemaps)
     unsigned waitFails = 0; unsigned padW = 0, padH = 0, lastNrFrm = 0xFFFFFFF0u, accFrm = 0xFFFFFFF0u; bool histOn = false;   // history=1   // fg: frame counter, frame of each in-flight seq (edit age)
     ID3D12PipelineState* anc = nullptr; unsigned np = 0, ancFrm = 0xFFFFFFF0u, ancTo = 0xFFFFFFF0u, ageSum = 0, ageCnt = 0, ageMax = 0, loose = 0;   // nr_split N: parts per job; anchor (st slot 5) = offsets from frame ancFrm to ancTo; edit age stats
+    ID3D12PipelineState *tea = nullptr, *teb = nullptr; unsigned teFrm = 0xFFFFFFF0u;   // edit stabilisation passes, frame teb last ran
     bool split = false; unsigned part = 0, jobFrm = 0, doneFrm = 0xFFFFFFF0u, accTo = 0xFFFFFFF0u;   // nr_split: next part (0 = start a job), frame of the job in flight / last finished one, NR frame the acc chain points to
 };
 struct Feature;
@@ -514,7 +559,7 @@ static bool makeDelta(Feature* F) {
 
 static void freeSync(Sync* s) {
     if (!s) return;
-    for (IUnknown* u : std::initializer_list<IUnknown*>{s->io, s->sig, s->st, s->rs, s->imp, s->spin, s->exp, s->cap, s->expPk, s->ob, s->heap, s->hwp, s->hst, s->acc, s->hwp2, s->lat, s->anc}) if (u) u->Release();
+    for (IUnknown* u : std::initializer_list<IUnknown*>{s->io, s->sig, s->st, s->rs, s->imp, s->spin, s->exp, s->cap, s->expPk, s->ob, s->heap, s->hwp, s->hst, s->acc, s->hwp2, s->lat, s->anc, s->tea, s->teb}) if (u) u->Release();
     if (s->hIo) CloseHandle(s->hIo); if (s->hSig) CloseHandle(s->hSig); delete s;
 }
 static ID3D12Resource* sharedBuffer(ID3D12Device* d, UINT64 size, D3D12_HEAP_FLAGS hf, UINT64* alloc) {
@@ -533,7 +578,7 @@ static Sync* makeSync(Feature* F) {
     const UINT64 n = (UINT64)F->W * F->H * 8, a = (n + 65535) & ~65535ull;
     s->outOff = a; s->flagOff = 2 * a; s->ioSize = 2 * a + 65536; s->sigSize = 65536;
     if (g_hist) { const UINT64 hb = ((UINT64)((F->W + 127) & ~127u) * ((F->H + 127) & ~127u) * 12 + 65535) & ~65535ull; s->histOff = s->ioSize; s->histOut = s->ioSize + hb; s->ioSize += 2 * hb; }   // + history slot (PAD_W x PAD_H RGB32F; PAD = 128-aligned, checked by nr_ext_history)
-    s->io = sharedBuffer(d, s->ioSize, D3D12_HEAP_FLAG_SHARED, &s->ioAlloc); s->sig = sharedBuffer(d, s->sigSize, D3D12_HEAP_FLAG_SHARED, &s->sigAlloc); s->st = sharedBuffer(d, 256 + (g_split ? 6 : g_hist ? 5 : 2) * n, D3D12_HEAP_FLAG_NONE, nullptr);   // status words | fg edit | its model input (half4, model size each)
+    s->io = sharedBuffer(d, s->ioSize, D3D12_HEAP_FLAG_SHARED, &s->ioAlloc); s->sig = sharedBuffer(d, s->sigSize, D3D12_HEAP_FLAG_SHARED, &s->sigAlloc); s->st = sharedBuffer(d, 256 + (g_eT > 0.f || g_eL > 0.f ? 9 : g_split ? 6 : g_hist ? 5 : 2) * n, D3D12_HEAP_FLAG_NONE, nullptr);   // status words | fg edit | its model input (half4, model size each)
     if (!s->io || !s->sig || !s->st) { logf("sync: cannot create shared buffers"); freeSync(s); return nullptr; }
     if (FAILED(d->CreateSharedHandle(s->io, nullptr, GENERIC_ALL, nullptr, &s->hIo)) || FAILED(d->CreateSharedHandle(s->sig, nullptr, GENERIC_ALL, nullptr, &s->hSig))) { logf("sync: CreateSharedHandle failed"); freeSync(s); return nullptr; }
     D3D12_DESCRIPTOR_RANGE rg[2] = {}; rg[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; rg[0].NumDescriptors = 3; rg[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; rg[1].NumDescriptors = 1; rg[1].OffsetInDescriptorsFromTableStart = 3;   // colour, motion, depth | output
@@ -543,11 +588,12 @@ static Sync* makeSync(Feature* F) {
     D3D12_ROOT_SIGNATURE_DESC rsd = {}; rsd.NumParameters = 6; rsd.pParameters = rp; ID3DBlob *sb = nullptr, *er = nullptr;
     if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sb, &er)) || FAILED(d->CreateRootSignature(0, sb->GetBufferPointer(), sb->GetBufferSize(), IID_PPV_ARGS(&s->rs)))) { logf("sync: root signature failed"); freeSync(s); return nullptr; }
     sb->Release();
-    ID3D12PipelineState** pso[11] = {&s->imp, &s->spin, &s->exp, &s->cap, &s->expPk, &s->lat, &s->hwp, &s->hst, &s->acc, &s->hwp2, &s->anc}; const char* ep[11] = {"imp", "spin", "exp", "cap", "exp", "lat", "hwp", "hst", "acc", "hwp2", "anc"};
-    for (int i = 0; i < (g_split ? 11 : g_hist ? 10 : 6); i++) {
-        ID3DBlob* cs = nullptr; er = nullptr; const char* mac[6] = {}; int nm = 0;   // D3D_SHADER_MACRO[], null-terminated
+    ID3D12PipelineState** pso[13] = {&s->imp, &s->spin, &s->exp, &s->cap, &s->expPk, &s->lat, &s->hwp, &s->hst, &s->acc, &s->hwp2, &s->anc, &s->tea, &s->teb}; const char* ep[13] = {"imp", "spin", "exp", "cap", "exp", "lat", "hwp", "hst", "acc", "hwp2", "anc", "tea", "teb"};
+    for (int i = 0; i < (g_eT > 0.f || g_eL > 0.f ? 13 : g_split ? 11 : g_hist ? 10 : 6); i++) {
+        ID3DBlob* cs = nullptr; er = nullptr; const char* mac[8] = {}; int nm = 0;   // D3D_SHADER_MACRO[], null-terminated
         if (i == 4) { mac[nm++] = "PACKED"; mac[nm++] = "1"; }                     // expPk
         if (!g_ldrIn) { mac[nm++] = "HDR_IN"; mac[nm++] = "1"; }
+        if ((g_eT > 0.f || g_eL > 0.f) && (i == 2 || i == 4 || i >= 11)) { mac[nm++] = "NC"; mac[nm++] = "1"; }   // exp, expPk, tea, teb
         if (FAILED(comp(kSyncHlsl, strlen(kSyncHlsl), "nr_sync", nm ? mac : nullptr, nullptr, ep[i], "cs_5_0", 1 << 15, 0, &cs, &er))) { logf("sync: shader %s: %s", ep[i], er ? (char*)er->GetBufferPointer() : "?"); freeSync(s); return nullptr; }
         D3D12_COMPUTE_PIPELINE_STATE_DESC pd = {}; pd.pRootSignature = s->rs; pd.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
         HRESULT h = d->CreateComputePipelineState(&pd, IID_PPV_ARGS(pso[i])); cs->Release(); if (FAILED(h)) { logf("sync: PSO %s failed", ep[i]); freeSync(s); return nullptr; }
@@ -818,6 +864,8 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             { const float hk = F->pass ? g_pass2Gain : 1.f, hx = F->pass ? 1.f : g_hdrExp * g_hdrBias, hkb = g_hdrKey * g_hdrBias; memcpy(&cb[34], &hk, 4); memcpy(&cb[35], &hx, 4); memcpy(&cb[36], &hkb, 4); memcpy(&cb[37], &g_hdrAdapt, 4); }   // extra pass: E = 1 (its input is ClampProxy's unit cube, not scene-linear; pass 0's E would squeeze it to T(E) ~ 0.25, near black)
             float gain = (F->pass ? g_gain * g_pass2Gain : g_gain) * curIntensity(F); memcpy(&cb[6], &gain, 4); memcpy(&cb[9], &g_gateLo, 4); memcpy(&cb[10], &g_gateHi, 4);   // gLo, gHi   // gain x intensity: NVIDIA's blend towards the NR result (above 1 extrapolated linearly)
             memcpy(&cb[15], &mvSx, 4); memcpy(&cb[16], &mvSy, 4); memcpy(&cb[22], &g_mvLo, 4); memcpy(&cb[23], &g_mvHi, 4); memcpy(&cb[28], &g_hLo, 4); memcpy(&cb[29], &g_hHi, 4);
+            const bool teOn = s->tea && s->teb && (sp || w != F->W || h != F->H); memcpy(&cb[38], &g_eT, 4); memcpy(&cb[39], &g_eL, 4);   // edit stabilisation: split or resampled full-NR path
+            cb[40] = teOn ? 1u | (UINT)g_eFl | (s->teFrm + 1 == s->frm && reset != 1 ? 8u : 0u) : 0u;
             ID3D12DescriptorHeap* hp[] = { s->heap }; cmd->SetDescriptorHeaps(1, hp); cmd->SetComputeRootSignature(s->rs);
             cmd->SetComputeRootDescriptorTable(0, gpu); cmd->SetComputeRootUnorderedAccessView(1, s->io->GetGPUVirtualAddress()); cmd->SetComputeRootUnorderedAccessView(2, s->st->GetGPUVirtualAddress());
             if (!g_hl) g_hl = sharedBuffer(F->dev, 65536, D3D12_HEAP_FLAG_NONE, nullptr);   // ponytail: one process-global latch, never freed; one device assumed
@@ -857,6 +905,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
                 cb[32] = 1 | fl | ((da < 0x8000000u ? da : 0u) << 4);
                 if (T != 0xFFFFFFF0u && da < 64) { s->ageSum += da; s->ageCnt++; s->ageMax = (std::max)(s->ageMax, da); s->loose += fl == 8; }
                 if (s->ageCnt == 200) { logf("nr_split: edit age mean %.2f max %u frames, %u of 200 frames vectors-only", s->ageSum / 200.0, s->ageMax, s->loose); s->ageSum = s->ageCnt = s->ageMax = s->loose = 0; }
+                if (teOn) { pass(s->tea, gx, gy); pass(s->teb, gx, gy); s->teFrm = s->frm; }
                 cmd->SetComputeRoot32BitConstants(3, kCb, cb, 0);
             } else {
             if (g_fg && s->seq > (q == 0 ? 1u : 0u)) {              // fg: harvest the newest earlier frame if HIP finished it after its own (short) wait
@@ -877,6 +926,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
                 cmd->SetPipelineState(s->spin); cmd->Dispatch(1, 1, 1); cmd->ResourceBarrier(1, &uav);   // wait (bounded) for the HIP stream's flag_out = seq
                 if (s->histOn) { cmd->SetPipelineState(s->hst); cmd->Dispatch((F->W + 7) / 8, (F->H + 7) / 8, 1); cmd->ResourceBarrier(1, &uav); }   // keep this output for the next frame's history
                 if (reuseOn) { cmd->SetPipelineState(s->cap); cmd->Dispatch((F->W + 7) / 8, (F->H + 7) / 8, 1); cmd->ResourceBarrier(1, &uav); }   // keep the edit (+ input, depth) for the reuse frames
+                if (teOn) { for (auto* p : {s->tea, s->teb}) { cmd->SetPipelineState(p); cmd->Dispatch((F->W + 7) / 8, (F->H + 7) / 8, 1); cmd->ResourceBarrier(1, &uav); } s->teFrm = s->frm; }
             }
             }
             if (e5) {                                               // R9G9B9E5 has no typed UAV store: pack into a buffer, copy into the texture
