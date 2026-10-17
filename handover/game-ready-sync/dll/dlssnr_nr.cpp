@@ -63,7 +63,7 @@ static void loadSettings() {
     GetPrivateProfileStringA("nr", "model_res", "auto", b, sizeof b, narrow(ini).c_str()); g_modelRes = b;   // WxH (a subfolder of data_dir) or auto
     GetPrivateProfileStringA("nr", "model", "auto", b, sizeof b, narrow(ini).c_str()); g_model = b;   // small (310.9 WEIGHTS_CC_SMALL_FP8) | large (WEIGHTS_HT) | auto = small when the DLL has it
     GetPrivateProfileStringA("nr", "log", "dlssnr_nr.log", b, sizeof b, narrow(ini).c_str()); g_logName = b;
-    g_vitEvery = (int)GetPrivateProfileIntA("nr", "vit_every", 1, narrow(ini).c_str());
+    g_vitEvery = (int)GetPrivateProfileIntA("nr", "vit_every", 0, narrow(ini).c_str());   // 0/absent = the data dir's meta vit_every (build_plan: new model 3, old 2), else 1
     { char r[32]; GetPrivateProfileStringA("nr", "reuse", "vit", r, sizeof r, narrow(ini).c_str()); g_reuseBn = !_stricmp(r, "bottleneck"); }   // what vit_every>1 reuses
     g_settleMs = (int)GetPrivateProfileIntA("nr", "settle_ms", 20, narrow(ini).c_str());
     g_jobTimeoutMs = (int)GetPrivateProfileIntA("nr", "job_timeout_ms", 3000, narrow(ini).c_str());
@@ -97,6 +97,7 @@ static void loadSettings() {
     GetPrivateProfileStringA("nr", "history_gate_hi", "0.25", b, sizeof b, narrow(ini).c_str()); g_hHi = (float)atof(b);
     GetPrivateProfileStringA("nr", "pass2_gain", "0.5", b, sizeof b, narrow(ini).c_str()); g_pass2Gain = (float)atof(b); g_pass2Gain = g_pass2Gain == g_pass2Gain ? (std::min)((std::max)(g_pass2Gain, 0.f), 1.f) : 0.5f;
     { const int i8 = (int)GetPrivateProfileIntA("nr", "int8_swin", -1, narrow(ini).c_str()); if (i8 >= 0) SetEnvironmentVariableA("NR_INT8_SWIN", i8 ? "1" : "0"); }   // int8 swin GEMMs; absent = the data dir's meta (build_plan: 1). nr_runtime reads it at nr_create
+    { const int i8 = (int)GetPrivateProfileIntA("nr", "int8_prepost", -1, narrow(ini).c_str()); if (i8 >= 0) SetEnvironmentVariableA("NR_INT8_PREPOST", i8 ? "1" : "0"); }   // opt-in int8 post-block MLP; absent = meta (default off)
     g_split = (int)GetPrivateProfileIntA("nr", "nr_split", 0, narrow(ini).c_str()) != 0;   // 1: the network in two halves over two frames (implies nr_every=2), output = last finished NR, warped
     if (g_split) g_nrEvery = 2;
     GetPrivateProfileStringA("nr", "nr_split_k", "0", b, sizeof b, narrow(ini).c_str()); g_splitK[0] = g_splitK[1] = 0; sscanf_s(b, "%d,%d", &g_splitK[0], &g_splitK[1]);   // first dispatch of part 2 (full[,skipping] frames); 0 = measure
@@ -105,7 +106,7 @@ static void loadSettings() {
     g_maxInflight = (int)GetPrivateProfileIntA("nr", "max_inflight", g_fg ? 1 : 3, narrow(ini).c_str()); g_maxInflight = g_maxInflight < 1 ? 1 : g_maxInflight > 8 ? 8 : g_maxInflight;
     auto cl = [](float v, float lo, float hi) { return v != v ? lo : v < lo ? lo : v > hi ? hi : v; };   // ini garbage (NaN, huge, negative) never reaches the GPU constants
     g_gain = cl(g_gain, 0.f, 2.f); g_gateLo = cl(g_gateLo, 0.f, 1.f); g_gateHi = cl(g_gateHi, g_gateLo, 1.f); g_mvLo = cl(g_mvLo, 0.f, 4.f); g_mvHi = cl(g_mvHi, g_mvLo + 1e-4f, 8.f); g_hLo = cl(g_hLo, 0.f, 1.f); g_hHi = cl(g_hHi, g_hLo + 1e-4f, 2.f);
-    g_settleMs = g_settleMs < 0 ? 0 : g_settleMs > 500 ? 500 : g_settleMs; g_jobTimeoutMs = g_jobTimeoutMs < 200 ? 200 : g_jobTimeoutMs > 60000 ? 60000 : g_jobTimeoutMs; if (g_vitEvery < 1) g_vitEvery = 1;
+    g_settleMs = g_settleMs < 0 ? 0 : g_settleMs > 500 ? 500 : g_settleMs; g_jobTimeoutMs = g_jobTimeoutMs < 200 ? 200 : g_jobTimeoutMs > 60000 ? 60000 : g_jobTimeoutMs; if (g_vitEvery < 0) g_vitEvery = 0;
     std::string lp = (g_logName.size() > 1 && g_logName[1] == ':') ? g_logName : narrow(g_dir) + g_logName;
     fopen_s(&g_log, lp.c_str(), "a");
 }
@@ -410,6 +411,11 @@ static void logStats(Feature* F) {
 }
 
 static float importScale(const std::string& dir);
+static int metaInt(const std::string& dir, const char* key, int def) {   // meta.txt "<key>=<int>" (at least 1), else def
+    FILE* f = nullptr; fopen_s(&f, (dir + "\\meta.txt").c_str(), "r"); if (!f) return def; char l[256]; const size_t n = strlen(key);
+    while (fgets(l, sizeof l, f)) if (!strncmp(l, key, n) && l[n] == '=') { def = atoi(l + n + 1); break; }
+    fclose(f); return def < 1 ? 1 : def;
+}
 static void freeFeature(Feature* F);
 static void evictIdle(Feature* self);
 static void workerBody(Feature* F);
@@ -418,11 +424,12 @@ static void workerBody(Feature* F) {
     try {
         char err[512] = {0};
         if (!loadRuntime()) { F->state = S_FAILED; return; }
-        logf("worker: nr_create(%s, %ux%u, vit_every %d%s)...", F->dir.c_str(), F->W, F->H, g_vitEvery, g_reuseBn ? " bottleneck" : "");
+        const int ve = g_vitEvery ? g_vitEvery : metaInt(F->dir, "vit_every", 1);
+        logf("worker: nr_create(%s, %ux%u, vit_every %d%s%s)...", F->dir.c_str(), F->W, F->H, ve, g_reuseBn ? " bottleneck" : "", g_vitEvery ? "" : " (data dir default)");
         evictIdle(F);
         if (p_select) { LUID l = F->dev->GetAdapterLuid(); p_select(&l, g_allowAny); }   // HIP on the GPU the game renders on (not an iGPU / HIP device 0)
         DWORD t0 = GetTickCount();
-        F->ctx = safeCreate(F->dir.c_str(), (int)F->W, (int)F->H, g_reuseBn && g_vitEvery > 1 ? -g_vitEvery : g_vitEvery, err, sizeof err);
+        F->ctx = safeCreate(F->dir.c_str(), (int)F->W, (int)F->H, g_reuseBn && ve > 1 ? -ve : ve, err, sizeof err);
         if (!F->ctx) { seterr("nr_create failed: %s", err); F->state = S_FAILED; return; }
         if (F->quit) return;   // released while the runtime was loading: worker() frees it
         logf("worker: runtime ready after %lu ms", GetTickCount() - t0);

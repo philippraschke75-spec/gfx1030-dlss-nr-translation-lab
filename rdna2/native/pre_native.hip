@@ -27,6 +27,8 @@ struct PreParams {
   uint8_t* pool;         // +0x38
   const float* prev;     // +0x40 second colour source (null -> +0x00)
   float c48, c4c;        // +0x48 +0x4c conditioning features 13, 14
+  const uint8_t* src;    // +0x50 game colour RGBA16F (src_w x src_h, pitch src_w * 8) or null (colour from +0x00): fused
+  int src_h, src_w;      // +0x58 k_import (mode 0), src mirrored about its last row/column; post reads src the same way
 };
 
 #define W_EXP 0
@@ -138,6 +140,9 @@ __device__ __forceinline__ float norm_scale(const float* v) {
 __device__ __forceinline__ uint32_t pcg(uint32_t v) { v = (v >> ((v >> 28) + 4)) ^ v; return v * 0x108EF2D9u; }
 __device__ __forceinline__ float unit(uint32_t s) { uint32_t t = pcg(s); return (float)(((t >> 30) ^ (t >> 8)) + 1u) * 5.9604644775390625e-8f; }
 
+// k_import's padding: mirrored about the last row / column
+__device__ __forceinline__ int mirror(int i, int n) { const int r = i < n ? i : 2 * n - i - 2; return r < 0 ? 0 : r > n - 1 ? n - 1 : r; }
+
 // memory channel c holds reference channel PI(c)
 __device__ __forceinline__ constexpr int PI(int c) { return (c & 1) | ((c >> 2) & 1) << 1 | ((c >> 3) & 1) << 2 | ((c >> 1) & 1) << 3 | (c & 16); }
 
@@ -159,12 +164,20 @@ __device__ __forceinline__ void body(const PreParams& p, const int t, h2 (*Ks)[1
     f[0] = f16r(ra * cosf(aa)); f[1] = f16r(ra * sinf(aa)); f[2] = f16r(rc * cosf(ac));
     f[3] = 1.f;
     size_t o = ((size_t)py * W + px) * 3;
-    const float* c2 = p.prev ? p.prev : p.in;
+    float c1[3];
+    if (p.src) {   // fused k_import
+      typedef _Float16 h4 __attribute__((ext_vector_type(4)));
+      const h4 s = *(const h4*)(p.src + ((size_t)mirror(py, p.src_h) * p.src_w + mirror(px, p.src_w)) * 8);
+      c1[0] = (float)s.x; c1[1] = (float)s.y; c1[2] = (float)s.z;
+    } else {
+#pragma unroll
+      for (int i = 0; i < 3; i++) c1[i] = p.in[o + i];
+    }
     float s2 = 2.f * p.cscale;
 #pragma unroll
     for (int i = 0; i < 3; i++) {
-      f[4 + i] = f16r(__fmul_rn(__fsub_rn(p.in[o + i], 0.5f), s2));
-      f[7 + i] = f16r(__fmul_rn(__fsub_rn(c2[o + i], 0.5f), s2));
+      f[4 + i] = f16r(__fmul_rn(__fsub_rn(c1[i], 0.5f), s2));
+      f[7 + i] = f16r(__fmul_rn(__fsub_rn(p.prev ? p.prev[o + i] : c1[i], 0.5f), s2));
     }
     f[10] = f16r(p.c30); f[11] = f16r(p.c28); f[12] = f16r(p.c2c); f[13] = f16r(p.c48); f[14] = f16r(p.c4c); f[15] = 0.f;
   }
@@ -340,6 +353,8 @@ __device__ __forceinline__ void body(const PreParams& p, const int t, h2 (*Ks)[1
   }
 }
 
+// marker for tools/build_plan.py: this k_pre_native reads the game colour itself (PreParams.src), no k_import step
+extern "C" __global__ void k_pre_native_fused_io() {}
 extern "C" __global__ __launch_bounds__(64) PRE_ATTR void k_pre_native(PreParams p) {
   __shared__ h2 Ks[64][16];
   __shared__ h2 Vt[32][32];

@@ -206,6 +206,9 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
   std::map<uint64_t, void*> i8rec;
   if (i8) rlog("int8_swin: on (swin MLP expand on int8 dot4 where the module has _i8 kernels)");
   const int pre_i = kv.count("pre_step") ? (int)num("pre_step") : -1, post_i = kv.count("post_step") ? (int)num("post_step") : -1;
+  bool i8pp = kv.count("int8_prepost") && atoi(kv["int8_prepost"].c_str());
+  { char e[8]; if (GetEnvironmentVariableA("NR_INT8_PREPOST", e, sizeof e)) i8pp = atoi(e) != 0; }   // the DLL sets it from the ini
+  if (i8pp) rlog("int8_prepost: on (post-block MLP on int8 dot4 where the module has _i8 kernels)");
   while (fgets(line, sizeof line, f)) {
     if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
     std::string s(line); while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
@@ -283,6 +286,12 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
         HK(hipModuleLaunchKernel(pf, 1, 1, 1, 256, 1, 1, 0, nullptr, nullptr, cfg)); HK(hipDeviceSynchronize());
       }
     }
+  }
+  // int8_prepost (opt-in: meta int8_prepost=1 or env NR_INT8_PREPOST=1/0): pre/post run <sym>_i8 (MLP on int8 dot4) when
+  // the module has it; its int8 tables come from the same <sym>_prep (ran above)
+  if (i8pp) for (size_t si = 0; si < c->steps.size(); si++) {
+    Step& st = c->steps[si]; hipFunction_t f8;
+    if ((st.pre || st.post) && st.mod && hipModuleGetFunction(&f8, st.mod, (c->names[si] + "_i8").c_str()) == hipSuccess) { st.fn = f8; c->names[si] += "_i8"; }
   }
   if (bn) {   // bottleneck reuse: also skip the c512 encoder stage + k_final_head before the ViT and k_dec_upsample + c512 decoder stage after it
     if (kv.count("bn_lo") && kv.count("bn_hi")) {   // the plan says where the bottleneck is (gen_runtime_data/new-model-pipeline and build_plan.py data)

@@ -44,6 +44,8 @@ __constant__ uint16_t gProj[128];
 struct PostParams {
   const uint8_t* x; const uint8_t* skip; float* out; const uint8_t* wrec;   // wrec: block70.layer0 record (prep only)
   int H, W, col0, row0; float scale; int denorm; const float* frame; const float* aux; float gate;
+  uint8_t* dst; int dst_h, dst_w;   // +0x50: fused k_export (mode 0) when dst != null: dst RGBA16F (pitch dst_w * 8) = f16(out)
+  const uint8_t* src;               // +0x60: fused k_import when != null: frame = src (dst_w x dst_h RGBA16F) mirrored, as the pre-block
 };
 
 // nearest e4m3 (ties even), saturating at 448; branchless. Normal range: round the f32 mantissa to 3 bits;
@@ -92,6 +94,105 @@ __device__ __forceinline__ h2 q8p(float a, float b) { return q8h(pk(a, b)); }   
 #else
 #define WI(i) (i)
 #endif
+#ifndef BAKED
+// int8_prepost (opt-in, k_post_native_i8): the post-block MLP (expand 32->128, GELU, q8, contract 128->32) on v_dot4_i32_i8, as
+// int8_swin does it: weights int8 with a power-of-two scale per output channel (built once by the module's _prep),
+// activations int8 with a power-of-two scale per (token, 32-channel group). The inputs are on the e4m3 grid, so a
+// value >= max/16 of its group is exact in int8; only the smaller ones round.
+// Tables (filled by i8_tables in the _prep kernel, read as __constant__):
+//   W: Ei[128 h][8] (word j = channels 4j..4j+3) | Ci[4 g][32 c][8] (word j = hidden 32g+4j..+3)
+//   S: Es[128] | Cs[32] (row scales)
+// Measured: post 1.42 -> 1.24 ms at 540p, +0.1 dB vs PyTorch. Not in the pre-block: there it costs 3.7 dB vs PyTorch
+// (the error runs through the whole network) and was slower (0.94 -> 1.01 ms).
+#define I8_CI (128 * 8)
+#define I8_WORDS (I8_CI + 4 * 32 * 8)
+#define I8_CS 128
+#define I8_FLOATS (128 + 32)
+
+// one row of K e4m3-grid weights -> int8 words at W[idx(j)] + power-of-two scale (max |w| < 2^e -> scale 2^(e-7))
+template <int K, class F, class I>
+__device__ float i8_row(F w, uint32_t* W, I idx) {
+  float m = 0.f;
+  for (int k = 0; k < K; k++) m = fmaxf(m, fabsf(w(k)));
+  int e; frexpf(m, &e);
+  const float s = m > 0.f ? ldexpf(1.f, e - 7) : 1.f;
+  for (int j = 0; j < K / 4; j++) {
+    uint32_t v = 0;
+    for (int l = 0; l < 4; l++) v |= ((uint32_t)(int)rintf(w(4 * j + l) / s) & 0xFFu) << (8 * l);
+    W[idx(j)] = v;
+  }
+  return s;
+}
+// expand weight (h, k) = we(h, k), contract weight (c, h) = wc(c, h); thread t of nt
+template <class FE, class FC>
+__device__ void i8_tables(FE we, FC wc, uint32_t* W, float* S, int t, int nt) {
+  for (int r = t; r < 160; r += nt) {
+    if (r < 128) S[r] = i8_row<32>([&](int k) { return we(r, k); }, W, [&](int j) { return r * 8 + j; });
+    else { const int c = r - 128;
+      S[I8_CS + c] = i8_row<128>([&](int h) { return wc(c, h); }, W, [&](int j) { return I8_CI + (j >> 3) * 256 + c * 8 + (j & 7); }); }
+  }
+}
+
+// int8 of 4 values already scaled to |v| < 128: the low byte of v + 1.5*2^23 is rint(v) in two's complement
+__device__ __forceinline__ uint32_t i8x4(float a, float b, float c, float d, float inv) {
+  const float M = 12582912.f;
+  uint32_t A = __float_as_uint(fmaf(a, inv, M)), B = __float_as_uint(fmaf(b, inv, M));
+  uint32_t C = __float_as_uint(fmaf(c, inv, M)), D = __float_as_uint(fmaf(d, inv, M));
+  return __builtin_amdgcn_perm(__builtin_amdgcn_perm(D, C, 0x0c0c0400u), __builtin_amdgcn_perm(B, A, 0x0c0c0400u), 0x05040100u);
+}
+// power-of-two scale for a group with max |v| = m: inv = 2^(6-E), scale = 2^(E-6) for m in [2^E, 2^(E+1)); m == 0 -> anything
+__device__ __forceinline__ void i8_scale(float m, float& inv, float& sc) {
+  const uint32_t eb = __float_as_uint(fmaxf(m, 1e-30f)) >> 23;
+  inv = __uint_as_float((260u - eb) << 23); sc = __uint_as_float((eb - 6u) << 23);
+}
+
+// y[c] = sum_h q8(gelu(x . We[h])) * Wc[c][h]  (same GELU / q8 as the f16 path); xq: 32 e4m3-grid channels
+template <class WP, class SP>
+__device__ __forceinline__ void mlp_i8(const h2* xq, float* y, WP W, SP S) {
+  uint32_t xi[8]; float sa;
+  {
+    float m = 0.f;
+#pragma unroll
+    for (int k = 0; k < 16; k++) m = fmaxf(m, fmaxf(fabsf((float)xq[k].x), fabsf((float)xq[k].y)));
+    float inv; i8_scale(m, inv, sa);
+#pragma unroll
+    for (int j = 0; j < 8; j++) xi[j] = i8x4(xq[2 * j].x, xq[2 * j].y, xq[2 * j + 1].x, xq[2 * j + 1].y, inv);
+  }
+#pragma unroll
+  for (int c = 0; c < 32; c++) y[c] = 0.f;
+#pragma unroll 1
+  for (int g = 0; g < 4; g++) {
+    float a[32], m = 0.f;
+#pragma unroll
+    for (int j = 0; j < 32; j++) {
+      const int h = 32 * g + j;
+      int acc = 0;
+#pragma unroll
+      for (int k = 0; k < 8; k++) acc = __builtin_amdgcn_sdot4((int)xi[k], (int)W[h * 8 + k], acc, false);
+      float s = (float)acc * (sa * S[h]);
+      float tc = fminf(fmaxf(s, -4.f), 4.f);
+      float inner = fmaf(fabsf(tc), -0.055908203125f, 0.447265625f);
+      a[j] = q8(__fmul_rn(s, fmaf(tc, inner, 0.89453125f)));
+      m = fmaxf(m, fabsf(a[j]));
+    }
+    float inv, sb; i8_scale(m, inv, sb);
+    uint32_t ai[8];
+#pragma unroll
+    for (int j = 0; j < 8; j++) ai[j] = i8x4(a[4 * j], a[4 * j + 1], a[4 * j + 2], a[4 * j + 3], inv);
+#pragma unroll
+    for (int c = 0; c < 32; c++) {
+      int acc = 0;
+#pragma unroll
+      for (int j = 0; j < 8; j++) acc = __builtin_amdgcn_sdot4((int)ai[j], (int)W[I8_CI + g * 256 + c * 8 + j], acc, false);
+      y[c] = fmaf((float)acc, sb, y[c]);
+    }
+  }
+#pragma unroll
+  for (int c = 0; c < 32; c++) y[c] *= S[I8_CS + c];
+}
+__constant__ uint32_t gI8W[I8_WORDS];
+__constant__ float gI8S[I8_FLOATS];
+#endif
 
 // reciprocal L2 norm with the reference's chain/half summation order (d = 16 frag + 8 group + 2 chain + half)
 __device__ __forceinline__ float norm_scale(const float* v) {
@@ -121,29 +222,42 @@ __device__ __forceinline__ float e4(uint32_t b) {
 // memory channel c holds reference channel PI(c)
 __device__ constexpr int PI(int c) { return (c & 1) | ((c >> 2) & 1) << 1 | ((c >> 3) & 1) << 2 | ((c >> 1) & 1) << 3 | (c & 16); }
 
-// compose kept out of line: inlined, the uniform branches made the scheduler spill the whole body
-__device__ __noinline__ void compose(const PostParams& P, size_t pix, float r0, float r1, float r2, float r3) {
+// compose kept out of line: inlined, the uniform branches made the scheduler spill the whole body. Fields by value:
+// with a PostParams reference the kernel copied the struct to scratch and the call read it back (NR_PROF post 1.45 -> 1.02 ms at 540p).
+__device__ __noinline__ void compose(float* out, uint8_t* dst, const uint8_t* src, const float* frame, const float* aux, float scale,
+                                     int denorm, float gate, int W, int dh, int dw, int py, int px, float r0, float r1, float r2, float r3) {
+  const size_t pix = (size_t)py * W + px;
   const float r[4] = {r0, r1, r2, r3};
   float f[3] = {0.f, 0.f, 0.f};
-  if (P.frame) { f[0] = P.frame[pix * 3]; f[1] = P.frame[pix * 3 + 1]; f[2] = P.frame[pix * 3 + 2]; }
+  if (src) {
+    auto mirror = [](int i, int n) { const int r = i < n ? i : 2 * n - i - 2; return r < 0 ? 0 : r > n - 1 ? n - 1 : r; };
+    typedef _Float16 h4 __attribute__((ext_vector_type(4)));
+    const h4 s = *(const h4*)(src + ((size_t)mirror(py, dh) * dw + mirror(px, dw)) * 8);
+    f[0] = (float)s.x; f[1] = (float)s.y; f[2] = (float)s.z;
+  } else if (frame) { f[0] = frame[pix * 3]; f[1] = frame[pix * 3 + 1]; f[2] = frame[pix * 3 + 2]; }
   float res[3];
 #pragma unroll
-  for (int k = 0; k < 3; k++) res[k] = 0.125f * f[k] - 0.0625f + P.scale * r[k];
+  for (int k = 0; k < 3; k++) res[k] = 0.125f * f[k] - 0.0625f + scale * r[k];
   float alpha = 0.f;
-  if (P.denorm) {
+  if (denorm) {
     alpha = 1.f;
 #pragma unroll
     for (int k = 0; k < 3; k++) res[k] = fminf(fmaxf(8.f * res[k] + 0.5f, 0.f), 1.f);
-    if (P.aux && P.gate > 0.f) {
-      float g = fminf(fmaxf(P.gate / (1.f + __expf(-r[3])), 0.f), 1.f);
+    if (aux && gate > 0.f) {
+      float g = fminf(fmaxf(gate / (1.f + __expf(-r[3])), 0.f), 1.f);
 #pragma unroll
-      for (int k = 0; k < 3; k++) res[k] = res[k] + g * (P.aux[pix * 3 + k] - res[k]);
+      for (int k = 0; k < 3; k++) res[k] = res[k] + g * (aux[pix * 3 + k] - res[k]);
     }
   }
-  ((float4*)P.out)[pix] = make_float4(res[0], res[1], res[2], alpha);
+  ((float4*)out)[pix] = make_float4(res[0], res[1], res[2], alpha);
+  if (dst && py < dh && px < dw) {
+    typedef _Float16 h4 __attribute__((ext_vector_type(4)));
+    *(h4*)(dst + ((size_t)py * dw + px) * 8) = (h4){(_Float16)res[0], (_Float16)res[1], (_Float16)res[2], (_Float16)alpha};
+  }
 }
 
-extern "C" __global__ __launch_bounds__(64) POST_ATTR void k_post_native(PostParams P) {
+template <bool I8>
+__device__ __forceinline__ void post_main(const PostParams& P) {
   __shared__ h2 Ks[64][16];
   __shared__ h2 Vt[32][32];
   const h2* Wt = (const h2*)gWt; const float* Fp = gFp;
@@ -184,6 +298,11 @@ extern "C" __global__ __launch_bounds__(64) POST_ATTR void k_post_native(PostPar
 
   // ---- MLP: expand 32->128 (+cubic SiLU, q8), contract 128->32, streamed in chunks of 8 hidden values
   float y[32];
+#ifndef BAKED
+  if constexpr (I8) mlp_i8(xq, y, (const uint32_t*)gI8W, (const float*)gI8S);
+  else
+#endif
+  {
 #pragma unroll
   for (int c = 0; c < 32; c++) y[c] = 0.f;
 #if PREW
@@ -226,6 +345,7 @@ extern "C" __global__ __launch_bounds__(64) POST_ATTR void k_post_native(PostPar
     if (hc + 8 < 128) Wl[((hc >> 3) & 1) ^ 1][t] = wn;
     PREW_SYNC();   // also: everyone is done reading this buffer before it is refilled next iteration
 #endif
+  }
   }
   // y = rs * x + mlp (two roundings), skip = y in f32, matrix operand = q8(f16(y))
   h2 yq[16];
@@ -327,8 +447,15 @@ extern "C" __global__ __launch_bounds__(64) POST_ATTR void k_post_native(PostPar
 #pragma unroll
     for (int k = 0; k < 4; k++) r[k] = dot2(wv, pr[k * 16 + c / 2], r[k]);
   }
-  compose(P, (size_t)py * W + px, r[0], r[1], r[2], r[3]);
+  compose(P.out, P.dst, P.src, P.frame, P.aux, P.scale, P.denorm, P.gate, W, P.dst_h, P.dst_w, py, px, r[0], r[1], r[2], r[3]);
 }
+// marker for tools/build_plan.py: this k_post_native writes the game output itself (PostParams.dst), no k_export step
+extern "C" __global__ void k_post_native_fused_io() {}
+extern "C" __global__ __launch_bounds__(64) POST_ATTR void k_post_native(PostParams P) { post_main<false>(P); }
+#ifndef BAKED
+// int8_prepost: MLP on int8 dot4 (mlp_i8 above), tables from k_post_native_prep
+extern "C" __global__ __launch_bounds__(64) POST_ATTR void k_post_native_i8(PostParams P) { post_main<true>(P); }
+#endif
 
 #ifndef BAKED
 // ---- load-time prep: decode the block70.layer0 record into the __constant__ tables above. The runtime launches it
@@ -384,5 +511,7 @@ extern "C" __global__ __launch_bounds__(256) void k_post_native_prep(PostParams 
     const int n = t >> 5, k = t & 31;
     gProj[t] = ((const uint16_t*)(R + R_PROJ))[(k >> 4) * 256 + 32 * (n & 7) + 8 * ((k & 7) >> 1) + 4 * (n >> 3) + (k & 1) + 2 * ((k & 15) >> 3)];
   }
+  i8_tables([&](int h, int k) { return e4(R[R_EXP + unswz(h, k, 32, 8)]); }, [&](int c, int h) { return e4(R[R_CON + unswz(c, h, 128, 2)]); },
+            wr(gI8W), wr(gI8S), t, 256);
 }
 #endif
