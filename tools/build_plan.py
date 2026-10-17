@@ -164,7 +164,7 @@ def native_candidates(op, A, C, grid):
     M310 = (A['c_mid'], A['heads']) == (512, 16); V310 = (A['c_vit'], A['hid']) == (1024, 4096)
     if op == 'var':
         out = []
-        if C == 32: out.append(('native_swin32.co', 'k_swin_c32', grid, 256, None))
+        if C == 32: out.append(('native_swin32.co', 'k_swin_c32', grid, 64, None))
         if C >= 256: out.append(('native_swinvar.co', 'k_swin_c%ds' % C, (gx, gy, 2), 256, None))
         out.append(('native_swinvar.co', 'k_swin_c%d' % C, grid, 256, None if C % 32 == 0 else 'needs C % 32 == 0'))
         return out
