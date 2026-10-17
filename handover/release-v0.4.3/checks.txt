@@ -1,0 +1,65 @@
+== strict (vit_every=1, default sliders)
+frames 60: 60 evaluated+matched, 0 mismatched, 0 not run | after dropped list: 10/10 ran, worst 62.5 ms | release 13 ms
+PASS
+strict build 1920x1080 auto rc 0
+model: E:/dlss-runtime/v042/nr_data\..\nvngx_dlssnr.dll version 310.9.16.0 sha256 77796c072880, model id ca6f64f1dd88b965 (WEIGHTS_CC_SMALL_FP8, model=auto)
+create: sync resources ready; async fallback apply mode delta (live frame + NR edit) gain 1.00; compose add detail 1.00
+frames 60: 60 evaluated+matched, 0 mismatched, 0 not run | after dropped list: 10/10 ran, worst 37.3 ms | release 11 ms
+PASS
+strict build 960x540 large rc 0
+model: E:/dlss-runtime/v042/nr_data\..\nvngx_dlssnr.dll version 310.9.16.0 sha256 77796c072880, model id 1ff9997855c80dd5 (WEIGHTS_HT, model=large)
+create: sync resources ready; async fallback apply mode delta (live frame + NR edit) gain 1.00; compose add detail 1.00
+== bit-exact vs v0.4.2-hires (OUTHASH, intensity 1)
+OUTHASH 866c2f5b6bd24383
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00306 in 0.00262 excess +0.00044 (x1.17) | white jumps 20048.1/frame (0.555% of px), visible flicker 1.706% of px, over 59 frames
+flk base Standard 960x540 rc 0
+OUTHASH 9dde9ef9c44b6383
+FLICKER frame 2560x1440 (model 1920x1080): inst out 0.00303 in 0.00262 excess +0.00042 (x1.16) | white jumps 20587.6/frame (0.570% of px), visible flicker 1.581% of px, over 59 frames
+flk build Standard 1920x1080  rc 127
+OUTHASH 322c2daee16e2383
+FLICKER frame 2560x1440 (model 1920x1080): inst out 0.00303 in 0.00262 excess +0.00042 (x1.16) | white jumps 20587.6/frame (0.570% of px), visible flicker 1.581% of px, over 59 frames
+flk base Standard 1920x1080  rc 0
+OUTHASH b51e3fec821a1383
+FLICKER frame 960x540 (model 960x540): inst out 0.00776 in 0.00727 excess +0.00049 (x1.07) | white jumps 4944.1/frame (1.005% of px), visible flicker 3.406% of px, over 59 frames
+flk build Standard 960x540  rc 0
+OUTHASH 7c3723528131f383
+FLICKER frame 960x540 (model 960x540): inst out 0.00776 in 0.00727 excess +0.00049 (x1.07) | white jumps 4944.1/frame (1.005% of px), visible flicker 3.406% of px, over 59 frames
+flk base Standard 960x540  rc 0
+OUTHASH 374787445847c383
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00340 in 0.00262 excess +0.00079 (x1.30) | white jumps 39618.3/frame (1.096% of px), visible flicker 2.994% of px, over 59 frames
+flk build Standard 960x540 model=large rc 0
+OUTHASH ca0ebdc6026fc383
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00340 in 0.00262 excess +0.00079 (x1.30) | white jumps 39618.3/frame (1.096% of px), visible flicker 2.994% of px, over 59 frames
+flk base Standard 960x540 model=large rc 0
+== flicker presets
+OUTHASH 1f9be73568254383
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00329 in 0.00262 excess +0.00067 (x1.26) | white jumps 33516.0/frame (0.927% of px), visible flicker 2.509% of px, over 59 frames
+flk build Strong 960x540  rc 0
+OUTHASH 214ef4d4a1316383
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00452 in 0.00262 excess +0.00190 (x1.73) | white jumps 81092.9/frame (2.243% of px), visible flicker 5.660% of px, over 59 frames
+flk build Cinematic 960x540  rc 0
+OUTHASH a28773a3c4ad0383
+FLICKER frame 2560x1440 (model 1920x1080): inst out 0.00326 in 0.00262 excess +0.00065 (x1.25) | white jumps 31899.5/frame (0.882% of px), visible flicker 2.238% of px, over 59 frames
+flk build Strong 1920x1080  rc 0
+OUTHASH f91a5bd4af0f4383
+FLICKER frame 2560x1440 (model 1920x1080): inst out 0.00419 in 0.00262 excess +0.00158 (x1.60) | white jumps 63246.7/frame (1.750% of px), visible flicker 4.258% of px, over 59 frames
+flk build Cinematic 1920x1080  rc 0
+== compose smoke (nv + intensity 1.3, ratio + intensity 1.3)
+OUTHASH 9291a5355ed66383
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00320 in 0.00262 excess +0.00059 (x1.22) | white jumps 30854.5/frame (0.854% of px), visible flicker 2.375% of px, over 59 frames
+flk build Community 960x540 intensity=1.3 rc 0
+OUTHASH 3da6a253b117a383
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00325 in 0.00262 excess +0.00064 (x1.24) | white jumps 30907.6/frame (0.855% of px), visible flicker 2.384% of px, over 59 frames
+flk build Standard 960x540 compose=ratio intensity=1.3 rc 0
+== bench (new model, real colour, history on)
+640x360 BENCH 640x360 vit_every=1 frames=54: median 11.886 mean 11.870 min 10.640 ms
+640x360 BENCH 640x360 vit_every=3 frames=54: median 8.596 mean 9.963 min 7.002 ms
+960x540 BENCH 960x540 vit_every=1 frames=54: median 17.075 mean 16.910 min 10.892 ms
+960x540 BENCH 960x540 vit_every=3 frames=54: median 12.104 mean 13.610 min 10.542 ms
+1280x720 BENCH 1280x720 vit_every=1 frames=54: median 26.138 mean 26.005 min 24.248 ms
+1280x720 BENCH 1280x720 vit_every=3 frames=54: median 19.553 mean 21.107 min 17.723 ms
+1920x1080 BENCH 1920x1080 vit_every=1 frames=22: median 48.536 mean 48.387 min 45.866 ms
+1920x1080 BENCH 1920x1080 vit_every=3 frames=22: median 34.699 mean 39.230 min 33.103 ms
+2560x1440 BENCH 2560x1440 vit_every=1 frames=22: median 79.143 mean 78.678 min 75.701 ms
+2560x1440 BENCH 2560x1440 vit_every=3 frames=22: median 69.631 mean 75.216 min 63.314 ms
+== done
