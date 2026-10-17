@@ -139,7 +139,7 @@ int main(int argc, char** argv) {
     printf("dll state %d after %.0f ms (5 = sync)\n", state(f), now() - t0); if (state(f) != 5 && !guard) { printf("FAIL sync path not active: %s\n", err()); return 4; }
     printf("device after create: 0x%08lx\n", (unsigned long)dev->GetDeviceRemovedReason());
 
-    std::vector<uint16_t> in((size_t)MW * MH * 4), refo((size_t)MW * MH * 4);
+    std::vector<uint16_t> in((size_t)MW * MH * 4), refo((size_t)MW * MH * 4), raw((size_t)MW * MH * 4);   // raw: the frame before the DLL's [0,1] input clamp
     const int DX = getenv("NR_TEST_DX") ? atoi(getenv("NR_TEST_DX")) : getenv("NR_TEST_SHIFT") ? atoi(getenv("NR_TEST_SHIFT")) : 13, DY = getenv("NR_TEST_DY") ? atoi(getenv("NR_TEST_DY")) : 0; const bool OBJ = getenv("NR_TEST_OBJ") != nullptr;
     const UINT gpitch = (W * 4 + 255) & ~255u; std::vector<uint8_t> mvScratch((size_t)gpitch * H), dScratch((size_t)gpitch * H); uint8_t *mvp = mvScratch.data(), *dpp = dScratch.data();   // this frame's motion (RG16F) / depth (R32F) upload rows
     const UINT ow = MW / 3, oh = MH / 3, oy = MH / 3; auto objX = [&](int k) { return (UINT)(((long long)k * DX % (MW - ow) + (MW - ow)) % (MW - ow)); };
@@ -158,7 +158,8 @@ int main(int argc, char** argv) {
             else if (NOISE > 0) { uint16_t t[4]; for (int c = 0; c < 4; c++) { uint32_t hsh = (uint32_t)(k * 73856093) ^ (x * 19349663u) ^ (y * 83492791u) ^ (c * 2654435761u); hsh ^= hsh >> 13; hsh *= 0x5bd1e995u; hsh ^= hsh >> 15;
                     t[c] = c == 3 ? s[c] : f2h(std::max(0.0, h2f(s[c]) * (1.0 + NOISE * ((hsh & 0xFFFF) / 32767.5 - 1.0)))); }   // NR_TEST_NOISE: relative per-frame noise
                   memcpy(d, t, 8); memcpy(upp + (size_t)y * pitch + x * 8, t, 8); }
-            else { memcpy(d, s, 8); memcpy(upp + (size_t)y * pitch + x * 8, s, 8); } } };
+            else { memcpy(d, s, 8); memcpy(upp + (size_t)y * pitch + x * 8, s, 8); }
+            memcpy(&raw[d - in.data()], d, 8); for (int c = 0; c < 3; c++) d[c] = (d[c] & 0x8000) || (d[c] & 0x7C00) == 0x7C00 && (d[c] & 0x3FF) ? 0 : d[c] > 0x3C00 ? 0x3C00 : d[c]; } };   // the DLL (ldr_input=1, LDR) clamps the network input to [0,1]; NaN -> 0
     ID3D12Resource *fmv = nullptr, *fdp = nullptr, *fmu = nullptr, *fdu = nullptr; bool ffirst = true;   // flicker mode: motion/depth textures, their upload buffers (mvp/dpp)
     auto frame = [&](int k, bool exec, double* ms) -> int {   // one game frame; returns evaluate's result, -100 on GPU timeout
         al->Reset(); cl->Reset(al, nullptr);
@@ -187,9 +188,10 @@ int main(int argc, char** argv) {
                 if (r11) unpack_r11g11b10(*(uint32_t*)(rbp + fy * pitch + fx * 4), o); else memcpy(o, rbp + fy * opitch + fx * 8, 8);
                 for (int c = 0; c < 3; c++) ov[c] += h2f(o[c]) / (UP * UP); }
             for (int c = 0; c < 3; c++) {
-                uint16_t b = refo[((size_t)y * MW + x) * 4 + c]; double bv = (b & 0x7C00) == 0x7C00 ? 0 : std::max(0.0, h2f(b));
+                const size_t m = ((size_t)y * MW + x) * 4 + c; uint16_t b = refo[m];   // expected: frame + (NR - clamped input), so values above 1 keep their excess
+                double bv = std::max(0.0, ((b & 0x7C00) == 0x7C00 ? 0 : (double)h2f(b)) + ((raw[m] & 0x7C00) == 0x7C00 ? 0 : (double)h2f(raw[m])) - h2f(in[m]));
                 double e = fabs(ov[c] - bv);
-                { double iv = h2f(in[((size_t)y * MW + x) * 4 + c]); se_o += std::min(e * e, 1.0); se_i += std::min((iv - bv) * (iv - bv), 1.0); }   // UP > 1 metric: PSNR (peak 1, clamped) of NR result vs reference, against doing nothing
+                { double iv = h2f(raw[m]); se_o += std::min(e * e, 1.0); se_i += std::min((iv - bv) * (iv - bv), 1.0); }   // UP > 1 metric: PSNR (peak 1, clamped) of NR result vs reference, against doing nothing
                 if (e > *maxerr) *maxerr = e; if (e > 0.004 + (r11 ? 0.035 : 0.004) * fabs(bv)) { (*beyond)++; bx0 = std::min(bx0, x); by0 = std::min(by0, y); bx1 = std::max(bx1, x); by1 = std::max(by1, y); } } } };   // r11: 5-6 bit mantissa
     if (guard) {   // every frame must come back as the native input, evaluate returning 1
         int bad = 0; double ms = 0;

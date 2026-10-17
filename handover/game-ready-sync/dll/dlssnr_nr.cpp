@@ -241,7 +241,7 @@ static const char* kSyncHlsl =
 "  return r * 0.25; }\n"
 "[numthreads(8,8,1)] void imp(uint3 id : SV_DispatchThreadID) {\n"
 "  if (id.x >= W || id.y >= H) return; uint FW = FWH & 0xFFFF, FH = FWH >> 16;\n"
-"  float4 c = (FW == W && FH == H) ? (hd() ? ld(col[id.xy]) : col[id.xy]) : colAt((id.xy + 0.5) * float2(FW, FH) / float2(W, H));\n"
+"  float4 c = (FW == W && FH == H) ? ld(col[id.xy]) : colAt((id.xy + 0.5) * float2(FW, FH) / float2(W, H));\n"   // frame == model size: clamped as the resampled path (raw > 1 input made block artifacts)
 "  if ((hdrM & 3) == 1 || (hdrM & 3) == 2) { float3 r = sn(col[min((uint2)((id.xy + 0.5) * float2(FW, FH) / float2(W, H)), uint2(FW - 1, FH - 1))]).rgb; if ((hdrM & 3) == 2 && max(r.r, max(r.g, r.b)) > 1.0) st.InterlockedAdd(20, 1);\n"
 "    if (((id.x | id.y) & 7) == 0) { st.InterlockedAdd(24, (uint)(int)round(clamp(log2(max(dot(r, float3(0.2126, 0.7152, 0.0722)), 1e-6)), -12.0, 12.0) * 256.0)); st.InterlockedAdd(28, 1); } }\n"   // auto: scene-linear HDR evidence (an LDR frame has a few % of specks above 1, HDR much more)
 "  io.Store2((id.y * W + id.x) * 8, uint2(pk(c.r, c.g), pk(c.b, c.a))); }\n"
@@ -301,7 +301,8 @@ static const char* kSyncHlsl =
 "    put(id.xy, float4(cmp(c, gain * d.rgb), c.a)); return; }\n"                       // timeout: native frame
 "  uint2 r = io.Load2(outOff + (id.y * W + id.x) * 8);\n"
 "  float3 e = float3(san(f16tof32(r.x & 0xFFFF)), san(f16tof32(r.x >> 16)), san(f16tof32(r.y & 0xFFFF)));\n"
-"  float3 o = hd() ? cmp(c, gain * (e - T(sn(c).rgb))) : gain == 1.0 ? e : c.rgb + gain * (e - c.rgb);\n"
+"  uint2 q = io.Load2((id.y * W + id.x) * 8); float3 n = float3(f16tof32(q.x & 0xFFFF), f16tof32(q.x >> 16), f16tof32(q.y & 0xFFFF));\n"   // the network's (clamped) input
+"  float3 o = hd() ? cmp(c, gain * (e - T(sn(c).rgb))) : c.rgb + gain * (e - n);\n"   // LDR: frame + edit, so pixels above 1 keep their excess
 "  put(id.xy, float4(max(o, 0.0), c.a)); }\n"
 // ---- temporal history (history=1). hst: after the spin, keep this frame's NR output in proxy space P (+ depth) at st+256+2n.
 // hwp: before the HIP release, write the network's history input into io+histOff (PAD_W x PAD_H x RGB32F, pre-block +0x40): the kept P warped
@@ -469,6 +470,7 @@ static void workerBody(Feature* F) {
                     else if (F->inFmt == (int)DXGI_FORMAT_R8G8B8A8_UNORM) for (unsigned x = 0; x < F->W * 4; x++) ((uint16_t*)d)[x] = f2h(sr[x] / 255.f);
                     else memcpy(d, sr, (size_t)F->W * 8); }
                 sanitizeHalf4((uint16_t*)F->tin.data(), (size_t)F->W * F->H * 4);
+                if (g_ldrIn) { uint16_t* t = (uint16_t*)F->tin.data(); for (size_t i = 0; i < (size_t)F->W * F->H * 4; i++) if ((i & 3) != 3) t[i] = (t[i] & 0x8000) ? 0 : t[i] > 0x3C00 ? 0x3C00 : t[i]; }   // rgb to [0,1] as the sync path (edit = NR - clamped input)
                 applyCond(F);
                 float ms = 0; int r = safeRun(F->ctx, F->tin.data(), F->tout.data(), &ms);
                 if (r) { seterr("nr_run failed (%d)", r); F->state = S_FAILED; return; }
