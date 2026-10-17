@@ -5,8 +5,8 @@ the frame size exactly as dlssnr_nr.cpp does it (LDR path, gain 1), PNGs + zoome
     (GPU, per size)  NR_BENCH_IN=in_WxH.bin NR_BENCH_OUT=out_WxH.bin nr_bench <dll dir> <data dir> W H 8 1 1
     py -I render_hires.py comp <frame.bin> <FW> <FH> <work dir> <png dir>[,<png dir>...] <WxH>...
 
-Model input (shader imp): frame == model size -> the frame as is; else colAt = 4 bilinear taps at +-FW/W/4 around the
-model pixel centre, each tap saturate()d (LDR). Output (shader exp): frame == model size -> net output; else
+Model input (shader imp): frame == model size -> the frame saturate()d (LDR); else colAt = 4 bilinear taps at +-FW/W/4 around the
+model pixel centre, each tap saturate()d (LDR). Output (shader exp), every size:
 max(frame + bil(out) - bil(in), 0), bil = bilinear at model coords (id + 0.5) * W / FW, NaN -> 0.
 PNGs: clamp [0,1], gamma 1/2.2 (as handover/accuracy). Crops: 2x nearest, left to right native then each size.
 """
@@ -30,16 +30,15 @@ def bil(img, px, py):   # img HxWxC, sample coords (pixel centres at .5), clamp 
 
 def model_input(F, W, H):
     FH, FW = F.shape[:2]
-    if (FW, FH) == (W, H): return F.copy()
-    cx = (np.arange(W) + 0.5) * FW / W; cy = (np.arange(H) + 0.5) * FH / H; sx, sy = FW / W * 0.25, FH / H * 0.25
     L = F.copy(); L[..., :3] = np.clip(L[..., :3], 0, 1)   # ld(): saturate(rgb), alpha as is
+    if (FW, FH) == (W, H): return L
+    cx = (np.arange(W) + 0.5) * FW / W; cy = (np.arange(H) + 0.5) * FH / H; sx, sy = FW / W * 0.25, FH / H * 0.25
     return sum(bil(L, cx + dx * sx, cy + dy * sy) for dx in (-1, 1) for dy in (-1, 1)) * 0.25
 
 
 def composite(F, inp, out):
     FH, FW = F.shape[:2]; H, W = inp.shape[:2]
     out = np.nan_to_num(out, nan=0.0, posinf=65504, neginf=0.0)
-    if (FW, FH) == (W, H): return np.maximum(out[..., :3], 0)
     px = (np.arange(FW) + 0.5) * W / FW; py = (np.arange(FH) + 0.5) * H / FH
     d = np.nan_to_num(bil(out[..., :3], px, py) - bil(inp[..., :3], px, py))
     return np.maximum(F[..., :3] + d, 0)
