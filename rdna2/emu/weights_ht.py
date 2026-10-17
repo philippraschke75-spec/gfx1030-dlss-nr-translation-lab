@@ -1,7 +1,7 @@
 """Read-only parser for the WEIGHTS_HT PE resource of nvngx_dlssnr.dll.
 
 Container layout (derived from the installer's DLL, sha256 recorded by caller; 153/153 records consistent):
-  blob:    u32 magic 0x08cda732, u32 0, then records back to back, sorted by name
+  blob:    u64 total size of the resource (0x08cda732 for 310.8 HT), then records back to back, sorted by name
   record:  u64 name_len, name, u64 D+40, u64 D+40, u64 D, [A-16 bytes] = u32 1, data[D], 20-byte trailer
   trailer: 8 zero bytes, u32 1, u32 0, u32 element_count (== D/2 in every record)
 The element dtype is NOT proven (f16 fits: all finite, plausible magnitudes). Tensor shapes are NOT in the container.
@@ -29,10 +29,10 @@ def resource(m):
                 dr, sz, _, _ = struct.unpack_from('<IIII', m, root+od); found.append(('/'.join(p), r2o(dr), sz))
     walk(root, []); return found
 
-def records(m):
-    (_, base, size), = [r for r in resource(m) if 'WEIGHTS_HT' in r[0]]
+def records(m, res='WEIGHTS_HT'):
+    (_, base, size), = [r for r in resource(m) if r[0].split('/')[1] == res]
     b = m[base:base+size]
-    assert struct.unpack_from('<I', b, 0)[0] == 0x08cda732
+    assert struct.unpack_from('<Q', b, 0)[0] == size   # u64 total size (not a magic); same framing for WEIGHTS_CC_SMALL_FP8 (310.9)
     out = []; o = 8
     while o < size:
         L = struct.unpack_from('<Q', b, o)[0]; nm = b[o+8:o+8+L].decode(); p = o+8+L
@@ -40,7 +40,7 @@ def records(m):
         d0 = p+24+4; t = b[d0+D:d0+D+20]
         assert struct.unpack_from('<I', b, p+24)[0] == 1 and A-16 == 4+D+20, (nm, A, D)
         cnt = struct.unpack_from('<I', t, 16)[0]
-        out.append(dict(name=nm, file_offset=base+d0, bytes=D, trailer_count=cnt)); o = d0+D+20
+        out.append(dict(name=nm, file_offset=base+d0, bytes=D, trailer_count=cnt, trailer=t.hex())); o = d0+D+20
     assert o == size; return out
 
 if __name__ == '__main__':

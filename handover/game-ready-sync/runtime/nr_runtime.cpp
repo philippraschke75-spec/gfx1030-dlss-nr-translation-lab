@@ -8,10 +8,12 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <cctype>
 #include <cstdint>
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 #include <mutex>
 #include <deque>
 #include <thread>
@@ -22,16 +24,20 @@
 #include <compressapi.h>
 #endif
 #include "nr_override.h"
+#ifdef _WIN32
+#include "weights_ht.h"
+#endif
 
 struct Step { hipFunction_t fn; std::vector<uint8_t> ka; unsigned gx, gy, gz, thr; bool pre = false, post = false;   // pre = k_pre_block (its kernarg holds the strength fields)
-              const NrOverride* ov = nullptr; std::vector<uint8_t> src; };   // ov: native replacement; src = original rebased kernarg it is built from
+              const NrOverride* ov = nullptr; hipModule_t mod = nullptr; std::vector<uint8_t> src; };   // ov: native replacement; src = original rebased kernarg it is built from
 struct nr_ctx {
   std::map<std::string, NrOverride> ovr;   // see OVERRIDES.md; empty -> unchanged behaviour
   std::string dir; uint8_t* d = nullptr; size_t arena = 0; uint64_t base = 0, dev = 0;
   size_t off_src = 0, src_size = 0, off_dst = 0, dst_size = 0; int vit_lo = 0, vit_hi = 0, vit_every = 1; long frame = 0;
+  std::vector<void*> i8bufs;   // int8_swin: per-record int8 weight copies
   std::vector<Step> steps; std::vector<hipModule_t> mods; unsigned mach = 0x36; std::deque<std::vector<uint8_t>> imgs; hipEvent_t e0 = nullptr, e1 = nullptr;
   // strength = the two f32 pairs of k_pre_block PreParams: +0x28 (LocalTone, LocalStructure) and +0x48 (a, b). Set from any thread, applied at the start of the next run.
-  std::mutex mx; float str[4] = {0, 0, 1, 1}; float pend[4] = {0, 0, 1, 1}; bool dirty = false;
+  std::mutex mx; float str[5] = {1, 1, 1, 1, 0}; float pend[5] = {1, 1, 1, 1, 0}; bool dirty = false;   // str/pend: pre-block features 11, 12 (+0x28), 13, 14 (+0x48), 10 (+0x30)
   // D3D12 interop (nr_ext_*): imported shared buffers, own non-blocking stream, one event per queued frame
   hipExternalMemory_t em_io = nullptr, em_sig = nullptr; uint8_t *io = nullptr, *sig = nullptr; size_t out_off = 0, flag_off = 0;
   // No GPU-side cross-API wait (hipStreamWaitValue32 hung the HIP queue forever when D3D12 never wrote flag_in -> TDR/PC freeze on 2026-10-08):
@@ -43,6 +49,7 @@ struct nr_ctx {
   std::vector<hipEvent_t> prof; std::vector<std::string> names;   // NR_PROF only
   int ksplit[2] = {0, 0};   // nr_ext_split: first dispatch of part 2 for a full / a skipping (vit_every) frame; 0 = no split
   std::atomic<bool> broken{false}; long checked = 0;   // output self-check (ext path): broken -> nr_ext_enqueue* returns -2, the DLL stays native
+  int devid = 0;   // HIP device of this context; HIP's current device is per thread, so every entry point selects it
 };
 #ifndef NR_BUILD_ID
 #define NR_BUILD_ID __DATE__ " " __TIME__
@@ -50,6 +57,36 @@ struct nr_ctx {
 static void (*g_logcb)(const char*) = nullptr;   // nr_set_log: the DLL's log (dlssnr_nr.log); stderr when unset
 static void rlog(const char* fmt, ...) { char b[512]; va_list a; va_start(a, fmt); vsnprintf(b, sizeof b, fmt, a); va_end(a); if (g_logcb) g_logcb(b); else fprintf(stderr, "%s\n", b); }
 NR_API void nr_set_log(void (*cb)(const char*)) { g_logcb = cb; }
+// GPU choice: the HIP device whose LUID matches the host's D3D12 adapter (nr_select_device). Without a match: the dGPU with the most CUs,
+// never an iGPU while a dGPU exists. Only RDNA2 dGPUs (gfx1030-1032) unless allow_any. Env NR_HIP_DEVICE=n forces device n, -1 ignores the LUID (tests).
+static unsigned char g_luid[8]; static bool g_haveLuid = false; static int g_allowAny = 0;
+NR_API void nr_select_device(const void* luid, int allow_any) { g_haveLuid = luid != nullptr; if (luid) memcpy(g_luid, luid, 8); g_allowAny = allow_any; }
+static bool is_igpu(const hipDeviceProp_t& p) {
+  static const char* ig[] = {"gfx1035", "gfx1036", "gfx1037", "gfx1103", "gfx1150", "gfx1151", "gfx1152", "gfx90c", "gfx902", "gfx909"};
+  for (auto a : ig) if (!strncmp(p.gcnArchName, a, strlen(a)) && !isalnum((unsigned char)p.gcnArchName[strlen(a)])) return true;
+  return p.integrated != 0;
+}
+static int pick_device(char* err, int errlen) {
+  int n = 0; if (hipGetDeviceCount(&n) != hipSuccess || n < 1) { snprintf(err, errlen, "no HIP device"); return -1; }
+  int pick = -1, best = -1, bestCu = -1;
+  for (int i = 0; i < n; i++) {
+    hipDeviceProp_t p{}; if (hipGetDeviceProperties(&p, i) != hipSuccess) continue;
+    const bool m = g_haveLuid && !memcmp(p.luid, g_luid, 8) && !(getenv("NR_HIP_DEVICE") && atoi(getenv("NR_HIP_DEVICE")) < 0);   // -1: simulate a LUID mismatch (tests)
+    rlog("runtime: HIP device %d: %s (%s), %d CUs, %zu MB%s%s", i, p.name, p.gcnArchName, p.multiProcessorCount, p.totalGlobalMem >> 20, is_igpu(p) ? ", integrated" : "", m ? " <- LUID matches the D3D12 device" : "");
+    if (m && pick < 0) pick = i;
+    const int cu = is_igpu(p) ? -1 : p.multiProcessorCount; if (cu > bestCu) { bestCu = cu; best = i; }
+  }
+  if (const char* e = getenv("NR_HIP_DEVICE"); e && atoi(e) >= 0) { pick = atoi(e); rlog("runtime: NR_HIP_DEVICE=%d forces the device", pick); if (pick < 0 || pick >= n) { snprintf(err, errlen, "NR_HIP_DEVICE=%d out of range (%d devices)", pick, n); return -1; } }
+  else if (pick < 0) {
+    if (bestCu < 0) { snprintf(err, errlen, "only integrated GPUs found - NR stays off"); return -1; }
+    pick = best; rlog("runtime: %s - using HIP device %d (dGPU with the most CUs)", g_haveLuid ? "no HIP device matches the D3D12 adapter LUID" : "no D3D12 adapter LUID given", pick);
+  }
+  hipDeviceProp_t p{}; hipGetDeviceProperties(&p, pick);
+  const bool ok = !is_igpu(p) && (!strncmp(p.gcnArchName, "gfx1030", 7) || !strncmp(p.gcnArchName, "gfx1031", 7) || !strncmp(p.gcnArchName, "gfx1032", 7));
+  if (!ok && !g_allowAny) { snprintf(err, errlen, "GPU %s (%s) not supported (RDNA2 dGPU gfx1030-1032 required; allow_any_gpu=1 in the ini overrides)", p.name, p.gcnArchName); return -1; }
+  return pick;
+}
+static void use_dev(nr_ctx* c) { if (c) hipSetDevice(c->devid); }
 static const size_t kStrOff0 = 0x28, kStrOff1 = 0x48;
 static const size_t PAD = 1 << 16;
 #define FAIL(...) do { snprintf(err, errlen, __VA_ARGS__); nr_destroy(c); return nullptr; } while (0)
@@ -81,29 +118,28 @@ static bool upload_arena(nr_ctx* c) {   // pristine arena between two 0xA5 guard
 #endif
   }
   if (a.size() != c->arena) return false;
-  // weights.map: the release ships no vendor weights; copy them by record name from the WEIGHTS_HT resource of the
+  // weights.map: the release ships no vendor weights; copy them by record name from the WEIGHTS_HT (or weights.map 'res') resource of the
   // user's nvngx_dlssnr.dll (next to the data dir), so any DLL build carrying the same weights works.
-  // Record: u64 name_len, name, u64, u64, u64 D, u32 1, data[D], 20-byte trailer (see rdna2/emu/weights_ht.py).
+  // weights.map: "fnv <hash> <count>", then "<arena offset> <record name> <bytes>" per record (make_release_dir.py).
 #ifdef _WIN32
   if (FILE* m = fopen((c->dir + "/weights.map").c_str(), "r")) {
-    std::map<std::string, std::pair<const uint8_t*, uint64_t>> rec;
-    HMODULE dll = nullptr;   // beside the data dir, or one level up (nr_data\<W>x<H>\ step dirs)
-    for (const char* up : {"/../", "/../../"}) if (!dll) dll = LoadLibraryExA((c->dir + up + "nvngx_dlssnr.dll").c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
-    HRSRC r = dll ? FindResourceA(dll, "WEIGHTS_HT", MAKEINTRESOURCEA(10)) : nullptr;
-    const uint8_t* b = r ? (const uint8_t*)LockResource(LoadResource(dll, r)) : nullptr; uint64_t sz = r ? SizeofResource(dll, r) : 0, o = 8;
-    while (b && o + 8 <= sz) {
-      uint64_t L, D; memcpy(&L, b + o, 8); if (o + 8 + L + 28 > sz) break;
-      std::string nm((const char*)b + o + 8, L); memcpy(&D, b + o + 8 + L + 16, 8);
-      o += 8 + L + 28; if (o + D + 20 > sz) break; rec[nm] = {b + o, D}; o += D + 20;
-    }
+    struct E { unsigned long long ao, n; bool done; }; std::multimap<std::string, E> want_rec; std::vector<std::multimap<std::string, E>::iterator> order;
+    char res[64] = "WEIGHTS_HT"; long at = ftell(m);   // optional first line "res <name>" (310.9 small model: WEIGHTS_CC_SMALL_FP8, same framing)
+    if (fscanf(m, "res %63s ", res) != 1) fseek(m, at, SEEK_SET);
     unsigned long long want = 0, h = 0xcbf29ce484222325ull, ao, n; int cnt = 0; char nm[256];
-    bool ok = !rec.empty() && fscanf(m, "fnv %llu %d", &want, &cnt) == 2;
-    for (int i = 0; ok && i < cnt; i++) {
-      ok = fscanf(m, "%llu %255s %llu", &ao, nm, &n) == 3 && rec.count(nm) && rec[nm].second == n && ao + n <= a.size();
-      if (ok) memcpy(a.data() + ao, rec[nm].first, n);
-      for (unsigned long long k = 0; ok && k < n; k++) h = (h ^ a[ao + k]) * 0x100000001b3ull;
+    bool ok = fscanf(m, "fnv %llu %d", &want, &cnt) == 2;
+    for (int i = 0; ok && i < cnt; i++)
+      if ((ok = fscanf(m, "%llu %255s %llu", &ao, nm, &n) == 3 && ao + n <= a.size())) order.push_back(want_rec.insert({nm, {ao, n, false}}));
+    fclose(m);
+    // nvngx_dlssnr.dll beside the data dir, or up to three levels up (nr_data\<W>x<H>\ and nr_data\<model>\<W>x<H>\ step dirs)
+    for (const char* up : {"/../", "/../../", "/../../../"})
+      if (ok && nr_weights_ht(c->dir + up + "nvngx_dlssnr.dll", res, [&](const std::string& r, const uint8_t* d, uint64_t dn) {
+            auto rg = want_rec.equal_range(r);
+            for (auto it = rg.first; it != rg.second; ++it) if (it->second.n == dn) { memcpy(a.data() + it->second.ao, d, dn); it->second.done = true; } })) break;
+    for (auto it : order) {
+      ok = ok && it->second.done;
+      for (unsigned long long k = 0; ok && k < it->second.n; k++) h = (h ^ a[it->second.ao + k]) * 0x100000001b3ull;
     }
-    fclose(m); if (dll) FreeLibrary(dll);
     if (!ok || h != want) return false;   // missing nvngx_dlssnr.dll or one with different weights
   }
 #endif
@@ -147,7 +183,8 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
   c->off_dst = num("off_dst"); c->dst_size = num("dst_size"); c->vit_lo = (int)num("vit_lo"); c->vit_hi = (int)num("vit_hi");
   if (!bn && c->vit_every > 1 && num("off_vitres") == num("off_headb")) FAIL("vit_every>1 needs data generated with VIT_OWN=1");
 
-  hipDeviceProp_t p{}; HK(hipGetDeviceProperties(&p, 0));
+  c->devid = pick_device(err, errlen); if (c->devid < 0) { c->devid = 0; nr_destroy(c); return nullptr; }
+  HK(hipSetDevice(c->devid)); hipDeviceProp_t p{}; HK(hipGetDeviceProperties(&p, c->devid));
   { size_t fr = 0, tot = 0; hipMemGetInfo(&fr, &tot); int rv = 0, dv = 0; hipRuntimeGetVersion(&rv); hipDriverGetVersion(&dv);
     rlog("runtime: build %s | GPU %s (%s), %d CUs (HIP count, WGPs on RDNA), VRAM %zu MB total / %zu MB free | HIP runtime %d, driver %d",
          NR_BUILD_ID, p.name, p.gcnArchName, p.multiProcessorCount, tot >> 20, fr >> 20, rv, dv);
@@ -161,6 +198,14 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
   FILE* f = fopen((c->dir + "/manifest.txt").c_str(), "r"); if (!f) FAIL("no manifest.txt");
   { std::string m; if (!nr_load_overrides(c->dir + "/manifest.txt", c->ovr, m)) { fclose(f); FAIL("%s", m.c_str()); } }
   std::map<std::string, hipModule_t> mods; char line[1024];
+  // int8_swin (opt-in, meta int8_swin=1 or env NR_INT8_SWIN=1/0): a native swin step <sym> whose module also exports <sym>_i8
+  // and <sym>_i8_prep runs <sym>_i8. The prep runs once per weight record (kernarg +0x10) at load and fills a 1 MiB buffer
+  // that goes to kernarg +0xa0 (VarParams.scratch, null for native kernels).
+  bool i8 = kv.count("int8_swin") && atoi(kv["int8_swin"].c_str());
+  { char e[8]; if (GetEnvironmentVariableA("NR_INT8_SWIN", e, sizeof e)) i8 = atoi(e) != 0; }
+  std::map<uint64_t, void*> i8rec;
+  if (i8) rlog("int8_swin: on (swin MLP expand on int8 dot4 where the module has _i8 kernels)");
+  const int pre_i = kv.count("pre_step") ? (int)num("pre_step") : -1, post_i = kv.count("post_step") ? (int)num("post_step") : -1;
   while (fgets(line, sizeof line, f)) {
     if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
     std::string s(line); while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
@@ -168,8 +213,12 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
     for (;;) { size_t q = s.find('|', pos); if (q == std::string::npos) { t.push_back(s.substr(pos)); break; } t.push_back(s.substr(pos, q - pos)); pos = q + 1; }
     if (t.size() != 7 && t.size() != 8) { fclose(f); FAIL("bad manifest line: %s", line); }
     t[0] = rel(c->dir, t[0]);
-    if (!mods.count(t[0])) { hipModule_t m; hipError_t e = load_mod(c, t[0], &m); if (e != hipSuccess) { fclose(f); FAIL("hipModuleLoad %s: %s", t[0].c_str(), hipGetErrorString(e)); } mods[t[0]] = m; c->mods.push_back(m); }
-    Step st; st.pre = t[1].find("k_pre_block") != std::string::npos; st.post = t[1].find("k_post_block") != std::string::npos; hipError_t e = hipModuleGetFunction(&st.fn, mods[t[0]], t[1].c_str()); if (e != hipSuccess) { fclose(f); FAIL("no symbol %s", t[1].c_str()); }
+    Step st; const int si = (int)c->steps.size();   // pre/post: by step index from meta (pre_step/post_step, tools/build_plan.py), else by symbol name
+    st.pre = pre_i >= 0 ? si == pre_i : t[1].find("k_pre_block") != std::string::npos; st.post = post_i >= 0 ? si == post_i : t[1].find("k_post_block") != std::string::npos;
+    if (!c->ovr.count(t[1])) {   // overridden steps never touch the manifest's module (it need not exist)
+      if (!mods.count(t[0])) { hipModule_t m; hipError_t e = load_mod(c, t[0], &m); if (e != hipSuccess) { fclose(f); FAIL("hipModuleLoad %s: %s", t[0].c_str(), hipGetErrorString(e)); } mods[t[0]] = m; c->mods.push_back(m); }
+      st.mod = mods[t[0]]; if (hipModuleGetFunction(&st.fn, mods[t[0]], t[1].c_str()) != hipSuccess) { fclose(f); FAIL("no symbol %s", t[1].c_str()); }
+    }
     size_t off = strtoull(t[2].c_str(), nullptr, 10), len = strtoull(t[3].c_str(), nullptr, 10);
     if (off + len > kab.size()) { fclose(f); FAIL("kernarg out of range"); }
     st.ka.assign(kab.begin() + off, kab.begin() + off + len);
@@ -178,27 +227,72 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
       if (v >= c->base && v < c->base + c->arena) { v = c->dev + (v - c->base); memcpy(st.ka.data() + o, &v, 8); }
     }
     st.gx = atoi(t[4].c_str()); st.gy = atoi(t[5].c_str()); st.thr = atoi(t[6].c_str()); st.gz = t.size() == 8 ? atoi(t[7].c_str()) : 1;
+    hipFunction_t f8, p8;
+    if (i8 && st.ka.size() >= 0xa8 && hipModuleGetFunction(&f8, mods[t[0]], (t[1] + "_i8").c_str()) == hipSuccess &&
+        hipModuleGetFunction(&p8, mods[t[0]], (t[1] + "_i8_prep").c_str()) == hipSuccess) {
+      uint64_t w; memcpy(&w, st.ka.data() + 0x10, 8);
+      void*& b = i8rec[w];
+      if (!b) {   // ponytail: fixed 1 MiB per record (C = 256 needs 4*C*C + 16*C); size it from the module if wider swins come
+        HK(hipMalloc(&b, 1u << 20)); c->i8bufs.push_back(b);
+        std::vector<uint8_t> k = st.ka; memcpy(k.data() + 0xa0, &b, 8); size_t sz = k.size();
+        void* cfg[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, k.data(), HIP_LAUNCH_PARAM_BUFFER_SIZE, &sz, HIP_LAUNCH_PARAM_END};
+        HK(hipModuleLaunchKernel(p8, 16, 1, 1, 256, 1, 1, 0, nullptr, nullptr, cfg)); HK(hipDeviceSynchronize());
+      }
+      memcpy(st.ka.data() + 0xa0, &b, 8); st.fn = f8; t[1] += "_i8";
+    }
     auto ov = c->ovr.find(t[1]);
     if (ov != c->ovr.end()) {   // swap in the native kernel; its kernarg is rebuilt from the original one (also after strength patches)
       NrOverride& o = ov->second; st.ov = &o;
       o.mod = rel(c->dir, o.mod);
       if (!mods.count(o.mod)) { hipModule_t m; hipError_t e = load_mod(c, o.mod, &m); if (e != hipSuccess) { fclose(f); FAIL("hipModuleLoad %s: %s", o.mod.c_str(), hipGetErrorString(e)); } mods[o.mod] = m; c->mods.push_back(m); }
-      if (hipModuleGetFunction(&st.fn, mods[o.mod], o.sym.c_str()) != hipSuccess) { fclose(f); FAIL("no symbol %s", o.sym.c_str()); }
+      st.mod = mods[o.mod]; if (hipModuleGetFunction(&st.fn, mods[o.mod], o.sym.c_str()) != hipSuccess) { fclose(f); FAIL("no symbol %s", o.sym.c_str()); }
       st.gx = nr_grid(o.g[0], st.gx); st.gy = nr_grid(o.g[1], st.gy); st.gz = nr_grid(o.g[2], st.gz); st.thr = nr_grid(o.g[3], st.thr);
       st.src.swap(st.ka); if (!nr_apply_override(o, st.src, st.ka)) { fclose(f); FAIL("override for %s copies past the original kernarg", t[1].c_str()); }
     }
     if (st.pre && (st.ov ? st.src : st.ka).size() >= kStrOff1 + 8) {          // remember the data dir's own values as the current strength
-      const auto& k = st.ov ? st.src : st.ka; memcpy(&c->str[0], k.data() + kStrOff0, 8); memcpy(&c->str[2], k.data() + kStrOff1, 8);
+      const auto& k = st.ov ? st.src : st.ka; memcpy(&c->str[0], k.data() + kStrOff0, 8); memcpy(&c->str[2], k.data() + kStrOff1, 8); memcpy(&c->str[4], k.data() + kStrOff0 + 8, 4);
       memcpy(c->pend, c->str, sizeof c->str);
     }
     if (st.post) { const auto& k = st.ov ? st.src : st.ka; memcpy(&c->netout, k.data() + 0x10, 8); memcpy(&c->ph, k.data() + 0x20, 4); memcpy(&c->pw, k.data() + 0x24, 4); }
     c->names.push_back(st.ov ? st.ov->sym : t[1]); c->steps.push_back(std::move(st));
   }
   fclose(f);
+  // Load-time prep, for manifest natives and overrides alike: a module may export <sym>_prep. It runs with the step's
+  // kernarg, grid 1 x 256 threads. Two kinds:
+  //  * module global g_w16_last (swin_var's f16 weight shadow): once per weight record (kernarg +0x10); the pointer it
+  //    leaves goes to kernarg +0xa0 (original/nr_params layout) of every step using that record.
+  //  * otherwise (post-noweights: weights decoded into the module's __constant__ tables): once per module+symbol.
+  { std::map<uint64_t, uint64_t> done; std::set<std::string> prepped;
+    for (size_t si = 0; si < c->steps.size(); si++) {
+      Step& st = c->steps[si]; const std::string& sym = c->names[si]; hipFunction_t pf; hipDeviceptr_t gp; size_t gs;
+      if (sym.size() > 3 && !sym.compare(sym.size() - 3, 3, "_i8")) continue;   // int8_swin steps: their _i8_prep already ran per record above
+      if (!st.mod || hipModuleGetFunction(&pf, st.mod, (sym + "_prep").c_str()) != hipSuccess) continue;
+      size_t sz = st.ka.size(); void* cfg[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, st.ka.data(), HIP_LAUNCH_PARAM_BUFFER_SIZE, &sz, HIP_LAUNCH_PARAM_END};
+      if (hipModuleGetGlobal(&gp, &gs, st.mod, "g_w16_last") == hipSuccess) {
+        std::vector<uint8_t>& k = st.ov ? st.src : st.ka; if (k.size() < 0xa8) continue;
+        uint64_t w; memcpy(&w, k.data() + 0x10, 8);
+        if (!done.count(w)) {
+          uint64_t v = 0;
+          HK(hipModuleLaunchKernel(pf, 1, 1, 1, 256, 1, 1, 0, nullptr, nullptr, cfg));
+          HK(hipMemcpy(&v, (void*)gp, 8, hipMemcpyDeviceToHost));
+          if (!v) FAIL("%s_prep: weight pool full", sym.c_str());
+          done[w] = v;
+        }
+        memcpy(k.data() + 0xa0, &done[w], 8); if (st.ov) nr_apply_override(*st.ov, st.src, st.ka);
+      } else if (prepped.insert(std::to_string((uintptr_t)st.mod) + "|" + sym).second) {
+        HK(hipModuleLaunchKernel(pf, 1, 1, 1, 256, 1, 1, 0, nullptr, nullptr, cfg)); HK(hipDeviceSynchronize());
+      }
+    }
+  }
   if (bn) {   // bottleneck reuse: also skip the c512 encoder stage + k_final_head before the ViT and k_dec_upsample + c512 decoder stage after it
-    c->vit_lo -= 33; c->vit_hi += 33;   // (32 dispatches each side + 1). Their outputs live in own arena buffers that nothing later overwrites.
+    if (kv.count("bn_lo") && kv.count("bn_hi")) {   // the plan says where the bottleneck is (gen_runtime_data/new-model-pipeline and build_plan.py data)
+      c->vit_lo = (int)num("bn_lo"); c->vit_hi = (int)num("bn_hi");
+      if (c->vit_lo < 0 || c->vit_lo >= c->vit_hi || c->vit_hi >= (int)c->names.size()) FAIL("bottleneck reuse: bad bn_lo/bn_hi %d..%d", c->vit_lo, c->vit_hi);
+    } else {   // older data dirs: 310.8 layout, 32 dispatches each side + 1
+    c->vit_lo -= 33; c->vit_hi += 33;   // Their outputs live in own arena buffers that nothing later overwrites.
     if (c->vit_lo < 0 || c->vit_hi >= (int)c->names.size() || c->names[c->vit_lo].find("ffwd2") == std::string::npos || c->names[c->vit_hi].find("swin") == std::string::npos)
       FAIL("bottleneck reuse: unexpected dispatch layout around %d..%d", c->vit_lo, c->vit_hi);
+    }
   }
   if (c->pw) HK(hipMalloc(&c->hist, (size_t)c->pw * c->ph * 12));   // ~8 MB; filled after every frame so the first hist_valid frame already has history
   HK(hipEventCreate(&c->e0)); HK(hipEventCreate(&c->e1));
@@ -236,12 +330,21 @@ static bool hist_end(nr_ctx* c, hipStream_t s) {   // RGBA f32 (16 B/px) -> RGB 
 static void apply_strength(nr_ctx* c) {                    // between frames, from the run thread: patch the pre-block kernarg copies
   std::lock_guard<std::mutex> g(c->mx); if (!c->dirty) return;
   for (auto& st : c->steps) { auto& k = st.ov ? st.src : st.ka;   // strength offsets are in the original layout
-    if (st.pre && k.size() >= kStrOff1 + 8) { memcpy(k.data() + kStrOff0, &c->pend[0], 8); memcpy(k.data() + kStrOff1, &c->pend[2], 8); if (st.ov) nr_apply_override(*st.ov, st.src, st.ka); } }
+    if (st.pre && k.size() >= kStrOff1 + 8) { memcpy(k.data() + kStrOff0, &c->pend[0], 8); memcpy(k.data() + kStrOff1, &c->pend[2], 8); memcpy(k.data() + kStrOff0 + 8, &c->pend[4], 4); if (st.ov) nr_apply_override(*st.ov, st.src, st.ka); } }
   memcpy(c->str, c->pend, sizeof c->str); c->dirty = false;
 }
 NR_API int nr_set_strength(nr_ctx* c, float tone, float structure, float a, float b) {
   if (!c) return 1; if (!(tone >= 0 && tone <= 64 && structure >= 0 && structure <= 64 && a >= 0 && a <= 64 && b >= 0 && b <= 64)) return 2;   // rejects NaN and absurd values
   std::lock_guard<std::mutex> g(c->mx); c->pend[0] = tone; c->pend[1] = structure; c->pend[2] = a; c->pend[3] = b; c->dirty = true; return 0;
+}
+// The host's conditioning, as NVIDIA's library takes it (dlssnr_call_create / evaluate_v2; defaults 0, 1, 1, -1, auto mask on):
+// pre-block features 10 style/128, 11 local tone, 12-14 the structure / skin / other triple (auto mask: 1, skin, structure;
+// without it: structure, -1, -1). Matches dlssnr-pytorch Controls.conditioning and OpenDLSS-NR's preprocess.
+NR_API int nr_set_conditioning(nr_ctx* c, int style, float tone, float structure, float skin, int auto_mask) {
+  if (!c) return 1; if (!(tone >= 0 && tone <= 2 && structure >= 0 && structure <= 2 && skin >= -1 && skin <= 2) || style < 0 || style > 2) return 2;
+  const float sk = skin < 0 ? structure : skin;
+  std::lock_guard<std::mutex> g(c->mx); c->pend[0] = tone; c->pend[1] = auto_mask ? 1.f : structure; c->pend[2] = auto_mask ? sk : -1.f; c->pend[3] = auto_mask ? structure : -1.f;
+  c->pend[4] = style / 128.f; c->dirty = true; return 0;
 }
 NR_API int nr_set_intensity(nr_ctx* c, float i) {          // user-facing 0..2 (measured on the real frame, see own/STRENGTH_RUNTIME.md): 0 = effect off, 1 = default, 2 = largest clean setting
   if (!(i >= 0)) return 2; if (i > 2.f) i = 2.f;                // beyond 2 the picture breaks up (blocky noise, brightness shift), so it is clamped
@@ -270,6 +373,7 @@ static bool launch_all(nr_ctx* c, hipStream_t st) { return launch_range(c, st, 0
 
 NR_API int nr_run(nr_ctx* c, const void* in, void* out, float* gpu_ms) { return nr_run2(c, in, out, gpu_ms, 0); }
 NR_API int nr_run2(nr_ctx* c, const void* in, void* out, float* gpu_ms, int hist_valid) {
+  use_dev(c);
   apply_strength(c);
   if (!hist_begin(c, nullptr, hist_valid, nullptr)) return 5;
   if (hipMemcpy(c->d + PAD + c->off_src, in, c->src_size, hipMemcpyHostToDevice) != hipSuccess) return 1;
@@ -295,7 +399,7 @@ NR_API int nr_dbg_steps(nr_ctx* c, int n) { if (!c) return 1; c->dbg_n = n; retu
 NR_API int nr_dbg_read(nr_ctx* c, unsigned long long off, unsigned long long size, void* dst) {
   if (!c || off + size > c->arena) return 1; return hipMemcpy(dst, c->d + PAD + off, size, hipMemcpyDeviceToHost) != hipSuccess;
 }
-NR_API int nr_reset(nr_ctx* c) { c->frame = 0; c->have_prev = false; return upload_arena(c) ? 0 : 1; }
+NR_API int nr_reset(nr_ctx* c) { use_dev(c); c->frame = 0; c->have_prev = false; return upload_arena(c) ? 0 : 1; }
 
 static void ext_thread(nr_ctx* c);
 #ifdef _WIN32
@@ -307,19 +411,36 @@ static bool import_buf(void* h, size_t alloc, size_t size, hipExternalMemory_t* 
   return true;
 }
 #endif
+// hip_cu_mask: "0x..." = hex mask (bit i = CU i), else a percentage of the CUs. A percentage takes the LOWEST bits: the ROCr CU-mask
+// convention spreads consecutive bits round-robin over shader engines / arrays (Linux KFD mqd_symmetrically_map_cu_mask).
+// gfx10+ masks count CUs (2 per WGP): 6900 XT = 80 bits although multiProcessorCount says 40 (WGPs).
+static std::vector<uint32_t> cu_mask(const char* v, int dev) {
+  int mp = 0; hipDeviceGetAttribute(&mp, hipDeviceAttributeMultiprocessorCount, dev); hipDeviceProp_t pr = {}; hipGetDeviceProperties(&pr, dev);
+  const int ncu = (strncmp(pr.gcnArchName, "gfx1", 4) ? 1 : 2) * (mp > 0 ? mp : 1); std::vector<uint32_t> m((ncu + 31) / 32, 0);
+  if (v[0] == '0' && (v[1] | 32) == 'x') { const char* e = v + strlen(v); const char* b = v + 2;   // hex, low word = last 8 digits
+    for (size_t w = 0; e > b && w < m.size(); w++) { const char* s = e - b > 8 ? e - 8 : b; m[w] = (uint32_t)strtoul(std::string(s, e).c_str(), nullptr, 16); e = s; }
+    return m; }
+  int k = (int)lround(atof(v) * ncu / 100.0); k = k < 1 ? 1 : k > ncu ? ncu : k; for (int i = 0; i < k; i++) m[i / 32] |= 1u << (i % 32);
+  return m;
+}
 NR_API int nr_ext_open(nr_ctx* c, void* io, unsigned long long io_alloc, unsigned long long io_size, unsigned long long out_off,
                        unsigned long long flag_off, void* sig, unsigned long long sig_alloc, unsigned long long sig_size, char* err, int errlen) {
+  use_dev(c);
 #ifdef _WIN32
   if (!c || c->s) { snprintf(err, errlen, "no context or already open"); return 1; }
   if (out_off < c->src_size || out_off + c->dst_size > flag_off || flag_off + 4 > io_size || sig_size < 4) { snprintf(err, errlen, "io layout too small"); return 2; }
   if (!import_buf(io, io_alloc, io_size, &c->em_io, &c->io) || !import_buf(sig, sig_alloc, sig_size, &c->em_sig, &c->sig)) {
     snprintf(err, errlen, "hipImportExternalMemory (D3D12Resource) failed"); nr_ext_close(c, 0); return 4; }
   c->out_off = out_off; c->flag_off = flag_off; c->io_size = io_size;
-  int prio = 0; { char pv[8] = ""; if (GetEnvironmentVariableA("NR_HIP_PRIORITY", pv, sizeof pv) && !_stricmp(pv, "low")) { int lo = 0, hi = 0; if (hipDeviceGetStreamPriorityRange(&lo, &hi) == hipSuccess) prio = lo; } }   // DLL hip_priority=low: least priority, the game's work first
-  if (hipStreamCreateWithPriority(&c->s, hipStreamNonBlocking, prio) != hipSuccess || hipStreamCreateWithFlags(&c->ps, hipStreamNonBlocking) != hipSuccess ||
+  int prio = 0; char pv[8] = ""; { int lo = 0, hi = 0; if (GetEnvironmentVariableA("NR_HIP_PRIORITY", pv, sizeof pv) && hipDeviceGetStreamPriorityRange(&lo, &hi) == hipSuccess) prio = !_stricmp(pv, "low") ? lo : !_stricmp(pv, "high") ? hi : 0; }   // DLL hip_priority=low|high
+  std::vector<uint32_t> cum; { char mv[40] = ""; if (GetEnvironmentVariableA("NR_HIP_CU_MASK", mv, sizeof mv)) cum = cu_mask(mv, c->devid); }   // DLL hip_cu_mask (percent or 0x hex)
+  if ((cum.empty() ? hipStreamCreateWithPriority(&c->s, hipStreamNonBlocking, prio) : hipExtStreamCreateWithCUMask(&c->s, (uint32_t)cum.size(), cum.data())) != hipSuccess ||
+      hipStreamCreateWithFlags(&c->ps, hipStreamNonBlocking) != hipSuccess ||
       hipHostMalloc((void**)&c->hf, 4) != hipSuccess) { snprintf(err, errlen, "hipStreamCreate failed"); nr_ext_close(c, 0); return 5; }
   c->th = std::thread(ext_thread, c);
-  if (prio) rlog("nr_ext: HIP stream priority %d (low)", prio);
+  if (prio && cum.empty()) rlog("nr_ext: HIP stream priority %d (%s)", prio, !_stricmp(pv, "high") ? "high = greatest" : "low = least");
+  if (!cum.empty()) { std::string h; char x[12]; for (size_t i = cum.size(); i--;) { snprintf(x, sizeof x, "%08x", cum[i]); h += x; }
+    rlog("nr_ext: HIP stream CU mask 0x%s (the Windows/PAL driver accepts but ignores CU masks - probe/cumask_probe.hip)", h.c_str()); }
   return 0;
 #else
   snprintf(err, errlen, "D3D12 interop is Windows only"); return 9;
@@ -350,6 +471,7 @@ static void self_check(nr_ctx* c) {
 }
 static const int kExtWaitMs = 500;   // flag_in wait bound; longer than the D3D12 spin bound, so a late frame is dropped on both sides
 static void ext_thread(nr_ctx* c) {
+  use_dev(c);
   for (;;) {
     unsigned seq; int hv, part;
     { std::unique_lock<std::mutex> g(c->mx); c->cv.wait(g, [&] { return c->stop || !c->q.empty(); }); if (c->stop) return; seq = c->q.front().seq; hv = c->q.front().hv; part = c->q.front().part; c->q.pop_front(); }
@@ -399,6 +521,7 @@ NR_API int nr_ext_enqueue3(nr_ctx* c, unsigned seq, int max_inflight, int hist_v
 // arena only sees two extra frames on its pristine input before the first real one), or fixed by the caller. Skipping frames (vit_every)
 // get their own k over the dispatches they run.
 NR_API int nr_ext_split(nr_ctx* c, int* k_full, int* k_skip, float* ms) {
+  use_dev(c);
   if (!c || !c->s || !k_full || !k_skip) return 1;
   const int n = (int)c->steps.size(); std::vector<double> t(n, 0.0);
   if (*k_full <= 0 || *k_skip <= 0) {
@@ -422,20 +545,24 @@ NR_API int nr_ext_split(nr_ctx* c, int* k_full, int* k_skip, float* ms) {
   return 0;
 }
 NR_API int nr_ext_close(nr_ctx* c, int) {
+  use_dev(c);
   if (!c) return 0;
   if (c->th.joinable()) { { std::lock_guard<std::mutex> g(c->mx); c->stop = true; c->q.clear(); } c->cv.notify_all(); c->th.join(); }   // bounded: one poll <= kExtWaitMs
   if (c->s) { hipStreamSynchronize(c->s); hipStreamDestroy(c->s); c->s = nullptr; }
   if (c->ps) { hipStreamDestroy(c->ps); c->ps = nullptr; }
   if (c->hf) { hipHostFree(c->hf); c->hf = nullptr; }
+  if (c->io) hipFree(c->io); if (c->sig) hipFree(c->sig);   // mapped buffers of imported memory need their own free (CUDA semantics), else ~20 MB leak per open
   if (c->em_io) hipDestroyExternalMemory(c->em_io); if (c->em_sig) hipDestroyExternalMemory(c->em_sig);
   c->em_io = c->em_sig = nullptr; c->io = c->sig = nullptr; c->hin = c->hout = 0; c->stop = false; c->inflight = 0; return 0;
 }
 
 NR_API void nr_destroy(nr_ctx* c) {
-  if (!c) return;
+  if (!c) return; use_dev(c);
   if (nr_ext_close(c, 2000)) return;   // GPU still busy with our memory: leak the context instead of freeing under it
   for (auto m : c->mods) hipModuleUnload(m);
   if (c->d) hipFree(c->d);
   if (c->hist) hipFree(c->hist);
+  if (c->e0) hipEventDestroy(c->e0); if (c->e1) hipEventDestroy(c->e1); for (auto e : c->prof) if (e) hipEventDestroy(e);
+  for (auto b : c->i8bufs) hipFree(b);
   delete c;
 }

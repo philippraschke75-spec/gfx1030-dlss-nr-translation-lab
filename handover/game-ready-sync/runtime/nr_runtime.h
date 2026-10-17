@@ -34,6 +34,8 @@ NR_API int nr_get_strength(nr_ctx*, float* tone, float* structure, float* a, flo
 // One-knob version: intensity 0..2 (clamped). 0 = (0,0,0,0) effect nearly off; 0..1 scales (a,b) from 0 to 1; 1 = default (0,0,1,1);
 // 1..2 moves linearly to (4,4,8,8) = the largest clean look (~3x the effect, +37% local contrast). Returns 2 for NaN/negative.
 NR_API int nr_set_intensity(nr_ctx*, float intensity);
+// NVIDIA's conditioning (style 0..2, local tone / structure 0..2, skin -1 = follow structure, auto mask); intensity is the host's output blend.
+NR_API int nr_set_conditioning(nr_ctx*, int style, float tone, float structure, float skin, int auto_mask);
 NR_API void nr_destroy(nr_ctx*);
 
 // ---- D3D12 interop: GPU-side per-frame sync, no host copies (see handover/game-ready-sync/DESIGN.md).
@@ -78,3 +80,6 @@ NR_API int nr_dbg_steps(nr_ctx*, int n);
 NR_API int nr_dbg_read(nr_ctx*, unsigned long long off, unsigned long long size, void* dst);
 // Log sink for the hardware line at create and the output self-check (default stderr). A failed self-check makes nr_ext_enqueue* return -2.
 NR_API void nr_set_log(void (*cb)(const char*));
+// Optional, before nr_create: luid = the host's D3D12 adapter LUID (8 bytes, ID3D12Device::GetAdapterLuid) or NULL; allow_any = 1 runs on
+// GPUs other than RDNA2 dGPUs (gfx1030-1032). Without it nr_create picks the dGPU with the most CUs.
+NR_API void nr_select_device(const void* luid, int allow_any);
