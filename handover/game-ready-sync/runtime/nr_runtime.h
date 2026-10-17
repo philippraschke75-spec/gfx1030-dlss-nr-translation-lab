@@ -75,6 +75,10 @@ NR_API int nr_ext_enqueue2(nr_ctx*, unsigned seq, int max_inflight, int hist_val
 // k_skip for frames that skip dispatches with vit_every > 1). ms (nullable, 4 floats): measured part 1 / part 2 ms for full and skipping frames.
 NR_API int nr_ext_split(nr_ctx*, int* k_full, int* k_skip, float* ms);
 NR_API int nr_ext_enqueue3(nr_ctx*, unsigned seq, int max_inflight, int hist_valid, int part);
+// N-way split (additive): np parts (2..8); k_full / k_skip: np-1 split points each (> 0 fixed, <= 0 measured: ~1/np of the GPU time per part),
+// ms (nullable, 2*np floats): measured part times, full frames then skipping frames. enqueue3 part 1..np: part 1 = input + history + [0, k1),
+// part np = [k(np-1), n) + history out + output. nr_ext_split = nr_ext_splitn(np = 2).
+NR_API int nr_ext_splitn(nr_ctx*, int np, int* k_full, int* k_skip, float* ms);
 // Debug only: run the first n dispatches of each frame (0 = all); read arena bytes (offsets as in meta.json placements).
 NR_API int nr_dbg_steps(nr_ctx*, int n);
 NR_API int nr_dbg_read(nr_ctx*, unsigned long long off, unsigned long long size, void* dst);

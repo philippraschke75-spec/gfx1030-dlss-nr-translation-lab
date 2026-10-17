@@ -98,8 +98,8 @@ static void loadSettings() {
     GetPrivateProfileStringA("nr", "pass2_gain", "0.5", b, sizeof b, narrow(ini).c_str()); g_pass2Gain = (float)atof(b); g_pass2Gain = g_pass2Gain == g_pass2Gain ? (std::min)((std::max)(g_pass2Gain, 0.f), 1.f) : 0.5f;
     { const int i8 = (int)GetPrivateProfileIntA("nr", "int8_swin", -1, narrow(ini).c_str()); if (i8 >= 0) SetEnvironmentVariableA("NR_INT8_SWIN", i8 ? "1" : "0"); }   // int8 swin GEMMs; absent = the data dir's meta (build_plan: 1). nr_runtime reads it at nr_create
     { const int i8 = (int)GetPrivateProfileIntA("nr", "int8_prepost", -1, narrow(ini).c_str()); if (i8 >= 0) SetEnvironmentVariableA("NR_INT8_PREPOST", i8 ? "1" : "0"); }   // opt-in int8 post-block MLP; absent = meta (default off)
-    g_split = (int)GetPrivateProfileIntA("nr", "nr_split", 0, narrow(ini).c_str()) != 0;   // 1: the network in two halves over two frames (implies nr_every=2), output = last finished NR, warped
-    if (g_split) g_nrEvery = 2;
+    g_split = (int)GetPrivateProfileIntA("nr", "nr_split", 0, narrow(ini).c_str()); g_split = g_split <= 0 ? 0 : g_split == 1 ? 2 : (std::min)(g_split, 8);   // N >= 2: the network in N parts over N frames (1 = 2, as before), output = last finished NR, warped
+    if (g_split) g_nrEvery = g_split;
     GetPrivateProfileStringA("nr", "nr_split_k", "0", b, sizeof b, narrow(ini).c_str()); g_splitK[0] = g_splitK[1] = 0; sscanf_s(b, "%d,%d", &g_splitK[0], &g_splitK[1]);   // first dispatch of part 2 (full[,skipping] frames); 0 = measure
     { char m[16]; GetPrivateProfileStringA("nr", "busy_mode", "wait", m, sizeof m, narrow(ini).c_str()); g_busy = !_stricmp(m, "reuse"); }
     g_busyWaitMs = (int)GetPrivateProfileIntA("nr", "busy_wait_ms", 100, narrow(ini).c_str()); g_busyWaitMs = g_busyWaitMs < 0 ? 0 : g_busyWaitMs > 1000 ? 1000 : g_busyWaitMs;
@@ -129,6 +129,7 @@ typedef int (*P_extOpen)(nr_ctx*, void*, unsigned long long, unsigned long long,
 typedef int (*P_extEnqueue)(nr_ctx*, unsigned, int);
 typedef int (*P_extHist)(nr_ctx*, unsigned long long, unsigned long long); typedef int (*P_histLayout)(nr_ctx*, unsigned*, unsigned*); typedef int (*P_extEnqueue2)(nr_ctx*, unsigned, int, int);
 typedef int (*P_extEnqueue3)(nr_ctx*, unsigned, int, int, int); typedef int (*P_extSplit)(nr_ctx*, int*, int*, float*); static P_extEnqueue3 p_extEnqueue3; static P_extSplit p_extSplit;
+typedef int (*P_extSplitN)(nr_ctx*, int, int*, int*, float*); static P_extSplitN p_extSplitN;
 static void (*p_select)(const void*, int); static P_extOpen p_extOpen; static P_extEnqueue p_extEnqueue; static P_extHist p_extHist; static P_histLayout p_histLayout; static P_extEnqueue2 p_extEnqueue2;   // p_extHist: absent in an old runtime -> history off   // absent in an old nr_runtime.dll -> async path
 static bool loadRuntime() {
     if (p_create) return true;
@@ -138,7 +139,7 @@ static bool loadRuntime() {
     p_create = (P_create)GetProcAddress(m, "nr_create"); p_run = (P_run)GetProcAddress(m, "nr_run"); p_destroy = (P_destroy)GetProcAddress(m, "nr_destroy");
     if (!p_create || !p_run || !p_destroy) { p_create = nullptr; seterr("nr_runtime.dll lacks nr_create/nr_run/nr_destroy"); return false; }
     p_extOpen = (P_extOpen)GetProcAddress(m, "nr_ext_open"); p_extEnqueue = (P_extEnqueue)GetProcAddress(m, "nr_ext_enqueue"); p_extHist = (P_extHist)GetProcAddress(m, "nr_ext_history"); p_histLayout = (P_histLayout)GetProcAddress(m, "nr_hist_layout"); p_extEnqueue2 = (P_extEnqueue2)GetProcAddress(m, "nr_ext_enqueue2");
-    p_extEnqueue3 = (P_extEnqueue3)GetProcAddress(m, "nr_ext_enqueue3"); p_extSplit = (P_extSplit)GetProcAddress(m, "nr_ext_split");
+    p_extEnqueue3 = (P_extEnqueue3)GetProcAddress(m, "nr_ext_enqueue3"); p_extSplit = (P_extSplit)GetProcAddress(m, "nr_ext_split"); p_extSplitN = (P_extSplitN)GetProcAddress(m, "nr_ext_splitn");
     p_select = (void (*)(const void*, int))GetProcAddress(m, "nr_select_device");   // absent in an old runtime: it uses HIP device 0
     p_cond = (P_cond)GetProcAddress(m, "nr_set_conditioning");                   // absent in an old nr_runtime.dll: the conditioning baked into the data dir stays
     if (auto sl = (void (*)(void (*)(const char*)))GetProcAddress(m, "nr_set_log")) sl([](const char* s) { logf("%s", s); });   // hardware line + output self-check
@@ -263,14 +264,15 @@ static const char* kSyncHlsl =
 "  float4 i = bil(id.xy + 0.5, 0), d = sn(bil(id.xy + 0.5, outOff) - i); st.Store2(256 + o, uint2(pk(d.r, d.g), pk(d.b, 0)));\n"
 "  st.Store2(256 + W * H * 8 + o, uint2(pk(i.r, i.g), pk(i.b, depAt((id.xy + 0.5) / float2(W, H)))));\n"   // + the model input the edit belongs to (motion gate) and its depth
 "  if (id.x == 0 && id.y == 0) { st.Store(4, seq); st.Store(8, frame); } }\n"
-"float2 accAt(float2 q, uint f);\n"
+"float2 accAt(float2 q, uint f); float2 slotAt(float2 q, uint k);\n"
 "[numthreads(8,8,1)] void exp(uint3 id : SV_DispatchThreadID) {\n"
 "  uint FW = FWH & 0xFFFF, FH = FWH >> 16; if (id.x >= FW || id.y >= FH) return; float4 c = col[id.xy];\n"
-"  if (split != 0) {\n"   // nr_split: the last finished NR edit (st+256, job frame st[8]) moved to this frame: one frame by the vectors, two by vectors + acc of the frame before
-"    uint age = frame - st.Load(8); if ((int)(st.Load(4) - minSeq) < 0 || age == 0 || (split < 3 && age > split)) { put(id.xy, c); return; }\n"   // none since the reset yet / chain broken: live frame
+"  if (split != 0) {\n"   // nr_split: the last finished NR edit (st+256, job frame st[8]) moved to this frame: by this frame's vectors, + (bit 2) the acc chain of the frame before, + (bit 4) the anchor (job frame -> frame of the edit before); age expected by the CPU in bits 4+
+"    uint age = frame - st.Load(8); if ((int)(st.Load(4) - minSeq) < 0 || age == 0 || ((split & 8) == 0 && age != (split >> 4))) { put(id.xy, c); return; }\n"   // none since the reset yet / not the edit the CPU expects (spin timeout): live frame; bit 8: chain broken, vectors only, any age
 "    float2 uv = (id.xy + 0.5) / float2(FW, FH), pf = id.xy + 0.5;\n"   // frame px, same arithmetic as the mv reuse branch (age 1 is bit-identical to it)
 "    if (mvOn) { uint2 mn = uint2(mWH & 0xFFFF, mWH >> 16); pf = id.xy + 0.5 + mot[uint2(mBase & 0xFFFF, mBase >> 16) + min((uint2)(uv * mn), mn - 1)].xy * float2(mvSx, mvSy); }\n"
-"    if (age == 2 && split == 2) pf += accAt(pf / float2(FW, FH), frame - 1) * float2(FW, FH);\n"
+"    if (split & 2) pf += accAt(pf / float2(FW, FH), frame - 1) * float2(FW, FH);\n"
+"    if (split & 4) pf += slotAt(pf / float2(FW, FH), 5) * float2(FW, FH);\n"
 "    if (!all(pf == pf) || any(pf < 0.0) || any(pf >= float2(FW, FH))) { put(id.xy, c); return; }\n"   // from off screen: live frame
 "    float2 p = pf * float2(W, H) / float2(FW, FH); float3 e = stAt(p, 256).rgb; float4 o = stAt(p, 256 + W * H * 8); float3 a = abs(L(c) - o.rgb);\n"
 "    float wt = 1.0 - smoothstep(mLo, mHi, max(a.r, max(a.g, a.b)));\n"   // colour gate as mv reuse
@@ -311,13 +313,16 @@ static const char* kSyncHlsl =
 "  if (ok == 0) return; uint2 r = io.Load2(outOff + (id.y * W + id.x) * 8);\n"
 "  float3 p = Pf(float3(san(f16tof32(r.x & 0xFFFF)), san(f16tof32(r.x >> 16)), san(f16tof32(r.y & 0xFFFF))));\n"
 "  st.Store2(256 + 2 * W * H * 8 + (id.y * W + id.x) * 8, uint2(pk(p.r, p.g), pk(p.b, depAt((id.xy + 0.5) / float2(W, H))))); }\n"
-"float2 accAt(float2 q, uint f) {\n"   // nearest fetch of frame f's accumulated uv offset to the last NR frame (st, ping-pong by frame parity)
-"  uint2 p = (uint2)clamp(q * float2(W, H), 0.0, float2(W - 1, H - 1)); return asfloat(st.Load2(256 + (3 + (f & 1)) * W * H * 8 + (p.y * W + p.x) * 8)); }\n"
-"[numthreads(8,8,1)] void acc(uint3 id : SV_DispatchThreadID) {\n"   // in-between frame: acc_f(x) = m_f(x) + acc_{f-1}(x + m_f(x)) (acc of the NR frame itself = 0); histOk = 1 when f-1 was the NR frame
+"float2 slotAt(float2 q, uint k) {\n"   // nearest fetch of a model-size uv offset field in st slot k (3, 4: acc ping-pong by frame parity, 5: split anchor)
+"  uint2 p = (uint2)clamp(q * float2(W, H), 0.0, float2(W - 1, H - 1)); return asfloat(st.Load2(256 + k * W * H * 8 + (p.y * W + p.x) * 8)); }\n"
+"float2 accAt(float2 q, uint f) { return slotAt(q, 3 + (f & 1)); }\n"   // frame f's accumulated uv offset to the last NR frame
+"void accB(uint3 id, uint k) {\n"   // in-between frame: acc_f(x) = m_f(x) + acc_{f-1}(x + m_f(x)) (acc of the NR frame itself = 0); histOk = 1 when f-1 was the NR frame
 "  if (id.x >= W || id.y >= H) return; uint FW = FWH & 0xFFFF, FH = FWH >> 16; float2 uv = (id.xy + 0.5) / float2(W, H), m = 0;\n"
 "  if (hMv) { uint2 mn = uint2(mWH & 0xFFFF, mWH >> 16); m = mot[uint2(mBase & 0xFFFF, mBase >> 16) + min((uint2)(uv * mn), mn - 1)].xy * float2(mvSx, mvSy) / float2(FW, FH); }\n"
 "  if (histOk > 1) m += accAt(uv + m, frame - 1);\n"
-"  st.Store2(256 + (3 + (frame & 1)) * W * H * 8 + (id.y * W + id.x) * 8, asuint(m)); }\n"
+"  st.Store2(256 + k * W * H * 8 + (id.y * W + id.x) * 8, asuint(m)); }\n"
+"[numthreads(8,8,1)] void acc(uint3 id : SV_DispatchThreadID) { accB(id, 3 + (frame & 1)); }\n"
+"[numthreads(8,8,1)] void anc(uint3 id : SV_DispatchThreadID) { accB(id, 5); }\n"
 "void hwpB(uint3 id, uint age) {\n"
 "  uint PW = hPWH & 0xFFFF, PH = hPWH >> 16; if (id.x >= PW || id.y >= PH) return; uint o = histOff + (id.y * PW + id.x) * 12;\n"
 "  if (id.x >= W || id.y >= H) { io.Store3(o, uint3(0, 0, 0)); return; }\n"   // padding
@@ -348,6 +353,7 @@ struct Sync {                                       // D3D12 side of the sync pa
     unsigned seq = 0; unsigned busy = 0; unsigned ran = 0, rec = 0, reused = 0, minSeq = 1; unsigned frm = 0, frmOf[16] = {}, sinceNr = 0; bool warnedMv = false;
     ID3D12PipelineState *hwp = nullptr, *hst = nullptr, *acc = nullptr, *hwp2 = nullptr, *lat = nullptr; UINT64 histOff = 0, histOut = 0; float impScale = 0;   // k_import of the data dir: 0 = mode 0 (raw), else its +0x2c scale (mode != 0 tonemaps)
     unsigned waitFails = 0; unsigned padW = 0, padH = 0, lastNrFrm = 0xFFFFFFF0u, accFrm = 0xFFFFFFF0u; bool histOn = false;   // history=1   // fg: frame counter, frame of each in-flight seq (edit age)
+    ID3D12PipelineState* anc = nullptr; unsigned np = 0, ancFrm = 0xFFFFFFF0u, ancTo = 0xFFFFFFF0u, ageSum = 0, ageCnt = 0, ageMax = 0, loose = 0;   // nr_split N: parts per job; anchor (st slot 5) = offsets from frame ancFrm to ancTo; edit age stats
     bool split = false; unsigned part = 0, jobFrm = 0, doneFrm = 0xFFFFFFF0u, accTo = 0xFFFFFFF0u;   // nr_split: next part (0 = start a job), frame of the job in flight / last finished one, NR frame the acc chain points to
 };
 struct Feature;
@@ -440,9 +446,14 @@ static void workerBody(Feature* F) {
                    if (g_hist) { unsigned pw = 0, ph = 0; int r = p_extHist && p_histLayout && p_extEnqueue2 ? p_histLayout(F->ctx, &pw, &ph) : -1; if (!r) r = p_extHist(F->ctx, F->sy->histOff, F->sy->histOut);
                        if (r || (UINT64)pw * ph * 12 > F->sy->histOut - F->sy->histOff || (unsigned)pw < F->W || (unsigned)ph < F->H) logf("history: unavailable (%s, code %d) - history off", p_extHist ? "this data dir / runtime cannot take it" : "nr_runtime.dll has no nr_ext_history", r);
                        else { F->sy->padW = pw; F->sy->padH = ph; F->sy->histOn = true; F->sy->impScale = importScale(F->dir); logf("history: k_import scale %.3g (0 = mode 0, raw colour)", F->sy->impScale); logf("history: mode %d on (warped history io+%llu, runtime output io+%llu, %ux%u RGB32F, gate %.2f..%.2f)", g_hist, F->sy->histOff, F->sy->histOut, pw, ph, g_hLo, g_hHi); } }
-                   if (g_split) { int kf = g_splitK[0], ks = g_splitK[1] > 0 ? g_splitK[1] : g_splitK[0]; float ms[4] = {}; int r = p_extSplit && p_extEnqueue3 ? p_extSplit(F->ctx, &kf, &ks, ms) : -1;
+                   if (g_split) { const int np = g_split > 2 && !p_extSplitN ? 2 : g_split; int kf[8] = {}, ks[8] = {}; float ms[16] = {};
+                       if (np == 2) { kf[0] = g_splitK[0]; ks[0] = g_splitK[1] > 0 ? g_splitK[1] : g_splitK[0]; }   // nr_split_k fixes the 2-part point; N > 2: always measured
+                       const int r = !p_extEnqueue3 ? -1 : p_extSplitN ? p_extSplitN(F->ctx, np, kf, ks, ms) : p_extSplit ? p_extSplit(F->ctx, kf, ks, ms) : -1;
+                       if (np < g_split) logf("nr_split: nr_runtime.dll has no nr_ext_splitn (old runtime) - 2 parts instead of %d", g_split);
                        if (r) logf("nr_split: unavailable (%s, code %d) - whole network per NR frame", p_extSplit ? "split setup failed" : "nr_runtime.dll has no nr_ext_split", r);
-                       else { F->sy->split = true; logf("nr_split: on, part 2 starts at dispatch %d (full frames) / %d (skipping frames); measured %.1f + %.1f ms / %.1f + %.1f ms GPU", kf, ks, ms[0], ms[1], ms[2], ms[3]); } }
+                       else { F->sy->split = true; F->sy->np = np; char t[256] = ""; size_t o = 0;
+                              for (int f = 0; f < 2; f++) { o += snprintf(t + o, sizeof t - o, f ? " | skipping frames: at" : "full frames: at"); for (int j = 0; j < np - 1; j++) o += snprintf(t + o, sizeof t - o, " %d", (f ? ks : kf)[j]); o += snprintf(t + o, sizeof t - o, ", ms"); for (int j = 0; j < np; j++) o += snprintf(t + o, sizeof t - o, " %.1f", ms[f * np + j]); }
+                              logf("nr_split: on, %d parts; %s GPU", np, t); } }
                    logf("sync: D3D12<->HIP interop ready, same-frame NR (GPU wait bound %d ms, max %d frames in flight)", g_spinMs, g_maxInflight); F->state = S_SYNC; return; }   // the worker has nothing more to do
         }
         F->state = S_IDLE;
@@ -503,7 +514,7 @@ static bool makeDelta(Feature* F) {
 
 static void freeSync(Sync* s) {
     if (!s) return;
-    for (IUnknown* u : std::initializer_list<IUnknown*>{s->io, s->sig, s->st, s->rs, s->imp, s->spin, s->exp, s->cap, s->expPk, s->ob, s->heap, s->hwp, s->hst, s->acc, s->hwp2, s->lat}) if (u) u->Release();
+    for (IUnknown* u : std::initializer_list<IUnknown*>{s->io, s->sig, s->st, s->rs, s->imp, s->spin, s->exp, s->cap, s->expPk, s->ob, s->heap, s->hwp, s->hst, s->acc, s->hwp2, s->lat, s->anc}) if (u) u->Release();
     if (s->hIo) CloseHandle(s->hIo); if (s->hSig) CloseHandle(s->hSig); delete s;
 }
 static ID3D12Resource* sharedBuffer(ID3D12Device* d, UINT64 size, D3D12_HEAP_FLAGS hf, UINT64* alloc) {
@@ -522,7 +533,7 @@ static Sync* makeSync(Feature* F) {
     const UINT64 n = (UINT64)F->W * F->H * 8, a = (n + 65535) & ~65535ull;
     s->outOff = a; s->flagOff = 2 * a; s->ioSize = 2 * a + 65536; s->sigSize = 65536;
     if (g_hist) { const UINT64 hb = ((UINT64)((F->W + 127) & ~127u) * ((F->H + 127) & ~127u) * 12 + 65535) & ~65535ull; s->histOff = s->ioSize; s->histOut = s->ioSize + hb; s->ioSize += 2 * hb; }   // + history slot (PAD_W x PAD_H RGB32F; PAD = 128-aligned, checked by nr_ext_history)
-    s->io = sharedBuffer(d, s->ioSize, D3D12_HEAP_FLAG_SHARED, &s->ioAlloc); s->sig = sharedBuffer(d, s->sigSize, D3D12_HEAP_FLAG_SHARED, &s->sigAlloc); s->st = sharedBuffer(d, 256 + (g_hist || g_split ? 5 : 2) * n, D3D12_HEAP_FLAG_NONE, nullptr);   // status words | fg edit | its model input (half4, model size each)
+    s->io = sharedBuffer(d, s->ioSize, D3D12_HEAP_FLAG_SHARED, &s->ioAlloc); s->sig = sharedBuffer(d, s->sigSize, D3D12_HEAP_FLAG_SHARED, &s->sigAlloc); s->st = sharedBuffer(d, 256 + (g_split ? 6 : g_hist ? 5 : 2) * n, D3D12_HEAP_FLAG_NONE, nullptr);   // status words | fg edit | its model input (half4, model size each)
     if (!s->io || !s->sig || !s->st) { logf("sync: cannot create shared buffers"); freeSync(s); return nullptr; }
     if (FAILED(d->CreateSharedHandle(s->io, nullptr, GENERIC_ALL, nullptr, &s->hIo)) || FAILED(d->CreateSharedHandle(s->sig, nullptr, GENERIC_ALL, nullptr, &s->hSig))) { logf("sync: CreateSharedHandle failed"); freeSync(s); return nullptr; }
     D3D12_DESCRIPTOR_RANGE rg[2] = {}; rg[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; rg[0].NumDescriptors = 3; rg[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; rg[1].NumDescriptors = 1; rg[1].OffsetInDescriptorsFromTableStart = 3;   // colour, motion, depth | output
@@ -532,8 +543,8 @@ static Sync* makeSync(Feature* F) {
     D3D12_ROOT_SIGNATURE_DESC rsd = {}; rsd.NumParameters = 6; rsd.pParameters = rp; ID3DBlob *sb = nullptr, *er = nullptr;
     if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sb, &er)) || FAILED(d->CreateRootSignature(0, sb->GetBufferPointer(), sb->GetBufferSize(), IID_PPV_ARGS(&s->rs)))) { logf("sync: root signature failed"); freeSync(s); return nullptr; }
     sb->Release();
-    ID3D12PipelineState** pso[10] = {&s->imp, &s->spin, &s->exp, &s->cap, &s->expPk, &s->lat, &s->hwp, &s->hst, &s->acc, &s->hwp2}; const char* ep[10] = {"imp", "spin", "exp", "cap", "exp", "lat", "hwp", "hst", "acc", "hwp2"};
-    for (int i = 0; i < (g_hist || g_split ? 10 : 6); i++) {
+    ID3D12PipelineState** pso[11] = {&s->imp, &s->spin, &s->exp, &s->cap, &s->expPk, &s->lat, &s->hwp, &s->hst, &s->acc, &s->hwp2, &s->anc}; const char* ep[11] = {"imp", "spin", "exp", "cap", "exp", "lat", "hwp", "hst", "acc", "hwp2", "anc"};
+    for (int i = 0; i < (g_split ? 11 : g_hist ? 10 : 6); i++) {
         ID3DBlob* cs = nullptr; er = nullptr; const char* mac[6] = {}; int nm = 0;   // D3D_SHADER_MACRO[], null-terminated
         if (i == 4) { mac[nm++] = "PACKED"; mac[nm++] = "1"; }                     // expPk
         if (!g_ldrIn) { mac[nm++] = "HDR_IN"; mac[nm++] = "1"; }
@@ -764,7 +775,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             c2->Release();                                          // the host holds the list; we only need the interface for this call
             if (reset == 1) { s->minSeq = s->seq + 1; s->part = 0; }  // fg/split: no edit from before a camera cut is reused; split: a half-done job is abandoned
             const bool sp = s->split;
-            const unsigned seq = s->seq + 1; ++s->frm; const unsigned age = s->frm - s->lastNrFrm; const unsigned chain = reset != 1 && (age == 1 || (age <= 8 && s->accFrm + 1 == s->frm)) ? age : 0, histOk = s->histOn ? chain : 0;   // frames since the last NR output; > 1 needs an unbroken offset chain (acc) over the in-between frames
+            const unsigned seq = s->seq + 1; ++s->frm; const unsigned accF0 = s->accFrm, accT0 = s->accTo; const unsigned age = s->frm - s->lastNrFrm; const unsigned chain = reset != 1 && (age == 1 || (age <= 8 && s->accFrm + 1 == s->frm)) ? age : 0, histOk = s->histOn ? chain : 0;   // frames since the last NR output; > 1 needs an unbroken offset chain (acc) over the in-between frames
             const bool reuseOn = true;   // cap the edit on every NR frame: busy frames (and spin timeouts) reuse it   // cap the edit on NR frames, reuse it on the others
             const bool skip = g_nrEvery > 1 && reset != 1 && s->sinceNr + 1 < (unsigned)g_nrEvery && (int)(s->seq - s->minSeq) >= 0;   // nr_every: reuse frame (an edit since the last reset exists)
             auto enq = [&] { return sp ? p_extEnqueue3(F->ctx, seq, g_maxInflight, s->part == 0 && histOk ? g_hist : 0, (int)s->part + 1) : skip ? 1 : (s->histOn ? p_extEnqueue2(F->ctx, seq, g_maxInflight, histOk ? g_hist : 0) : p_extEnqueue(F->ctx, seq, g_maxInflight)); };   // HIP: wait flag_in >= seq, run, flag_out = seq (queued now, runs when the list below executes)
@@ -780,7 +791,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             const bool haveNr = (int)(s->seq - s->minSeq) >= 0;   // an NR edit since the last reset exists to reuse
             if (q != 0 && !g_fg && !skip && !sp && !haveNr) { if (s->busy++ < 5 || s->busy % 100 == 0) logf("sync: frame not queued (HIP still busy with older frames, %u so far) - native frame", s->busy); return passThrough(cmd, color, out, w, h); }
             if (q == 0) s->seq = seq;
-            if (q == 0 && !(sp && s->part == 1)) { s->frmOf[seq % 16] = s->frm; if (++s->ran <= 3 || s->ran % 1000 == 0) logf("sync: NR frame %u queued (frame %ux%u, %u native, %u reused so far)", s->ran, w, h, s->busy, s->reused); }
+            if (q == 0 && !(sp && s->part != 0)) { s->frmOf[seq % 16] = s->frm; if (++s->ran <= 3 || s->ran % 1000 == 0) logf("sync: NR frame %u queued (frame %ux%u, %u native, %u reused so far)", s->ran, w, h, s->busy, s->reused); }
             else s->reused++;                                       // fg: HIP busy / nr_every: in-between frame -> live frame + last NR edit, the queue does not wait
             UINT k = (++s->rec % kSyncRing) * 4; auto cpu = s->heap->GetCPUDescriptorHandleForHeapStart(); auto gpu = s->heap->GetGPUDescriptorHandleForHeapStart();
             auto at = [&](UINT i) { D3D12_CPU_DESCRIPTOR_HANDLE c = cpu; c.ptr += (SIZE_T)(k + i) * s->incr; return c; }; gpu.ptr += (UINT64)k * s->incr;
@@ -825,18 +836,27 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             auto release = [&] { tr(D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);   // input is in io (or: frame N+1 began): release the HIP stream's flag_in wait
                 D3D12_WRITEBUFFERIMMEDIATE_PARAMETER wp = { s->sig->GetGPUVirtualAddress(), seq }; D3D12_WRITEBUFFERIMMEDIATE_MODE wm = D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
                 c2->WriteBufferImmediate(1, &wp, &wm); tr(D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COMMON); };
-            if (sp) {   // nr_split: frame N = input + part 1 of job N, frame N+1 = part 2; every frame shows the last finished job's edit, warped (age 1 or 2)
+            if (sp) {   // nr_split N: frame J = input + part 1 of job J, frames J+1..J+N-1 = parts 2..N; every frame shows the last finished job's edit, warped (age N-1 .. 2N-2)
                 auto pass = [&](ID3D12PipelineState* p, UINT gx, UINT gy) { cmd->SetComputeRoot32BitConstants(3, kCb, cb, 0); cmd->SetPipelineState(p); cmd->Dispatch(gx, gy, 1); cmd->ResourceBarrier(1, &uav); };
                 const UINT gx = (F->W + 7) / 8, gy = (F->H + 7) / 8;
+                auto accP = [&] { if (chain) { cb[26] = chain; pass(s->acc, gx, gy); s->accFrm = s->frm; s->accTo = s->lastNrFrm; } };   // offsets from this frame to the last job's frame
                 if (s->part == 0) {
                     if (q == 0) { pass(s->imp, gx, gy); if (s->histOn) pass(histOk > 1 ? s->hwp2 : s->hwp, (s->padW + 7) / 8, (s->padH + 7) / 8);
+                                  if (s->np > 2) { if (chain) { cb[26] = chain; pass(s->anc, gx, gy); s->ancFrm = s->frm; s->ancTo = s->lastNrFrm; } else s->ancFrm = 0xFFFFFFF0u; }   // anchor: this job's frame -> the previous job's frame (shown until this job is done)
                                   release(); pass(s->spin, 1, 1); s->lastNrFrm = s->jobFrm = s->frm; s->part = 1; }   // the spin waits for part 1 only
+                    else accP();   // HIP busy: keep the chain to the shown edit
                 } else {
-                    if (chain) { cb[26] = chain; pass(s->acc, gx, gy); s->accFrm = s->frm; s->accTo = s->lastNrFrm; }   // offsets from this frame to the job's frame
-                    if (q == 0) { release(); pass(s->spin, 1, 1); cb[12] = s->jobFrm;   // part 2 done -> keep its P / edit, stamped with the job's own frame
-                                  if (s->histOn) pass(s->hst, gx, gy); pass(s->cap, gx, gy); cb[12] = s->frm; s->doneFrm = s->jobFrm; s->part = 0; }
+                    accP();
+                    if (q == 0) { release(); pass(s->spin, 1, 1);
+                                  if (++s->part == s->np) { cb[12] = s->jobFrm;   // last part done -> keep its P / edit, stamped with the job's own frame
+                                      if (s->histOn) pass(s->hst, gx, gy); pass(s->cap, gx, gy); cb[12] = s->frm; s->doneFrm = s->jobFrm; s->part = 0; } }
                 }
-                const unsigned da = s->frm - s->doneFrm; cb[32] = da == 2 && s->accFrm + 1 == s->frm && s->accTo == s->doneFrm ? 2 : da <= 1 ? 1 : 3;   // 3: HIP busy, older edit moved by this frame's vectors only (colour gate guards)   // age 2 needs the acc of the frame before
+                // offsets from this frame to the shown edit's frame T: vectors to frame-1, then acc of frame-1 (-> accT0) and/or the anchor (ancFrm -> ancTo)
+                const unsigned da = s->frm - s->doneFrm, T = s->doneFrm; const bool accOk = accF0 + 1 == s->frm, ancOk = s->np > 2 && s->ancTo == T;
+                const unsigned fl = da <= 1 ? 0 : accOk && accT0 == T ? 2 : ancOk && s->ancFrm + 1 == s->frm ? 4 : ancOk && accOk && accT0 == s->ancFrm ? 6 : 8;   // 8: chain broken (HIP busy long), vectors only (colour gate guards)
+                cb[32] = 1 | fl | ((da < 0x8000000u ? da : 0u) << 4);
+                if (T != 0xFFFFFFF0u && da < 64) { s->ageSum += da; s->ageCnt++; s->ageMax = (std::max)(s->ageMax, da); s->loose += fl == 8; }
+                if (s->ageCnt == 200) { logf("nr_split: edit age mean %.2f max %u frames, %u of 200 frames vectors-only", s->ageSum / 200.0, s->ageMax, s->loose); s->ageSum = s->ageCnt = s->ageMax = s->loose = 0; }
                 cmd->SetComputeRoot32BitConstants(3, kCb, cb, 0);
             } else {
             if (g_fg && s->seq > (q == 0 ? 1u : 0u)) {              // fg: harvest the newest earlier frame if HIP finished it after its own (short) wait
