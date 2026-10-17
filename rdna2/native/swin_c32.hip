@@ -20,9 +20,10 @@
 #ifndef WPE
 #define WPE 5
 #endif
+constexpr int HPG = 2;   // hidden pairs per MLP step
 
 // f16 weight shadow (words = half2 k-pairs as put16 stages them), built by k_swin_c32_prep:
-//  WE [4 q][16 kp][32 n]  expand, hidden 32q + n       WC [64 G][32 c]       contract, hidden pair G
+//  WE [128 n][16 kp]      expand, hidden n             WC [64 G][32 c]       contract, hidden pair G
 //  WQ [3 g][16 kp][32 n]  qkv, output 32g + n           WO [16 kp][32 c]      out_proj
 //  WR [2 h][32 kp][16 n]  up resample, out 16h + n      WD [2 h][16 kp][32 n] ds resample, out 32h + n
 //  RSC/ARS/UG [32] f32 residual scale / attn residual scale / upsample gain, HSC f32 head scale,
@@ -57,13 +58,12 @@ __device__ __forceinline__ void gemv(float* acc, const uint32_t* a, cwp w) {
   }
 }
 
-// q8 for values known finite (no NaN guard)
+// q8 for values known finite (no NaN guard), rounding by (a + K) - K with K = 2^(max(e, -6) + 20): one f32 rounding
+// to 3 mantissa bits (2^-9 steps below 2^-6), ties to even = q8's bit trick; checked for every finite f32 (q8f_chk.py)
 __device__ __forceinline__ float q8f(float x) {
-  float a = fminf(fabsf(x), 448.f);
-  uint32_t b = __float_as_uint(a);
-  float rn = __uint_as_float((b + 0x7FFFFu + ((b >> 20) & 1u)) & 0xFFF00000u);
-  float rs = __fsub_rn(__fadd_rn(a, 24576.f), 24576.f);
-  return copysignf(a < 0.015625f ? rs : rn, x);
+  const float a = fminf(fabsf(x), 448.f);
+  const float K = __uint_as_float(max(__float_as_uint(a) & 0x7F800000u, 0x3C800000u) + (20u << 23));
+  return copysignf(__fsub_rn(__fadd_rn(a, K), K), x);
 }
 // pack two values already on the f16 grid (q8 outputs): the truncating conversion is exact
 __device__ __forceinline__ uint32_t pkz(float a, float b) { return __builtin_bit_cast(uint32_t, __builtin_amdgcn_cvt_pkrtz(a, b)); }
@@ -202,18 +202,26 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
   }
   if (up) __syncthreads();   // Pj (RA) is read; qn/kn overwrite it below
 
-  // ================= MLP in registers: hidden quarter q = 32 hidden (16 pairs); contract accumulates over pairs G = 16q + hp
+  // ================= MLP in registers, rolled over hidden pairs (small code): per pair G, expand hidden 2G, 2G+1 over
+  // K = 32, act + q8, then y += hd(G) . Wc[G] (the contract accumulates over G = 0..63 in order)
   float y[32] = {};
 #pragma unroll 1
-  for (int q = 0; q < 4; q++) {
-    float acc[32] = {};
-    const cwp we = S + S_WE + q * 512;
-    gemv<16, 32>(acc, X, we);
-    uint32_t hd[16];
+  for (int G = 0; G < 64; G += HPG) {
+    const cwp we = S + S_WE + G * 32, wc = S + S_WC + G * 32;
+    float acc[2 * HPG] = {};
 #pragma unroll
-    for (int hp = 0; hp < 16; hp++) hd[hp] = pkz(q8f(act(acc[2 * hp] * 256.f)), q8f(act(acc[2 * hp + 1] * 256.f)));
-    const cwp wc = S + S_WC + q * 512;
-    gemv<16, 32>(y, hd, wc);
+    for (int kp = 0; kp < 16; kp++)
+#pragma unroll
+      for (int j = 0; j < 2 * HPG; j++) acc[j] = dot2(X[kp], we[j * 16 + kp], acc[j]);
+    uint32_t hd[HPG];
+#pragma unroll
+    for (int g = 0; g < HPG; g++) hd[g] = pkz(q8f(act(acc[2 * g] * 256.f)), q8f(act(acc[2 * g + 1] * 256.f)));
+    __builtin_amdgcn_sched_barrier(0);
+#pragma unroll
+    for (int g = 0; g < HPG; g++)
+#pragma unroll
+      for (int c = 0; c < 32; c++) y[c] = dot2(hd[g], wc[g * 32 + c], y[c]);
+    __builtin_amdgcn_sched_barrier(0);
   }
 
   // ---- y = rs * x + mlp (f32, the attention skip); Yq = q8(f16(y))
@@ -231,43 +239,42 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
   uint32_t* ctx = RB;         // [16 kp][64 tok]
   {   // qkv in registers (K = 32), q and k L2-normalised in place (q with the head scale), v -> Vt
 #pragma unroll 1
-    for (int g = 0; g < 2; g++) {
+    for (int g = 0; g < 3; g++) {   // one gemv body for q, k, v (code size)
       float a[32] = {};
-      const cwp wq = S + S_WQ + g * 512;
-      gemv<16, 32>(a, Yq, wq);
+      gemv<16, 32>(a, Yq, S + S_WQ + g * 512);
 #pragma unroll
       for (int n = 0; n < 32; n++) a[n] *= 256.f;
-      float sc = norm_scale(a);
-      if (g == 0) sc = __fmul_rn(sc, Sf[S_HSC]);
-      uint32_t* dst = g ? kn : qn;
+      if (g < 2) {
+        float sc = norm_scale(a);
+        if (g == 0) sc = __fmul_rn(sc, Sf[S_HSC]);
+        uint32_t* dst = g ? kn : qn;
 #pragma unroll
-      for (int d = 0; d < 32; d += 2) dst[(d >> 1) * 64 + t] = pkz(q8f(__fmul_rn(a[d], sc)), q8f(__fmul_rn(a[d + 1], sc)));
-    }
-    float a[32] = {};
-    const cwp wq = S + S_WQ + 2 * 512;
-    gemv<16, 32>(a, Yq, wq);
-    uint32_t own[16];   // own[k] = v(dims 2k, 2k+1) as f16 pairs
+        for (int d = 0; d < 32; d += 2) dst[(d >> 1) * 64 + t] = pkz(q8f(__fmul_rn(a[d], sc)), q8f(__fmul_rn(a[d + 1], sc)));
+      } else {
+        uint32_t own[16];   // own[k] = v(dims 2k, 2k+1) as f16 pairs
 #pragma unroll
-    for (int k = 0; k < 16; k++) own[k] = q8h(pk(a[2 * k] * 256.f, a[2 * k + 1] * 256.f));
-    // the even token of a key pair writes dims 0..15, the odd one dims 16..31; each needs the partner's half
-    const bool odd = t & 1;
-    const int j = t >> 1;
+        for (int k = 0; k < 16; k++) own[k] = q8h(pk(a[2 * k], a[2 * k + 1]));
+        // the even token of a key pair writes dims 0..15, the odd one dims 16..31; each needs the partner's half
+        const bool odd = t & 1;
+        const int j = t >> 1;
 #pragma unroll
-    for (int k = 0; k < 8; k++) {
-      const uint32_t send = odd ? own[k] : own[8 + k];
-      const uint32_t recv = (uint32_t)__builtin_amdgcn_mov_dpp((int)send, 0xB1, 0xF, 0xF, false);   // quad_perm [1,0,3,2]: lane ^ 1
-      const uint32_t mine = odd ? own[8 + k] : own[k];
-      const uint32_t w0 = odd ? ((recv & 0xFFFFu) | (mine << 16)) : ((mine & 0xFFFFu) | (recv << 16));
-      const uint32_t w1 = odd ? ((recv >> 16) | (mine & 0xFFFF0000u)) : ((mine >> 16) | (recv & 0xFFFF0000u));
-      const int d = 2 * k + (odd ? 16 : 0);
-      Vt[j * 33 + d] = w0; Vt[j * 33 + d + 1] = w1;
+        for (int k = 0; k < 8; k++) {
+          const uint32_t send = odd ? own[k] : own[8 + k];
+          const uint32_t recv = (uint32_t)__builtin_amdgcn_mov_dpp((int)send, 0xB1, 0xF, 0xF, false);   // quad_perm [1,0,3,2]: lane ^ 1
+          const uint32_t mine = odd ? own[8 + k] : own[k];
+          const uint32_t w0 = odd ? ((recv & 0xFFFFu) | (mine << 16)) : ((mine & 0xFFFFu) | (recv << 16));
+          const uint32_t w1 = odd ? ((recv >> 16) | (mine & 0xFFFF0000u)) : ((mine >> 16) | (recv & 0xFFFF0000u));
+          const int d = 2 * k + (odd ? 16 : 0);
+          Vt[j * 33 + d] = w0; Vt[j * 33 + d + 1] = w1;
+        }
+      }
     }
   }
   __syncthreads();
   {   // logits -> exponent-ramp numerators: thread = 8 queries (8qb..) x 8 keys (8kb..)
     const int qb = t & 7, kb = t >> 3;
     float lg[8][8] = {};
-#pragma unroll
+#pragma unroll 2
     for (int i = 0; i < 16; i++) {
       uint32_t qv[8], kv[8];
 #pragma unroll
@@ -345,10 +352,13 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
   // ---- out_proj (lane = token), out = ars * y + Wo . ctx
   float o[32] = {};
   {
-    uint32_t cx[16];
+#pragma unroll 2
+    for (int kp = 0; kp < 16; kp++) {   // rolled rows (code size), the ctx word straight from LDS
+      const uint32_t cx = ctx[kp * 64 + t];
 #pragma unroll
-    for (int kp = 0; kp < 16; kp++) cx[kp] = ctx[kp * 64 + t];
-    gemv<16, 32>(o, cx, S + S_WO);
+      for (int c = 0; c < 32; c++) o[c] = dot2(cx, S[S_WO + kp * 32 + c], o[c]);
+      __builtin_amdgcn_sched_barrier(0);
+    }
 #pragma unroll
     for (int c = 0; c < 32; c++) o[c] = __fadd_rn(__fmul_rn(y[c], Sf[S_ARS + c]), o[c] * 256.f);
   }
@@ -391,12 +401,15 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
   __syncthreads();
   {
     const int px = lane & 15;
-    uint32_t pw[16];
-#pragma unroll
-    for (int kp = 0; kp < 16; kp++) pw[kp] = RA[px * 16 + kp];
     float acc[32] = {};
     const cwp wd = S + S_WD + wv * 512;
-    gemv<16, 32>(acc, pw, wd);
+#pragma unroll 2
+    for (int kp = 0; kp < 16; kp++) {
+      const uint32_t pw = RA[px * 16 + kp];
+#pragma unroll
+      for (int n = 0; n < 32; n++) acc[n] = dot2(pw, wd[kp * 32 + n], acc[n]);
+      __builtin_amdgcn_sched_barrier(0);
+    }
     const int H2 = H >> 1, W2 = W >> 1, Hs = (H2 + 3) & ~3, Ws = (W2 + 3) & ~3;
     const int pr = (r0 >> 1) + (px >> 2), pc = (c0 >> 1) + (px & 3);
     if (lane < 16 && pr >= 0 && pr < H2 && pc >= 0 && pc < W2) {
@@ -441,7 +454,7 @@ extern "C" __global__ __launch_bounds__(256) void k_swin_c32_prep(VarParams P) {
     __syncthreads();
     if (tid < 128) put16(L, 64, *((const uint4*)(rec + sc * 4 * 512) + tid), tid & 31, (tid >> 5) * 16);
     __syncthreads();
-    for (int i = tid; i < 1024; i += 256) { const int kp = i >> 6, nn = i & 63; S[S_WE + ((2 * sc + (nn >> 5)) * 16 + kp) * 32 + (nn & 31)] = L[i]; }
+    for (int i = tid; i < 1024; i += 256) { const int kp = i >> 6, nn = i & 63; S[S_WE + (64 * sc + nn) * 16 + kp] = L[i]; }
     __syncthreads();                 // contract chunk sc: L [32 kp][32 n]
     if (tid < 128) { const int i = tid >> 5; put16(L + (i >> 1) * 16 * 32, 32, *((const uint4*)(rec + R_CON + (sc * 4 + i) * 512) + (tid & 31)), tid & 31, (i & 1) * 16); }
     __syncthreads();
