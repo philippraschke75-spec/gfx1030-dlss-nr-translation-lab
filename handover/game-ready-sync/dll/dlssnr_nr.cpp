@@ -670,43 +670,46 @@ static std::string sha256Prefix(const std::string& p) {   // first 12 hex digits
     ok = ok && !BCryptFinishHash(h, d, 32, 0); if (h) BCryptDestroyHash(h); if (a) BCryptCloseAlgorithmProvider(a, 0); fclose(f);
     char s[13] = "-"; if (ok) for (int i = 0; i < 6; i++) snprintf(s + 2 * i, 3, "%02x", d[i]); return s;
 }
-// 310.9 carries two models: WEIGHTS_HT (= 310.8) and WEIGHTS_CC_SMALL_FP8 (small, 113M params). nr_port.ini [nr] model=small|large|auto
-// (auto = small when present). How NVIDIA's own DLL chooses is not known; the id names the chosen resource's model.
-static const char* g_res = "WEIGHTS_HT";
-static uint64_t modelIdRaw(const char* p) {
-    if (_stricmp(g_model.c_str(), "large")) if (uint64_t id = nr_model_id(p, "WEIGHTS_CC_SMALL_FP8")) { g_res = "WEIGHTS_CC_SMALL_FP8"; return id; }
-    g_res = "WEIGHTS_HT"; return nr_model_id(p);
+// 310.9 carries two models: WEIGHTS_HT (= 310.8) and WEIGHTS_CC_SMALL_FP8 (small, 113M params). nr_port.ini [nr] model=small|large|auto.
+// NVIDIA's DLL picks the weights by the host's DLSSNR.Hint.Render.Preset (handover/nr-preset.md): its descriptor ids are
+// 1 = WEIGHTS_HT, 2 = WEIGHTS_CC_SMALL_FP8 (310.9 only); any other preset falls back to the shipping default (310.9: 2, 310.8: 1).
+// model=auto does the same: large for preset 1, else small when the DLL has it. The id names the chosen resource's model.
+static bool presetLarge(int preset) { return !_stricmp(g_model.c_str(), "large") || (!_stricmp(g_model.c_str(), "auto") && preset == 1); }
+static uint64_t modelIdRaw(const char* p, bool large, const char** res) {
+    if (!large) if (uint64_t id = nr_model_id(p, "WEIGHTS_CC_SMALL_FP8")) { *res = "WEIGHTS_CC_SMALL_FP8"; return id; }
+    *res = "WEIGHTS_HT"; return nr_model_id(p);
 }
-static uint64_t modelIdSafe(const char* p) { __try { return modelIdRaw(p); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; } }   // truncated / broken PE
+static uint64_t modelIdSafe(const char* p, bool large, const char** res) { __try { return modelIdRaw(p, large, res); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; } }   // truncated / broken PE
 static std::string metaModelId(const std::string& dir) {   // meta.json "model_id": "<16 hex>"; absent = v0.3 data = 310.8
     FILE* f = nullptr; fopen_s(&f, (dir + "\\meta.json").c_str(), "rb"); if (!f) return kModel3108;
     std::string s; char b[4096]; size_t n; while ((n = fread(b, 1, sizeof b, f)) > 0) s.append(b, n); fclose(f);
     size_t k = s.find("\"model_id\""); if (k == std::string::npos) return kModel3108;
     size_t q = s.find('"', s.find(':', k) + 1); return q == std::string::npos ? std::string(kModel3108) : s.substr(q + 1, 16);
 }
-static std::string g_dllId, g_dllDesc;   // the user's DLL: model id ("" = not checked yet, 0...0 = none) and "version x sha256 y"
-static bool pickModelBase(std::string* base) {
-    if (g_dllId.empty()) {
-        std::string from; uint64_t id = 0;
+static std::string g_dllIds[2], g_dllDesc;   // the user's DLL: model id per choice [small, large] ("" = not checked yet, 0...0 = none) and "version x sha256 y"
+static bool pickModelBase(std::string* base, bool large) {
+    std::string& dllId = g_dllIds[large];
+    if (dllId.empty()) {
+        std::string from; uint64_t id = 0; const char* res = "WEIGHTS_HT";
         for (const std::string& d : {narrow(g_dir), g_dataDir + "\\..\\"}) if (GetFileAttributesA((d + "nvngx_dlssnr.dll").c_str()) != INVALID_FILE_ATTRIBUTES) { from = d + "nvngx_dlssnr.dll"; break; }
-        if (!from.empty()) { id = modelIdSafe(from.c_str()); wchar_t w[MAX_PATH] = L""; MultiByteToWideChar(CP_UTF8, 0, from.c_str(), -1, w, MAX_PATH);
+        if (!from.empty()) { id = modelIdSafe(from.c_str(), large, &res); wchar_t w[MAX_PATH] = L""; MultiByteToWideChar(CP_UTF8, 0, from.c_str(), -1, w, MAX_PATH);
                              g_dllDesc = "version " + fileVersion(w) + " sha256 " + sha256Prefix(from); }
         else g_dllDesc = "(not found)";
-        char hx[17]; snprintf(hx, sizeof hx, "%016llx", (unsigned long long)id); g_dllId = hx;
-        logf("model: %s %s, model id %s (%s, model=%s)", from.empty() ? "nvngx_dlssnr.dll" : from.c_str(), g_dllDesc.c_str(), id ? hx : "none (no WEIGHTS_HT / unreadable)", g_res, g_model.c_str());
+        char hx[17]; snprintf(hx, sizeof hx, "%016llx", (unsigned long long)id); dllId = hx;
+        logf("model: %s %s, model id %s (%s, model=%s)", from.empty() ? "nvngx_dlssnr.dll" : from.c_str(), g_dllDesc.c_str(), id ? hx : "none (no WEIGHTS_HT / unreadable)", res, g_model.c_str());
     }
-    const std::string m = g_dataDir + "\\" + g_dllId; const DWORD at = GetFileAttributesA(m.c_str());
+    const std::string m = g_dataDir + "\\" + dllId; const DWORD at = GetFileAttributesA(m.c_str());
     *base = at != INVALID_FILE_ATTRIBUTES && (at & FILE_ATTRIBUTE_DIRECTORY) ? m : g_dataDir;
     return true;
 }
-static bool modelMatches(const std::string& dir) {   // the step dir create picked was built for the user's DLL
-    const std::string want = metaModelId(dir); if (!_stricmp(want.c_str(), g_dllId.c_str())) return true;
-    seterr("nvngx_dlssnr.dll %s has a different model than this port supports (%s). NR stays off; update the port. (DLL model id %s, data %s)",
-           g_dllDesc.c_str(), want == kModel3108 ? "310.8 / 310.9.16" : want.c_str(), g_dllId.c_str(), dir.c_str());
+static bool modelMatches(const std::string& dir, bool large, bool quiet = false) {   // the step dir create picked was built for the user's DLL
+    const std::string want = metaModelId(dir), &dllId = g_dllIds[large]; if (!_stricmp(want.c_str(), dllId.c_str())) return true;
+    if (!quiet) seterr("nvngx_dlssnr.dll %s has a different model than this port supports (%s). NR stays off; update the port. (DLL model id %s, data %s)",
+           g_dllDesc.c_str(), want == kModel3108 ? "310.8 / 310.9.16" : want.c_str(), dllId.c_str(), dir.c_str());
     return false;
 }
-static std::string pickModelDir(unsigned w, unsigned h) {
-    std::string base; if (!pickModelBase(&base)) return "";
+static std::string pickModelDir(unsigned w, unsigned h, bool large) {
+    std::string base; if (!pickModelBase(&base, large)) return "";
     unsigned mw, mh; if (readMeta(base, &mw, &mh)) return base;
     std::vector<std::pair<unsigned, unsigned>> st; WIN32_FIND_DATAA fd; HANDLE fh = FindFirstFileA((base + "\\*x*").c_str(), &fd);
     if (fh != INVALID_HANDLE_VALUE) { do { unsigned a, b; if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && sscanf_s(fd.cFileName, "%ux%u", &a, &b) == 2) st.push_back({a, b}); } while (FindNextFileA(fh, &fd)); FindClose(fh); }
@@ -772,15 +775,18 @@ static void applyCond(Feature* F) {
 
 extern "C" {
 __declspec(dllexport) void* dlssnr_call_create(const wchar_t* snippet, const wchar_t*, ID3D12Device* dev, ID3D12GraphicsCommandList*, void*,
-        unsigned w, unsigned h, int, float intensity, int style, float localStructure, float localTone, float skinStructure, int useAutoMask, int) {
+        unsigned w, unsigned h, int preset, float intensity, int style, float localStructure, float localTone, float skinStructure, int useAutoMask, int) {
     try {
         if (!g_log) loadSettings();
-        logf("create: snippet=%ls dev=%p %ux%u", snippet ? snippet : L"", (void*)dev, w, h);
+        logf("create: snippet=%ls dev=%p %ux%u preset %d", snippet ? snippet : L"", (void*)dev, w, h, preset);
         logHost(_ReturnAddress());
         dlssnr_call_last_create = 0;
         if (!dev) { seterr("create: no D3D12 device"); return nullptr; }
-        unsigned mw = 0, mh = 0; const std::string dir = pickModelDir(w, h);
-        if (dir.empty() || !modelMatches(dir)) {   // unknown / missing nvngx_dlssnr.dll: a feature that only passes frames through (returns 1; OptiScaler ends NR on 0)
+        bool large = presetLarge(preset); unsigned mw = 0, mh = 0; std::string dir = pickModelDir(w, h, large);
+        if (large && _stricmp(g_model.c_str(), "large") && !dir.empty() && !modelMatches(dir, true, true)) {   // preset 1 but no large-model data installed: the default model, as NVIDIA does for a missing preset
+            logf("create: preset %d asks for the large model (WEIGHTS_HT) but %s has no data for it; using the default model", preset, dir.c_str());
+            large = false; dir = pickModelDir(w, h, false); }
+        if (dir.empty() || !modelMatches(dir, large)) {   // unknown / missing nvngx_dlssnr.dll: a feature that only passes frames through (returns 1; OptiScaler ends NR on 0)
             auto* F = new Feature; F->state = S_FAILED; F->W = w; F->H = h; F->pass = g_live++; dlssnr_call_last_create = 1; return F; }
         if (!readMeta(dir, &mw, &mh)) { seterr("create: no meta.txt in '%s' (run gen_runtime_data.py, see INSTALL.md)", dir.c_str()); return nullptr; }
         if ((mw != w || mh != h) && g_sync) { logf("create: frame %ux%u, model %ux%u - sync path resamples (universal for any resolution / upscaler mode)", w, h, mw, mh); w = mw; h = mh; }
