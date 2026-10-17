@@ -1,0 +1,34 @@
+exact.txt:OUTHASH 97d388c2bc5b0383
+exact.txt:flk bx Standard 960x540 nr_split=0 vit_every=1 rc 0
+exact.txt:OUTHASH be438d1cb9334383
+exact.txt:flk base Standard 960x540 nr_split=0 vit_every=1 rc 0
+exact.txt:OUTHASH 9a0f2da610ec1383
+exact.txt:flk bx Standard 960x540 nr_split=0 vit_every=1 edit_temporal=0 rc 0
+exact.txt:OUTHASH 9a0f2da610ec1383
+exact.txt:flk base Standard 960x540 nr_split=0 vit_every=1 edit_temporal=0 rc 0
+exact.txt:OUTHASH 7eb1c29ffd704383
+exact.txt:flk bx Standard 1920x1080 nr_split=0 vit_every=1 edit_temporal=0 rc 0
+exact.txt:OUTHASH 7eb1c29ffd704383
+exact.txt:flk base Standard 1920x1080 nr_split=0 vit_every=1 edit_temporal=0 rc 0
+exact.txt:OUTHASH 9435a6a9813ae383
+exact.txt:flk bx Cinematic 960x540  rc 0
+exact.txt:OUTHASH 9435a6a9813ae383
+exact.txt:flk base Cinematic 960x540  rc 0
+exact.txt:OUTHASH 5c70d911ed6e8383
+exact.txt:flk bx Standard 960x540 edit_temporal=0 nr_split=0 mv_reuse=1 nr_every=2 rc 0
+exact.txt:OUTHASH 5c70d911ed6e8383
+exact.txt:flk base Standard 960x540 edit_temporal=0 nr_split=0 mv_reuse=1 nr_every=2 rc 0
+10 ran, worst 22.7 ms | release 11 ms
+exact.txt:PASS
+exact.txt:strict bx 960x540 auto rc 0
+10 ran, worst 19.9 ms | release 10 ms
+exact.txt:PASS
+exact.txt:strict bx 960x540 auto rc 0
+exact2.txt:OUTHASH be438d1cb9334383
+exact2.txt:flk base Standard 960x540 nr_split=0 vit_every=1 rc 0
+exact2.txt:OUTHASH be438d1cb9334383
+exact2.txt:flk bx Standard 960x540 nr_split=0 vit_every=1 rc 0
+exact2.txt:OUTHASH be438d1cb9334383
+exact2.txt:flk base Standard 960x540 nr_split=0 vit_every=1 rc 0
+exact2.txt:OUTHASH be438d1cb9334383
+exact2.txt:flk bx Standard 960x540 nr_split=0 vit_every=1 rc 0

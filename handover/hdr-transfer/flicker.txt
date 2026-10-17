@@ -1,0 +1,12 @@
+TS evaluate GPU ms (frames >= 8): p10 2.311 median 2.905 mean-of-lowest-half 2.564
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00285 in 0.00262 excess +0.00024 (x1.09) | white jumps 10339.8/frame (0.286% of px), visible flicker 0.787% of px, over 59 frames
+TS evaluate GPU ms (frames >= 8): p10 2.720 median 3.093 mean-of-lowest-half 2.921
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00284 in 0.00262 excess +0.00022 (x1.08) | white jumps 10377.5/frame (0.287% of px), visible flicker 0.806% of px, over 59 frames
+TS evaluate GPU ms (frames >= 8): p10 2.793 median 3.761 mean-of-lowest-half 2.965
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00287 in 0.00262 excess +0.00026 (x1.10) | white jumps 11392.4/frame (0.315% of px), visible flicker 0.944% of px, over 59 frames
+TS evaluate GPU ms (frames >= 8): p10 2.086 median 3.362 mean-of-lowest-half 2.536
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00379 in 0.00262 excess +0.00117 (x1.45) | white jumps 55794.7/frame (1.544% of px), visible flicker 3.265% of px, over 59 frames
+TS evaluate GPU ms (frames >= 8): p10 3.113 median 3.492 mean-of-lowest-half 3.148
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00379 in 0.00262 excess +0.00117 (x1.45) | white jumps 56513.5/frame (1.563% of px), visible flicker 3.345% of px, over 59 frames
+TS evaluate GPU ms (frames >= 8): p10 2.749 median 3.373 mean-of-lowest-half 2.954
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00385 in 0.00262 excess +0.00124 (x1.47) | white jumps 59671.4/frame (1.651% of px), visible flicker 3.649% of px, over 59 frames
