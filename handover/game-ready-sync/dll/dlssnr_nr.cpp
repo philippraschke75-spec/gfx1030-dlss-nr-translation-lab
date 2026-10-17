@@ -639,7 +639,7 @@ static std::string pickModelDir(unsigned w, unsigned h) {
     if (want != "auto" && std::none_of(st.begin(), st.end(), [&](const std::pair<unsigned, unsigned>& p) { return name(p.first, p.second) == want; })) { logf("model_res %s: no such step in %s, using auto", want.c_str(), base.c_str()); want = "auto"; }
     if (want == "auto" && !st.empty()) {
         auto best = std::make_pair(1280u, 720u); bool def = std::find(st.begin(), st.end(), best) != st.end(); if (!def) best = st[0];
-        if (h) for (auto& p : st) if (abs((int)p.second - (int)h) < abs((int)best.second - (int)h)) best = p;   // ties keep 1280x720
+        if (h) for (auto& p : st) if (p.second <= 720 && abs((int)p.second - (int)h) < abs((int)best.second - (int)h)) best = p;   // ties keep 1280x720; 1080p / 1440p steps only by explicit model_res (hosts often pass the output size)
         want = name(best.first, best.second);
     }
     std::string steps; for (auto& p : st) steps += " " + name(p.first, p.second);

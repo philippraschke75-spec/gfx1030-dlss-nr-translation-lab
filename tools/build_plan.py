@@ -226,8 +226,7 @@ def geometry(W, H, levels):
         r, size = 0, v
         for level in range(levels):
             half = up(-(-size // 2), 4)
-            if half < size: r += 1
-            if level == 0 and half % 8: r += 1
+            if half < size: r += 1   # (an extra reduction when level 0 is not 8-aligned gave 1152 instead of 1088 at 1080p)
             size = half
         return r
     ah, aw = 1 << reductions(H), 1 << reductions(W)
@@ -478,7 +477,10 @@ def selftest(dll):
             if b == drop: continue
             out[re.sub(r'^block\d+', 'block%d' % (b - (b > drop)), k)] = v
         return out
-    ok = [run('310.8 as is', base, 'OK 156')]
+    ref = {(960, 540): (576, 960), (1280, 720): (768, 1344), (1920, 1080): (1088, 1920), (2560, 1440): (1472, 2560)}   # dlssnr-pytorch-flex plan.padding
+    ok = [all(geometry(w, h, 6)[:2] == v for (w, h), v in ref.items())]
+    print('%-4s geometry = reference padding at 540p/720p/1080p/1440p' % ('PASS' if ok[0] else 'FAIL'))
+    ok.append(run('310.8 as is', base, 'OK 156'))
     ok.append(run('drop encoder block 2 (level 0: 3 blocks)', renum(base, 2), 'PlanError: decoder level sizes'))
     s = renum(renum(base, 2), 66)    # drop a block on both sides of level 0: 3 + 3 blocks
     ok.append(run('drop a block in enc+dec level 0', s, 'OK 154'))
