@@ -1,266 +1,317 @@
 // Native gfx1030 single-head Swin block (Swin1H, dlssnr/layers/swin.py) for k_swin_var<32>: drop-in for
-// _Z10k_swin_varILi32ELb0EEv9VarParams (same VarParams kernarg, grid = one 8x8 window per workgroup, 256 threads).
-// Structure follows native-mid/swinvar.hip (its C = 64 "SMALL" LDS plan, 24 KB, two workgroups per CU); the C = 32
-// differences of the single-head block:
-//  - no grouped mid projection: expand 32 -> 128 (+SiLU, q8), contract 128 -> 32, in two hidden chunks of 64;
+// _Z10k_swin_varILi32ELb0EEv9VarParams (same VarParams kernarg, grid = one 8x8 window per workgroup, 64 threads).
+// C = 32 specifics of the single-head block:
+//  - no grouped mid projection: expand 32 -> 128 (+SiLU, q8), contract 128 -> 32;
 //  - the attention skip is the unrounded f32 MLP output y (qkv reads q8(f16(y)));
 //  - upsample (flags 8): blend = f16(skip * gain + P(coarse)) is the MLP residual, q8(blend) the matmul input;
 //    gain = upsample_gain[0..31];
 //  - record (extract.py _swin_layout, heads = 1): expand 4096 B | contract 4096 B | [resample 2048 B if up] |
 //    residual_scale 96 B | [upsample_gain 64 B if up] | qkv 3072 B | bias 8192 B | scalars 16 B | out_proj 1024 B |
 //    attn_residual_scale | [ds resample 2048 B].
-// Build with -ffp-contract=off -mcumode (build_native.sh).
+// perf-c32b layout: one window per 64-thread workgroup (two waves), lane = token for the load, MLP, qkv, out_proj and
+// store, so those run from registers with no LDS and no barrier. Every weight operand is wave-uniform and comes through
+// SGPRs (s_load from the f16 shadow that k_swin_c32_prep builds once per record at load, kernarg +0xa0). LDS (12.4 KB,
+// five workgroups per CU) only carries the attention exchanges: qn/kn -> logits (8 queries x 8 keys per thread) ->
+// numerators -> denominator + normalise (lane = query) -> P V (8 queries x 4 dims per thread) -> ctx. Each output keeps
+// the reference accumulation order of the previous 256-thread kernel (byte-identical results).
+// Build with -ffp-contract=off -mcumode (build.sh).
 #include "swin_common.h"
 
 #ifndef WPE
-#define WPE 8
+#define WPE 5
 #endif
-extern "C" __global__ __launch_bounds__(256) __attribute__((amdgpu_waves_per_eu(WPE))) void k_swin_c32(VarParams P) {
-  constexpr int C = 32;
-  __shared__ uint32_t Xs[16 * 64];   // [kp][tok]: q8(x), later Yq; weight stage for up/ds projections
-  __shared__ uint32_t R1[2176];      // coarse | Hs [32 kp][68] | q f32 | qn | ctx | Wo, reciprocals at +1024
-  __shared__ uint32_t R2[1152];      // up: residual blend f16 [16 kp][64] | Vt [32 key pair][36] half2
-  __shared__ uint32_t R3[2112];      // weight stage | Pj | k f32 | kn | Pm
-  float* rec_s = (float*)(R1 + 1024);
+constexpr int HPG = 2;   // hidden pairs per MLP step
 
-  const int tid = threadIdx.x, tx = tid & 31, ty = tid >> 5;   // C-wide tiles: tokens ty*8..+7, channel tx
-  const uint8_t* rec = P.w;
+// f16 weight shadow (words = half2 k-pairs as put16 stages them), built by k_swin_c32_prep:
+//  WE [128 n][16 kp]      expand, hidden n             WC [64 G][32 c]       contract, hidden pair G
+//  WQ [3 g][16 kp][32 n]  qkv, output 32g + n           WO [16 kp][32 c]      out_proj
+//  WR [2 h][32 kp][16 n]  up resample, out 16h + n      WD [2 h][16 kp][32 n] ds resample, out 32h + n
+//  RSC/ARS/UG [32] f32 residual scale / attn residual scale / upsample gain, HSC f32 head scale,
+//  BIAS [64 thread][8 q][8 k] f32 = fmaf(bias, 0.044921875, 1.30078125) in the logits thread order.
+constexpr int S_WE = 0, S_WC = S_WE + 2048, S_WQ = S_WC + 2048, S_WO = S_WQ + 1536, S_WR = S_WO + 512, S_WD = S_WR + 1024;
+constexpr int S_RSC = S_WD + 1024, S_ARS = S_RSC + 32, S_UG = S_ARS + 32, S_HSC = S_UG + 32, S_BIAS = S_HSC + 32;
+constexpr int S_END = S_BIAS + 4096;
+static_assert(S_BIAS % 4 == 0, "bias rows are read as float4");
+
+typedef const __attribute__((address_space(4))) uint32_t* cwp;   // constant address space: wave-uniform -> s_load
+typedef const __attribute__((address_space(4))) float* cfp;
+
+// acc[n] = dot2(a[k], w[k * N + n], acc[n]) for k = 0..K-1 in order (the reference order per output). The weight row
+// comes through SGPRs, one row ahead; the empty asm pins each row's dot2s before the scheduling barrier, so the compiler
+// neither sinks the math nor hoists all K * N scalar loads (SGPR spills).
+template <int K, int N>
+__device__ __forceinline__ void gemv(float* acc, const uint32_t* a, cwp w) {
+  uint32_t cur[N], nxt[N];
+#pragma unroll
+  for (int n = 0; n < N; n++) cur[n] = w[n];
+  __builtin_amdgcn_sched_barrier(0);
+#pragma unroll
+  for (int k = 0; k < K; k++) {
+    if (k + 1 < K)
+#pragma unroll
+      for (int n = 0; n < N; n++) nxt[n] = w[(k + 1) * N + n];
+#pragma unroll
+    for (int n = 0; n < N; n++) { acc[n] = dot2(a[k], cur[n], acc[n]); asm volatile("" : "+v"(acc[n])); }
+    __builtin_amdgcn_sched_barrier(0);
+#pragma unroll
+    for (int n = 0; n < N; n++) cur[n] = nxt[n];
+  }
+}
+
+// q8 for values known finite (no NaN guard), rounding by (a + K) - K with K = 2^(max(e, -6) + 20): one f32 rounding
+// to 3 mantissa bits (2^-9 steps below 2^-6), ties to even = q8's bit trick; checked for every finite f32 (q8f_chk.py)
+__device__ __forceinline__ float q8f(float x) {
+  const float a = fminf(fabsf(x), 448.f);
+  const float K = __uint_as_float(max(__float_as_uint(a) & 0x7F800000u, 0x3C800000u) + (20u << 23));
+  return copysignf(__fsub_rn(__fadd_rn(a, K), K), x);
+}
+// pack two values already on the f16 grid (q8 outputs): the truncating conversion is exact
+__device__ __forceinline__ uint32_t pkz(float a, float b) { return __builtin_bit_cast(uint32_t, __builtin_amdgcn_cvt_pkrtz(a, b)); }
+// pk(q8(f16r(a)), q8(f16r(b))) from xb = pk(a, b), both halves at once on the f16 grid (q8h of swin_var / pre/post_native,
+// proof q8h_cpu.py); finite inputs (an f16 overflow to inf still gives 448 like q8)
+__device__ __forceinline__ uint32_t q8h(uint32_t xb) {
+  typedef unsigned short u2 __attribute__((ext_vector_type(2)));
+  const u2 ab = __builtin_elementwise_min(__builtin_bit_cast(u2, xb & 0x7FFF7FFFu), (u2){0x5F00, 0x5F00});
+  const u2 eb = __builtin_elementwise_max(ab & (u2){0x7C00, 0x7C00}, (u2){0x2400, 0x2400});
+  const h2 K = __builtin_bit_cast(h2, eb) * (h2){(_Float16)128.f, (_Float16)128.f};
+  const h2 r = (__builtin_bit_cast(h2, ab) + K) - K;
+  return (__builtin_bit_cast(uint32_t, r) & 0x7FFF7FFFu) | (xb & 0x80008000u);
+}
+// to_e4m3 bytes (low byte of each half) of a q8h word: normal (|v| >= 2^-6) = ((bits - 0x2400) >> 7) + 8, which wraps
+// to >= 448 below 2^-6; subnormal = |v| * 512 = bits(1024 + |v| * 512) - 0x6400, which is >= the normal code for
+// normals; so the u16 min picks. Sign only for nonzero (to_e4m3(-0) = 0). Exhaustive check: perf_c32b src/q8chk.py.
+__device__ __forceinline__ uint32_t e4h(uint32_t r) {
+  typedef unsigned short u2 __attribute__((ext_vector_type(2)));
+  const u2 ab = __builtin_bit_cast(u2, r & 0x7FFF7FFFu);
+  const u2 nb = ((ab - (u2){0x2400, 0x2400}) >> (u2){7, 7}) + (u2){8, 8};
+  const h2 sh = __builtin_bit_cast(h2, ab) * (h2){(_Float16)512.f, (_Float16)512.f} + (h2){(_Float16)1024.f, (_Float16)1024.f};
+  const u2 sb = __builtin_bit_cast(u2, sh) - (u2){0x6400, 0x6400};
+  const uint32_t nz = __builtin_bit_cast(uint32_t, ab + (u2){0x7FFF, 0x7FFF});   // bit 15 per half = nonzero
+  return __builtin_bit_cast(uint32_t, __builtin_elementwise_min(nb, sb)) | ((r & nz & 0x80008000u) >> 8);
+}
+// 4 e4m3 bytes of memory channels m..m+3 from f32 values: reference channels pi32(m), +1, pi32(m+2), +1
+__device__ __forceinline__ uint32_t e4x4(const float* o, int m) {
+  const int c0 = pi32(m), c1 = pi32(m + 2);
+  const uint32_t a = e4h(q8h(pk(o[c0], o[c0 + 1]))), b = e4h(q8h(pk(o[c1], o[c1 + 1])));
+  return __builtin_amdgcn_perm(b, a, 0x06040200u);   // bytes a0, a2, b0, b2
+}
+
+// record offsets (C = 32)
+struct Rec {
+  int R_AFT, R_RS, R_QKV, R_BIAS, R_HS, R_OUT, R_ARS, R_DSRS;
+  __device__ Rec(bool up) {
+    constexpr int C = 32, R_CON = 4 * C * C;
+    R_AFT = R_CON + 4 * C * C; R_RS = up ? R_AFT + 2 * C * C : R_AFT;
+    R_QKV = R_RS + 2 * C + 32 + (up ? 2 * C : 0);
+    R_BIAS = R_QKV + 3 * C * C; R_HS = R_BIAS + 8192; R_OUT = R_HS + 16;
+    R_ARS = R_OUT + C * C; R_DSRS = R_ARS + 2 * C;
+  }
+};
+
+extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(WPE))) void k_swin_c32(VarParams P) {
+  constexpr int C = 32;
+  __shared__ uint32_t RA[2048];   // up: Pj f16 [16 px][32] | qn [16 i][64 tok] + kn [16 i][64 tok] | Pm / P [32 j][64 q] | ds: pooled f16 [16 px][32]
+  __shared__ uint32_t RB[1056];   // Vt [32 key pair][33] half2 (keys 2j, 2j+1) per dim | ctx [16 kp][64 tok]
+
+  const int t = threadIdx.x, lane = t & 31;
+  const int wv = __builtin_amdgcn_readfirstlane(t >> 5);
+  const cwp S = (cwp)P.scratch;
+  const cfp Sf = (cfp)P.scratch;
   const int H = P.H, W = P.W, WT = W >> 2;
   const int r0 = P.Y0 + blockIdx.y * 8, c0 = P.X0 + blockIdx.x * 8;
   const bool up = P.flags & 8;
-  constexpr int R_CON = 4 * C * C, R_AFT = R_CON + 4 * C * C;
-  const int R_RS = up ? R_AFT + 2 * C * C : R_AFT;
-  const int R_QKV = R_RS + 2 * C + 32 + (up ? 2 * C : 0);
-  const int R_BIAS = R_QKV + 3 * C * C, R_HS = R_BIAS + 8192, R_OUT = R_HS + 16;
-  const int R_ARS = R_OUT + C * C, R_DSRS = R_ARS + 2 * C;
-  const _Float16* rs = (const _Float16*)(rec + R_RS);
-  const uint4 rs8 = *(const uint4*)rs;
-  const int rso = (rs8.x | rs8.y | rs8.z | rs8.w) == 0 ? 8 : 0;
-  _Float16* Pj = (_Float16*)R3;
+  // token t = (qy*2+qx)*16 + y*4 + x
+  const int lr = ((t >> 5) & 1) * 4 + ((t >> 2) & 3), lc = ((t >> 4) & 1) * 4 + (t & 3);
+  const int row = r0 + lr, col = c0 + lc, pix = (lr >> 1) * 4 + (lc >> 1);
+  const bool in = row >= 0 && row < H && col >= 0 && col < W;
 
-  // ---- upsample: Pj[16 pix][32] = f16(Wr . coarse) for the 4x4 coarse pixels under the window (K = 64)
+  // ---- the token's 32 input bytes (issued first: the upsample below overlaps their latency)
+  uint32_t b[8] = {};
+  if (in) {
+    const int p = (row & 3) * 4 + (col & 3);
+    if (P.flags & 1) {
+      const uint8_t* src = P.in + (size_t)(row * W + col) * 16;
+#pragma unroll
+      for (int g = 0; g < 4; g++) { b[2 * g] = *(const uint32_t*)(src + 4 * g); b[2 * g + 1] = *(const uint32_t*)(src + (size_t)H * W * 16 + 4 * g); }
+    } else {
+      const uint8_t* src = P.in + (size_t)((row >> 2) * WT + (col >> 2)) * (C * 16) + (p & 7) * 64 + 4 * (p >> 3);
+#pragma unroll
+      for (int g = 0; g < 4; g++) { b[2 * g] = *(const uint32_t*)(src + 16 * g); b[2 * g + 1] = *(const uint32_t*)(src + 16 * g + 8); }
+    }
+  }
+
+  // ---- upsample: Pj[16 pix][32] = f16(Wr . coarse), K = 64; lane px of wave wv makes outputs 16wv..+15
   if (up) {
-    const int H2 = H >> 1, W2 = W >> 1, Hs = (H2 + 3) & ~3, Ws = (W2 + 3) & ~3, pr0 = r0 >> 1, pc0 = c0 >> 1;
-    if (tid < 32) {   // (pixel, 32-channel chunk of 64)
-      const int px = tid & 15, ch = tid >> 4;
-      const int pr = pr0 + (px >> 2), pc = pc0 + (px & 3);
-      uint32_t b[8] = {};
-      if (pr >= 0 && pr < H2 && pc >= 0 && pc < W2) {
+    const int H2 = H >> 1, W2 = W >> 1, Hs = (H2 + 3) & ~3, Ws = (W2 + 3) & ~3;
+    const int px = lane & 15, pr = (r0 >> 1) + (px >> 2), pc = (c0 >> 1) + (px & 3);
+    uint32_t cb[16] = {};
+    if (pr >= 0 && pr < H2 && pc >= 0 && pc < W2) {
+#pragma unroll
+      for (int ch = 0; ch < 2; ch++) {
         const uint8_t* src = P.p30 + (size_t)(ch * 2) * Hs * Ws * 16 + (size_t)(pr * Ws + pc) * 16;
 #pragma unroll
-        for (int g = 0; g < 4; g++) { b[2 * g] = *(const uint32_t*)(src + 4 * g); b[2 * g + 1] = *(const uint32_t*)(src + (size_t)Hs * Ws * 16 + 4 * g); }
+        for (int g = 0; g < 4; g++) { cb[ch * 8 + 2 * g] = *(const uint32_t*)(src + 4 * g); cb[ch * 8 + 2 * g + 1] = *(const uint32_t*)(src + (size_t)Hs * Ws * 16 + 4 * g); }
       }
+    }
+    uint32_t cw[32];
+#pragma unroll
+    for (int ch = 0; ch < 2; ch++)
 #pragma unroll
       for (int g = 0; g < 4; g++)
 #pragma unroll
         for (int s2 = 0; s2 < 2; s2++)
 #pragma unroll
           for (int hh = 0; hh < 2; hh++) {
-            int c = 16 * s2 + 4 * g + 2 * hh;
-            R1[((ch * 32 + pi32(c)) >> 1) * 16 + px] = x256(e4x2((b[2 * g + s2] >> (16 * hh)) & 0xFFFFu));
+            const int c = 16 * s2 + 4 * g + 2 * hh;
+            cw[(ch * 32 + pi32(c)) >> 1] = x256(e4x2((cb[ch * 8 + 2 * g + s2] >> (16 * hh)) & 0xFFFFu));
           }
-    }
-    // Wr [32 n][64 k]: tiles kb*2 + j (GN = 2) -> Xs [32 kp][32 n]
-    stage(Xs, 32, rec, 4, [&](int i, int& off, int& ncol, int& kpo) { off = R_AFT + i * 512; ncol = (i & 1) * 16; kpo = (i >> 1) * 16; });
-    __syncthreads();
-    const int px = tid & 15, cp = tid >> 4;   // pixel, output channel pair
-    float a0 = 0.f, a1 = 0.f;
-#pragma unroll 8
-    for (int kp = 0; kp < 32; kp++) {
-      uint32_t a = R1[kp * 16 + px]; uint2 bb = *(const uint2*)&Xs[kp * 32 + 2 * cp];
-      a0 = dot2(a, bb.x, a0); a1 = dot2(a, bb.y, a1);
-    }
-    Pj[px * C + 2 * cp] = (_Float16)(a0 * 256.f); Pj[px * C + 2 * cp + 1] = (_Float16)(a1 * 256.f);
+    float a[16] = {};
+    const cwp wr = S + S_WR + wv * 512;
+    gemv<32, 16>(a, cw, wr);
+    _Float16* Pj = (_Float16*)RA;
+    if (lane < 16)
+#pragma unroll
+      for (int n = 0; n < 16; n++) Pj[px * C + 16 * wv + n] = (_Float16)(a[n] * 256.f);
     __syncthreads();
   }
 
-  // ---- load the window: token t = (qy*2+qx)*16 + y*4 + x
-  if (tid < 64) {
-    const int t = tid;
-    int row = r0 + ((t >> 5) & 1) * 4 + ((t >> 2) & 3), col = c0 + ((t >> 4) & 1) * 4 + (t & 3);
-    bool in = row >= 0 && row < H && col >= 0 && col < W;
-    uint32_t b[8] = {};
-    if (in) {
-      int p = (row & 3) * 4 + (col & 3);
-      if (P.flags & 1) {
-        const uint8_t* src = P.in + (size_t)(row * W + col) * 16;
-#pragma unroll
-        for (int g = 0; g < 4; g++) { b[2 * g] = *(const uint32_t*)(src + 4 * g); b[2 * g + 1] = *(const uint32_t*)(src + (size_t)H * W * 16 + 4 * g); }
-      } else {
-        const uint8_t* src = P.in + (size_t)((row >> 2) * WT + (col >> 2)) * (C * 16) + (p & 7) * 64 + 4 * (p >> 3);
-#pragma unroll
-        for (int g = 0; g < 4; g++) { b[2 * g] = *(const uint32_t*)(src + 16 * g); b[2 * g + 1] = *(const uint32_t*)(src + 16 * g + 8); }
-      }
-    }
-    const _Float16* ug = (const _Float16*)(rec + R_RS + 2 * C + 32);
-    const int lr = ((t >> 5) & 1) * 4 + ((t >> 2) & 3), lc = ((t >> 4) & 1) * 4 + (t & 3), pix = (lr >> 1) * 4 + (lc >> 1);
+  // ---- load the token: X = matmul input (q8), R = MLP residual (x, or the f16 blend when up)
+  uint32_t X[16], R[16];
+  {
 #pragma unroll
     for (int g = 0; g < 4; g++)
 #pragma unroll
       for (int s = 0; s < 2; s++)
 #pragma unroll
         for (int hh = 0; hh < 2; hh++) {
-          int c = 16 * s + 4 * g + 2 * hh;
-          uint32_t v = x256(e4x2((b[2 * g + s] >> (16 * hh)) & 0xFFFFu));
-          const int rc = pi32(c);
-          if (up) {   // blend = f16(skip * gain + P(coarse)), zero outside the frame; matmuls read q8(blend)
-            float x0 = in ? f16r((float)((double)lo(v) * (double)(float)ug[rc] + (double)(float)Pj[pix * C + rc])) : 0.f;
-            float x1 = in ? f16r((float)((double)hi(v) * (double)(float)ug[rc + 1] + (double)(float)Pj[pix * C + rc + 1])) : 0.f;
-            R2[(rc >> 1) * 64 + t] = pk(x0, x1);
-            v = pk(q8(x0), q8(x1));
-          }
-          Xs[(rc >> 1) * 64 + t] = v;
+          const int c = 16 * s + 4 * g + 2 * hh;
+          X[pi32(c) >> 1] = x256(e4x2((b[2 * g + s] >> (16 * hh)) & 0xFFFFu));
         }
-  }
-  const uint32_t* Xres = up ? R2 : Xs;   // MLP residual
-
-  // ================= MLP: two hidden chunks of 64; contract partials accumulate in registers
-  float y[8] = {};
-#pragma unroll 1
-  for (int sc = 0; sc < 2; sc++) {
-    {   // expand: Hs[64 tok][64] = q8(act(X . We[sc*64 .. +64]^T)), K = 32 (n-tile = tile)
-      __syncthreads();
-      if (tid < 128) put16(R3, 64, *((const uint4*)(rec + sc * 4 * 512) + tid), tid & 31, (tid >> 5) * 16);
-      __syncthreads();
-      float acc[8][2] = {};
-#pragma unroll 4
-      for (int kp = 0; kp < 16; kp++) {
-        uint4 a0 = *(const uint4*)&Xs[kp * 64 + ty * 8];
-        uint4 a1 = *(const uint4*)&Xs[kp * 64 + ty * 8 + 4];
-        uint32_t av[8] = {a0.x, a0.y, a0.z, a0.w, a1.x, a1.y, a1.z, a1.w};
-        uint2 bb = *(const uint2*)&R3[kp * 64 + tx * 2];
+    if (up) {   // blend = f16(skip * gain + P(coarse)), zero outside the frame. skip * gain is exact in f32 and
+                // skip * gain + P is exact in f64 (<= 49 significant bits), so one f32 rounding = the f64 reference.
 #pragma unroll
-        for (int r = 0; r < 8; r++) { acc[r][0] = dot2(av[r], bb.x, acc[r][0]); acc[r][1] = dot2(av[r], bb.y, acc[r][1]); }
+      for (int k = 0; k < 16; k++) {
+        const uint32_t v = X[k], pj = RA[pix * 16 + k];
+        const float x0 = f16r(__fadd_rn(__fmul_rn(lo(v), Sf[S_UG + 2 * k]), lo(pj)));
+        const float x1 = f16r(__fadd_rn(__fmul_rn(hi(v), Sf[S_UG + 2 * k + 1]), hi(pj)));
+        R[k] = in ? pk(x0, x1) : 0u;
+        X[k] = q8h(R[k]);
       }
+    } else {
 #pragma unroll
-      for (int r = 0; r < 8; r++) R1[tx * 68 + ty * 8 + r] = pk(q8(act(acc[r][0] * 256.f)), q8(act(acc[r][1] * 256.f)));
+      for (int k = 0; k < 16; k++) R[k] = X[k];
     }
-    __syncthreads();
-    // contract partial: y += Hs . Wc[:, sc*64 .. +64]^T; Wc [32 n][128 k] tiles kb*2 + j (GN = 2), kb = 2sc, 2sc+1 -> R3 [32 kp][32 n]
-    if (tid < 128) { const int i = tid >> 5; put16(R3 + (i >> 1) * 16 * 32, 32, *((const uint4*)(rec + R_CON + (sc * 4 + i) * 512) + (tid & 31)), tid & 31, (i & 1) * 16); }
-    __syncthreads();
-#pragma unroll 8
-    for (int kp = 0; kp < 32; kp++) {
-      uint4 a0 = *(const uint4*)&R1[kp * 68 + ty * 8];
-      uint4 a1 = *(const uint4*)&R1[kp * 68 + ty * 8 + 4];
-      uint32_t av[8] = {a0.x, a0.y, a0.z, a0.w, a1.x, a1.y, a1.z, a1.w}, b = R3[kp * 32 + tx];
+  }
+  if (up) __syncthreads();   // Pj (RA) is read; qn/kn overwrite it below
+
+  // ================= MLP in registers, rolled over hidden pairs (small code): per pair G, expand hidden 2G, 2G+1 over
+  // K = 32, act + q8, then y += hd(G) . Wc[G] (the contract accumulates over G = 0..63 in order)
+  float y[32] = {};
+#pragma unroll 1
+  for (int G = 0; G < 64; G += HPG) {
+    const cwp we = S + S_WE + G * 32, wc = S + S_WC + G * 32;
+    float acc[2 * HPG] = {};
 #pragma unroll
-      for (int r = 0; r < 8; r++) y[r] = dot2(av[r], b, y[r]);
-    }
+    for (int kp = 0; kp < 16; kp++)
+#pragma unroll
+      for (int j = 0; j < 2 * HPG; j++) acc[j] = dot2(X[kp], we[j * 16 + kp], acc[j]);
+    uint32_t hd[HPG];
+#pragma unroll
+    for (int g = 0; g < HPG; g++) hd[g] = pkz(q8f(act(acc[2 * g] * 256.f)), q8f(act(acc[2 * g + 1] * 256.f)));
+    __builtin_amdgcn_sched_barrier(0);
+#pragma unroll
+    for (int g = 0; g < HPG; g++)
+#pragma unroll
+      for (int c = 0; c < 32; c++) y[c] = dot2(hd[g], wc[g * 32 + c], y[c]);
+    __builtin_amdgcn_sched_barrier(0);
   }
 
-  // ---- y = rs * x + mlp (f32, the attention skip); Yq = q8(f16(y)) replaces x in Xs
-  {
-    const float rsc = (float)rs[rso + tx];
-    const _Float16* xr = (const _Float16*)Xres;
+  // ---- y = rs * x + mlp (f32, the attention skip); Yq = q8(f16(y))
+  uint32_t Yq[16];
 #pragma unroll
-    for (int r = 0; r < 8; r++) y[r] = __fadd_rn(__fmul_rn((float)xr[((tx >> 1) * 64 + ty * 8 + r) * 2 + (tx & 1)], rsc), y[r] * 256.f);
-    __syncthreads();
-    _Float16* xq = (_Float16*)Xs;
+  for (int c = 0; c < 32; c++) y[c] = __fadd_rn(__fmul_rn((c & 1) ? hi(R[c >> 1]) : lo(R[c >> 1]), Sf[S_RSC + c]), y[c] * 256.f);
 #pragma unroll
-    for (int r = 0; r < 8; r++) xq[((tx >> 1) * 64 + ty * 8 + r) * 2 + (tx & 1)] = (_Float16)q8(f16r(y[r]));
-  }
+  for (int k = 0; k < 16; k++) Yq[k] = q8h(pk(y[2 * k], y[2 * k + 1]));
 
   // ================= attention (one head)
-  float* qb = (float*)R1;
-  float* kbuf = (float*)R3;
-  uint32_t* qn = R1;
-  uint32_t* kn = R3;
-  uint32_t* Pm = R3;
-  uint32_t* ctx = R1;
-  uint32_t* wo = R1 + 1024;
-  _Float16* Vt = (_Float16*)R2;
-  const float* hsc = (const float*)(rec + R_HS);
-  {   // qkv: [64 tok][96] = Yq . Wqkv^T, K = 32
-    const int tx16 = tid >> 4, ty16 = tid & 15;   // tokens across lanes: conflict-free stores
-    float acc[4][6] = {};
-    __syncthreads();
-    if (tid < 192) put16(R3, 96, *((const uint4*)(rec + R_QKV) + tid), tid & 31, (tid >> 5) * 16);
-    __syncthreads();
-#pragma unroll 4
-    for (int kp = 0; kp < 16; kp++) {
-      uint4 a = *(const uint4*)&Xs[kp * 64 + ty16 * 4];
-      uint2 b0 = *(const uint2*)&R3[kp * 96 + tx16 * 6];
-      uint2 b1 = *(const uint2*)&R3[kp * 96 + tx16 * 6 + 2];
-      uint2 b2 = *(const uint2*)&R3[kp * 96 + tx16 * 6 + 4];
-      uint32_t av[4] = {a.x, a.y, a.z, a.w}, bv[6] = {b0.x, b0.y, b1.x, b1.y, b2.x, b2.y};
+  uint32_t* qn = RA;          // [16 i][64 tok]
+  uint32_t* kn = RA + 1024;   // [16 i][64 tok]
+  uint32_t* Pm = RA;          // [32 key pair][64 q]
+  uint32_t* Vt = RB;          // [32 key pair][33]
+  uint32_t* ctx = RB;         // [16 kp][64 tok]
+  {   // qkv in registers (K = 32), q and k L2-normalised in place (q with the head scale), v -> Vt
+#pragma unroll 1
+    for (int g = 0; g < 3; g++) {   // one gemv body for q, k, v (code size)
+      float a[32] = {};
+      gemv<16, 32>(a, Yq, S + S_WQ + g * 512);
 #pragma unroll
-      for (int r = 0; r < 4; r++)
+      for (int n = 0; n < 32; n++) a[n] *= 256.f;
+      if (g < 2) {
+        float sc = norm_scale(a);
+        if (g == 0) sc = __fmul_rn(sc, Sf[S_HSC]);
+        uint32_t* dst = g ? kn : qn;
 #pragma unroll
-        for (int c = 0; c < 6; c++) acc[r][c] = dot2(av[r], bv[c], acc[r][c]);
-    }
-    __syncthreads();
+        for (int d = 0; d < 32; d += 2) dst[(d >> 1) * 64 + t] = pkz(q8f(__fmul_rn(a[d], sc)), q8f(__fmul_rn(a[d + 1], sc)));
+      } else {
+        uint32_t own[16];   // own[k] = v(dims 2k, 2k+1) as f16 pairs
 #pragma unroll
-    for (int r = 0; r < 4; r++)
+        for (int k = 0; k < 16; k++) own[k] = q8h(pk(a[2 * k], a[2 * k + 1]));
+        // the even token of a key pair writes dims 0..15, the odd one dims 16..31; each needs the partner's half
+        const bool odd = t & 1;
+        const int j = t >> 1;
 #pragma unroll
-      for (int c = 0; c < 6; c++) {
-        int n = tx16 * 6 + c, t = ty16 * 4 + r;
-        float v = acc[r][c] * 256.f;
-        if (n < 32) qb[n * 65 + t] = v;   // row stride 65: no bank conflicts
-        else if (n < 64) kbuf[(n - 32) * 65 + t] = v;
-        else Vt[((t >> 1) * 36 + n - 64) * 2 + (t & 1)] = (_Float16)q8(f16r(v));   // [key pair][d] half2
+        for (int k = 0; k < 8; k++) {
+          const uint32_t send = odd ? own[k] : own[8 + k];
+          const uint32_t recv = (uint32_t)__builtin_amdgcn_mov_dpp((int)send, 0xB1, 0xF, 0xF, false);   // quad_perm [1,0,3,2]: lane ^ 1
+          const uint32_t mine = odd ? own[8 + k] : own[k];
+          const uint32_t w0 = odd ? ((recv & 0xFFFFu) | (mine << 16)) : ((mine & 0xFFFFu) | (recv << 16));
+          const uint32_t w1 = odd ? ((recv >> 16) | (mine & 0xFFFF0000u)) : ((mine >> 16) | (recv & 0xFFFF0000u));
+          const int d = 2 * k + (odd ? 16 : 0);
+          Vt[j * 33 + d] = w0; Vt[j * 33 + d + 1] = w1;
+        }
       }
-  }
-  __syncthreads();
-  {   // L2-normalise q (with the head scale) and k. qn/kn alias qb/kbuf across waves: read all, barrier, then write.
-    const int t = tid & 63, w = (tid >> 6) & 1;
-    float v[32], sc = 0.f;
-    if (tid < 128) {
-#pragma unroll
-      for (int d = 0; d < 32; d++) v[d] = (w ? kbuf : qb)[d * 65 + t];
-      sc = norm_scale(v);
-      if (w == 0) sc = __fmul_rn(sc, hsc[0]);
-    }
-    __syncthreads();
-    if (tid < 128) {
-#pragma unroll
-      for (int d = 0; d < 32; d += 2) (w ? kn : qn)[(d >> 1) * 64 + t] = pk(q8(__fmul_rn(v[d], sc)), q8(__fmul_rn(v[d + 1], sc)));
     }
   }
   __syncthreads();
-  {   // logits -> exponent-ramp numerators, Pm[key pair][query]
-    const int t = tid & 63, kq = tid >> 6;
-    uint32_t qv[16];
+  {   // logits -> exponent-ramp numerators: thread = 8 queries (8qb..) x 8 keys (8kb..)
+    const int qb = t & 7, kb = t >> 3;
+    float lg[8][8] = {};
+#pragma unroll 2
+    for (int i = 0; i < 16; i++) {
+      uint32_t qv[8], kv[8];
 #pragma unroll
-    for (int i = 0; i < 16; i++) qv[i] = qn[i * 64 + t];
-    const _Float16* braw = (const _Float16*)(rec + R_BIAS);
-    uint32_t num[8];
-    float lg[16] = {};   // this thread's 16 keys; 4 keys per LDS read
+      for (int e = 0; e < 8; e++) { qv[e] = qn[i * 64 + 8 * qb + e]; kv[e] = kn[i * 64 + 8 * kb + e]; }
 #pragma unroll
-    for (int g = 0; g < 4; g++)
+      for (int a = 0; a < 8; a++)
 #pragma unroll
-      for (int i = 0; i < 16; i++) {
-        uint4 k4 = *(const uint4*)&kn[i * 64 + kq * 16 + g * 4];
-        lg[4 * g] = dot2(qv[i], k4.x, lg[4 * g]); lg[4 * g + 1] = dot2(qv[i], k4.y, lg[4 * g + 1]);
-        lg[4 * g + 2] = dot2(qv[i], k4.z, lg[4 * g + 2]); lg[4 * g + 3] = dot2(qv[i], k4.w, lg[4 * g + 3]);
-      }
-#pragma unroll
-    for (int jj = 0; jj < 8; jj++) {
-      float s2[2];
-#pragma unroll
-      for (int e = 0; e < 2; e++) {
-        int s = kq * 16 + jj * 2 + e;
-        float acc = lg[jj * 2 + e];
-        int ii = t & 15, j = s & 15;
-        int lane = 4 * (ii & 7) + ((j & 7) >> 1);
-        int slot = (j & 1) | ((ii >> 3) << 1) | ((j >> 3) << 2);
-        float b = (float)braw[(4 * (t >> 4) + (s >> 4)) * 256 + lane * 8 + slot];
-        s2[e] = fmaf(acc, 0.044921875f, fmaf(b, 0.044921875f, 1.30078125f));
-      }
-      h2 r = (h2){(_Float16)s2[0], (_Float16)s2[1]};
-      r = __builtin_elementwise_max(r, (h2){(_Float16)1.03125f, (_Float16)1.03125f});
-      r = __builtin_elementwise_min(r, (h2){(_Float16)1.5693359375f, (_Float16)1.5693359375f});
-      num[jj] = (__builtin_bit_cast(uint32_t, r) & 0x03FF03FFu) << 5;
+        for (int b = 0; b < 8; b++) lg[a][b] = dot2(qv[a], kv[b], lg[a][b]);
     }
-    __syncthreads();   // Pm replaces kn
+    const float4* bp = (const float4*)(P.scratch + 4 * (S_BIAS + t * 64));
+    uint32_t num[8][4];
 #pragma unroll
-    for (int jj = 0; jj < 8; jj++) Pm[(kq * 8 + jj) * 64 + t] = num[jj];
+    for (int a = 0; a < 8; a++) {
+      const float4 b0 = bp[2 * a], b1 = bp[2 * a + 1];
+      const float bb[8] = {b0.x, b0.y, b0.z, b0.w, b1.x, b1.y, b1.z, b1.w};
+#pragma unroll
+      for (int jj = 0; jj < 4; jj++) {
+        const float s0 = fmaf(lg[a][2 * jj], 0.044921875f, bb[2 * jj]), s1 = fmaf(lg[a][2 * jj + 1], 0.044921875f, bb[2 * jj + 1]);
+        h2 r = (h2){(_Float16)s0, (_Float16)s1};
+        r = __builtin_elementwise_max(r, (h2){(_Float16)1.03125f, (_Float16)1.03125f});
+        r = __builtin_elementwise_min(r, (h2){(_Float16)1.5693359375f, (_Float16)1.5693359375f});
+        num[a][jj] = (__builtin_bit_cast(uint32_t, r) & 0x03FF03FFu) << 5;
+      }
+    }
+    __syncthreads();   // Pm replaces qn/kn
+#pragma unroll
+    for (int jj = 0; jj < 4; jj++)
+#pragma unroll
+      for (int a = 0; a < 8; a++) Pm[(4 * kb + jj) * 64 + 8 * qb + a] = num[a][jj];
   }
   __syncthreads();
-  if (tid < 64) {   // denominator in the reference order
+  {   // lane = query: denominator in the reference order, then P = q8(f16(num / den)) in place
     h2 pp[32];
 #pragma unroll
-    for (int j = 0; j < 32; j++) pp[j] = __builtin_bit_cast(h2, Pm[j * 64 + tid]);
+    for (int j = 0; j < 32; j++) pp[j] = __builtin_bit_cast(h2, Pm[j * 64 + t]);
     h2 hm[2];
 #pragma unroll
     for (int m = 0; m < 2; m++) {
@@ -269,96 +320,185 @@ extern "C" __global__ __launch_bounds__(256) __attribute__((amdgpu_waves_per_eu(
       for (int p = 0; p < 4; p++) { int b = 2 * p + m; pr[p] = ((pp[b] + pp[8 + b]) + pp[16 + b]) + pp[24 + b]; }
       hm[m] = ((pr[0] + pr[1]) + pr[2]) + pr[3];
     }
-    _Float16 den = (hm[0].x + hm[0].y) + (hm[1].x + hm[1].y);
-    rec_s[tid] = __fdiv_rn(1.f, fmaxf((float)den, 0.00006103515625f));
-  }
-  __syncthreads();
-  {   // context = P V -> ctx [16 kp][64 tok]
-    const int t = tid & 63, dq = tid >> 6;
-    const float rc = rec_s[t];
+    const _Float16 den = (hm[0].x + hm[0].y) + (hm[1].x + hm[1].y);
+    const float rc = __fdiv_rn(1.f, fmaxf((float)den, 0.00006103515625f));
 #pragma unroll
-    for (int j = dq * 8; j < dq * 8 + 8; j++) {   // probabilities, each quantised once (in place)
-      uint32_t u = Pm[j * 64 + t];
-      Pm[j * 64 + t] = pk(q8(f16r(__fmul_rn(lo(u), rc))), q8(f16r(__fmul_rn(hi(u), rc))));
-    }
-    __syncthreads();
-    float s[8] = {};
-#pragma unroll 8
     for (int j = 0; j < 32; j++) {
-      const uint32_t pv = Pm[j * 64 + t];
-      const uint4 v0 = *(const uint4*)((const uint32_t*)Vt + j * 36 + dq * 8), v1 = *(const uint4*)((const uint32_t*)Vt + j * 36 + dq * 8 + 4);
-      const uint32_t vv[8] = {v0.x, v0.y, v0.z, v0.w, v1.x, v1.y, v1.z, v1.w};
-#pragma unroll
-      for (int d = 0; d < 8; d++) s[d] = dot2(pv, vv[d], s[d]);
+      const uint32_t u = __builtin_bit_cast(uint32_t, pp[j]);
+      Pm[j * 64 + t] = q8h(pk(__fmul_rn(lo(u), rc), __fmul_rn(hi(u), rc)));
     }
-    __syncthreads();
-#pragma unroll
-    for (int d = 0; d < 8; d += 2) ctx[((dq * 8 + d) >> 1) * 64 + t] = pk(q8(f16r(s[d])), q8(f16r(s[d + 1])));
   }
-  stage(wo, C, rec, 2, [&](int i, int& off, int& ncol, int& kpo) { off = R_OUT + i * 512; ncol = i * 16; kpo = 0; });
   __syncthreads();
-  float o[8] = {};
+  {   // context = P V: thread = 8 queries (8qb..) x 4 dims (4db..)
+    const int qb = t & 7, db = t >> 3;
+    float s[8][4] = {};
 #pragma unroll 4
-  for (int kp = 0; kp < 16; kp++) {
-    uint4 a0 = *(const uint4*)&ctx[kp * 64 + ty * 8];
-    uint4 a1 = *(const uint4*)&ctx[kp * 64 + ty * 8 + 4];
-    uint32_t av[8] = {a0.x, a0.y, a0.z, a0.w, a1.x, a1.y, a1.z, a1.w}, b = wo[kp * C + tx];
+    for (int j = 0; j < 32; j++) {
+      uint32_t pv[8], vv[4];
 #pragma unroll
-    for (int r = 0; r < 8; r++) o[r] = dot2(av[r], b, o[r]);
+      for (int a = 0; a < 8; a++) pv[a] = Pm[j * 64 + 8 * qb + a];
+#pragma unroll
+      for (int e = 0; e < 4; e++) vv[e] = Vt[j * 33 + 4 * db + e];
+#pragma unroll
+      for (int a = 0; a < 8; a++)
+#pragma unroll
+        for (int e = 0; e < 4; e++) s[a][e] = dot2(pv[a], vv[e], s[a][e]);
+    }
+    __syncthreads();   // ctx replaces Vt
+#pragma unroll
+    for (int a = 0; a < 8; a++)
+#pragma unroll
+      for (int e = 0; e < 4; e += 2) ctx[((4 * db + e) >> 1) * 64 + 8 * qb + a] = q8h(pk(s[a][e], s[a][e + 1]));
   }
-
-  // ---- out = ars * y + Wo . ctx ; store q8(f16(out)) as e4m3
+  __syncthreads();
+  // ---- out_proj (lane = token), out = ars * y + Wo . ctx
+  float o[32] = {};
   {
-    const float as = (float)((const _Float16*)(rec + R_ARS))[tx];
-    const int mc = ipi32(tx);
+#pragma unroll 2
+    for (int kp = 0; kp < 16; kp++) {   // rolled rows (code size), the ctx word straight from LDS
+      const uint32_t cx = ctx[kp * 64 + t];
 #pragma unroll
-    for (int r = 0; r < 8; r++) {
-      int t = ty * 8 + r;
-      int row = r0 + ((t >> 5) & 1) * 4 + ((t >> 2) & 3), col = c0 + ((t >> 4) & 1) * 4 + (t & 3);
-      o[r] = __fadd_rn(__fmul_rn(y[r], as), o[r] * 256.f);
-      if (!(row >= 0 && row < H && col >= 0 && col < W)) continue;
-      int p = (row & 3) * 4 + (col & 3);
-      uint8_t v8 = (uint8_t)to_e4m3(q8(f16r(o[r])));
-      if (P.flags & 2)
-        P.out[(size_t)(mc >> 4) * H * W * 16 + (size_t)(row * W + col) * 16 + (mc & 15)] = v8;
-      else
-        P.out[(size_t)((row >> 2) * WT + (col >> 2)) * (C * 16) + (p & 7) * 64 + 4 * (p >> 3) + 16 * ((mc & 15) >> 2) + 8 * (mc >> 4) + (mc & 3)] = v8;
+      for (int c = 0; c < 32; c++) o[c] = dot2(cx, S[S_WO + kp * 32 + c], o[c]);
+      __builtin_amdgcn_sched_barrier(0);
+    }
+#pragma unroll
+    for (int c = 0; c < 32; c++) o[c] = __fadd_rn(__fmul_rn(y[c], Sf[S_ARS + c]), o[c] * 256.f);
+  }
+  // ---- store q8(f16(out)) as e4m3: 32 bytes of the token
+  if (in) {
+    if (P.flags & 2) {
+#pragma unroll
+      for (int pl = 0; pl < 2; pl++) {
+        uint32_t w[4];
+#pragma unroll
+        for (int k = 0; k < 4; k++) w[k] = e4x4(o, 16 * pl + 4 * k);
+        *(uint4*)(P.out + (size_t)pl * H * W * 16 + (size_t)(row * W + col) * 16) = (uint4){w[0], w[1], w[2], w[3]};
+      }
+    } else {
+      const int p = (row & 3) * 4 + (col & 3);
+      uint8_t* dst = P.out + (size_t)((row >> 2) * WT + (col >> 2)) * (C * 16) + (p & 7) * 64 + 4 * (p >> 3);
+#pragma unroll
+      for (int a = 0; a < 4; a++)
+#pragma unroll
+        for (int b = 0; b < 2; b++) {
+          *(uint32_t*)(dst + 16 * a + 8 * b) = e4x4(o, 4 * a + 16 * b);
+        }
     }
   }
   if (!(P.flags & 4)) return;
 
-  // ---- downsample: pooled = q8(pool2x2(out)) -> R1 f16 [16 kp][16 pix]; next = q8(f16(Wds . pooled)) -> +0x38 planes [4][H/2][W/2][16]
-  __syncthreads();
+  // ---- downsample: pooled = q8(pool2x2(out)) -> RA f16 [16 pix][32]; next = q8(f16(Wds . pooled)) -> +0x38 planes [4][H/2][W/2][16]
   {
-    const int py = (ty >> 2) * 2 + (ty & 1), qx = (ty >> 1) & 1;
-    _Float16* pl = (_Float16*)R1;
+    // RA (P) was last read before the ctx barrier
+    const bool lead = !(t & 1) && !(t & 4);
+    uint32_t* pw = RA;
 #pragma unroll
-    for (int px = 0; px < 2; px++) {
-      _Float16 h0 = (_Float16)(o[2 * px] + o[2 * px + 1]);
-      _Float16 h1 = (_Float16)(o[4 + 2 * px] + o[4 + 2 * px + 1]);
-      _Float16 tot = h0 + h1;
-      pl[((tx >> 1) * 16 + py * 4 + qx * 2 + px) * 2 + (tx & 1)] = (_Float16)q8((float)tot * 0.25f);
+    for (int c = 0; c < 32; c += 2) {   // x partner = lane ^ 1 (DPP quad_perm [1,0,3,2]), y partner = lane ^ 4 (DPP row_xmask:4)
+      const float ox0 = __int_as_float(__builtin_amdgcn_mov_dpp(__float_as_int(o[c]), 0xB1, 0xF, 0xF, false));
+      const float ox1 = __int_as_float(__builtin_amdgcn_mov_dpp(__float_as_int(o[c + 1]), 0xB1, 0xF, 0xF, false));
+      const h2 h = (h2){(_Float16)(o[c] + ox0), (_Float16)(o[c + 1] + ox1)};
+      const h2 hy = __builtin_bit_cast(h2, __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, h), 0x164, 0xF, 0xF, false));
+      const h2 tot = h + hy;
+      if (lead) pw[pix * 16 + (c >> 1)] = pkz(q8f((float)tot.x * 0.25f), q8f((float)tot.y * 0.25f));
     }
   }
+  __syncthreads();
   {
-    const int tx6 = tid & 63, ty6 = tid >> 6;
-    float acc[4] = {};
-    stage(Xs, 2 * C, rec, 4, [&](int i, int& off, int& ncol, int& kpo) { off = R_DSRS + i * 512; ncol = i * 16; kpo = 0; });
-    __syncthreads();
-#pragma unroll 4
+    const int px = lane & 15;
+    float acc[32] = {};
+    const cwp wd = S + S_WD + wv * 512;
+#pragma unroll 2
     for (int kp = 0; kp < 16; kp++) {
-      uint4 a = *(const uint4*)&R1[kp * 16 + ty6 * 4];
-      uint32_t av[4] = {a.x, a.y, a.z, a.w}, b = Xs[kp * 2 * C + tx6];
+      const uint32_t pw = RA[px * 16 + kp];
 #pragma unroll
-      for (int r = 0; r < 4; r++) acc[r] = dot2(av[r], b, acc[r]);
+      for (int n = 0; n < 32; n++) acc[n] = dot2(pw, wd[kp * 32 + n], acc[n]);
+      __builtin_amdgcn_sched_barrier(0);
     }
     const int H2 = H >> 1, W2 = W >> 1, Hs = (H2 + 3) & ~3, Ws = (W2 + 3) & ~3;
+    const int pr = (r0 >> 1) + (px >> 2), pc = (c0 >> 1) + (px & 3);
+    if (lane < 16 && pr >= 0 && pr < H2 && pc >= 0 && pc < W2) {
 #pragma unroll
-    for (int r = 0; r < 4; r++) {
-      int pix = ty6 * 4 + r, pr = (r0 >> 1) + (pix >> 2), pc = (c0 >> 1) + (pix & 3);
-      if (pr < 0 || pr >= H2 || pc < 0 || pc >= W2) continue;
-      int ch = tx6, mc = ipi32(ch & 31);
-      P.p38[(size_t)((ch >> 5) * 2 + (mc >> 4)) * Hs * Ws * 16 + (size_t)(pr * Ws + pc) * 16 + (mc & 15)] = (uint8_t)to_e4m3(q8(f16r(acc[r] * 256.f)));
+      for (int n = 0; n < 32; n++) acc[n] *= 256.f;
+#pragma unroll
+      for (int h = 0; h < 2; h++) {
+        uint32_t w[4];
+#pragma unroll
+        for (int k = 0; k < 4; k++) w[k] = e4x4(acc, 16 * h + 4 * k);
+        *(uint4*)(P.p38 + (size_t)(wv * 2 + h) * Hs * Ws * 16 + (size_t)(pr * Ws + pc) * 16) = (uint4){w[0], w[1], w[2], w[3]};
+      }
     }
+  }
+}
+
+// ---- prep (once per record, launched by the runtime at load with the step's kernarg, grid 1, 256 threads): stages the
+// record's weights exactly as the 256-thread kernel did (put16 / stage) and stores them reordered into the module pool
+// (layout above); leaves the shadow base in g_w16_last (0 = pool full), which the runtime writes to kernarg +0xa0.
+constexpr size_t W16_POOL = 2u << 20;   // ponytail: 48.5 KB per record, 43 records; grow if a model has more c32 blocks
+__device__ uint4 g_w16_pool[W16_POOL / 16];
+__device__ unsigned long long g_w16_used, g_w16_last;
+extern "C" __global__ __launch_bounds__(256) void k_swin_c32_prep(VarParams P) {
+  constexpr int C = 32;
+  __shared__ uint32_t L[2048];
+  __shared__ unsigned long long base;
+  const int tid = threadIdx.x;
+  const uint8_t* rec = P.w;
+  const bool up = P.flags & 8, ds = P.flags & 4;
+  const Rec o(up);
+  constexpr int R_CON = 4 * C * C;
+  if (tid == 0) {
+    const unsigned long long need = (4ull * S_END + 255) & ~255ull, b = atomicAdd(&g_w16_used, need);
+    base = b + need <= W16_POOL ? b : ~0ull;
+    g_w16_last = base == ~0ull ? 0 : (unsigned long long)((uint8_t*)g_w16_pool + base);
+  }
+  __syncthreads();
+  if (base == ~0ull) return;
+  uint32_t* S = (uint32_t*)((uint8_t*)g_w16_pool + base);
+  float* Sf = (float*)S;
+  for (int sc = 0; sc < 2; sc++) {   // expand chunk sc: L [16 kp][64 n]
+    __syncthreads();
+    if (tid < 128) put16(L, 64, *((const uint4*)(rec + sc * 4 * 512) + tid), tid & 31, (tid >> 5) * 16);
+    __syncthreads();
+    for (int i = tid; i < 1024; i += 256) { const int kp = i >> 6, nn = i & 63; S[S_WE + (64 * sc + nn) * 16 + kp] = L[i]; }
+    __syncthreads();                 // contract chunk sc: L [32 kp][32 n]
+    if (tid < 128) { const int i = tid >> 5; put16(L + (i >> 1) * 16 * 32, 32, *((const uint4*)(rec + R_CON + (sc * 4 + i) * 512) + (tid & 31)), tid & 31, (i & 1) * 16); }
+    __syncthreads();
+    for (int i = tid; i < 1024; i += 256) S[S_WC + sc * 1024 + i] = L[i];
+  }
+  __syncthreads();                   // qkv: L [16 kp][96 n]
+  if (tid < 192) put16(L, 96, *((const uint4*)(rec + o.R_QKV) + tid), tid & 31, (tid >> 5) * 16);
+  __syncthreads();
+  for (int i = tid; i < 1536; i += 256) { const int kp = i / 96, n = i % 96; S[S_WQ + ((n >> 5) * 16 + kp) * 32 + (n & 31)] = L[i]; }
+  __syncthreads();                   // out_proj: L [16 kp][32 n]
+  stage(L, C, rec, 2, [&](int i, int& off, int& ncol, int& kpo) { off = o.R_OUT + i * 512; ncol = i * 16; kpo = 0; });
+  __syncthreads();
+  for (int i = tid; i < 512; i += 256) S[S_WO + i] = L[i];
+  if (up) {                          // up resample Wr [32 n][64 k]: L [32 kp][32 n]
+    __syncthreads();
+    stage(L, 32, rec, 4, [&](int i, int& off, int& ncol, int& kpo) { off = o.R_AFT + i * 512; ncol = (i & 1) * 16; kpo = (i >> 1) * 16; });
+    __syncthreads();
+    for (int i = tid; i < 1024; i += 256) { const int kp = i >> 5, n = i & 31; S[S_WR + ((n >> 4) * 32 + kp) * 16 + (n & 15)] = L[i]; }
+  }
+  if (ds) {                          // ds resample: L [16 kp][64 n]
+    __syncthreads();
+    stage(L, 2 * C, rec, 4, [&](int i, int& off, int& ncol, int& kpo) { off = o.R_DSRS + i * 512; ncol = i * 16; kpo = 0; });
+    __syncthreads();
+    for (int i = tid; i < 1024; i += 256) { const int kp = i >> 6, n = i & 63; S[S_WD + ((n >> 5) * 16 + kp) * 32 + (n & 31)] = L[i]; }
+  }
+  if (tid < 32) {
+    const _Float16* rs = (const _Float16*)(rec + o.R_RS);
+    const uint4 rs8 = *(const uint4*)rs;
+    const int rso = (rs8.x | rs8.y | rs8.z | rs8.w) == 0 ? 8 : 0;
+    Sf[S_RSC + tid] = (float)rs[rso + tid];
+    Sf[S_ARS + tid] = (float)((const _Float16*)(rec + o.R_ARS))[tid];
+    Sf[S_UG + tid] = up ? (float)((const _Float16*)(rec + o.R_RS + 2 * C + 32))[tid] : 0.f;
+    if (tid == 0) Sf[S_HSC] = ((const float*)(rec + o.R_HS))[0];
+  }
+  const _Float16* braw = (const _Float16*)(rec + o.R_BIAS);
+  for (int e = tid; e < 4096; e += 256) {   // logits thread th = qb + 8kb holds queries 8qb + a, keys 8kb + b
+    const int th = e >> 6, a = (e >> 3) & 7, b = e & 7, q = 8 * (th & 7) + a, s = 8 * (th >> 3) + b;
+    const int ii = q & 15, j = s & 15;
+    const int lane = 4 * (ii & 7) + ((j & 7) >> 1);
+    const int slot = (j & 1) | ((ii >> 3) << 1) | ((j >> 3) << 2);
+    Sf[S_BIAS + e] = fmaf((float)braw[(4 * (q >> 4) + (s >> 4)) * 256 + lane * 8 + slot], 0.044921875f, 1.30078125f);
   }
 }
