@@ -125,17 +125,32 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
   const int row = r0 + lr, col = c0 + lc, pix = (lr >> 1) * 4 + (lc >> 1);
   const bool in = row >= 0 && row < H && col >= 0 && col < W;
 
+  // ---- the token's 32 input bytes (issued first: the upsample below overlaps their latency)
+  uint32_t b[8] = {};
+  if (in) {
+    const int p = (row & 3) * 4 + (col & 3);
+    if (P.flags & 1) {
+      const uint8_t* src = P.in + (size_t)(row * W + col) * 16;
+#pragma unroll
+      for (int g = 0; g < 4; g++) { b[2 * g] = *(const uint32_t*)(src + 4 * g); b[2 * g + 1] = *(const uint32_t*)(src + (size_t)H * W * 16 + 4 * g); }
+    } else {
+      const uint8_t* src = P.in + (size_t)((row >> 2) * WT + (col >> 2)) * (C * 16) + (p & 7) * 64 + 4 * (p >> 3);
+#pragma unroll
+      for (int g = 0; g < 4; g++) { b[2 * g] = *(const uint32_t*)(src + 16 * g); b[2 * g + 1] = *(const uint32_t*)(src + 16 * g + 8); }
+    }
+  }
+
   // ---- upsample: Pj[16 pix][32] = f16(Wr . coarse), K = 64; lane px of wave wv makes outputs 16wv..+15
   if (up) {
     const int H2 = H >> 1, W2 = W >> 1, Hs = (H2 + 3) & ~3, Ws = (W2 + 3) & ~3;
     const int px = lane & 15, pr = (r0 >> 1) + (px >> 2), pc = (c0 >> 1) + (px & 3);
-    uint32_t b[16] = {};
+    uint32_t cb[16] = {};
     if (pr >= 0 && pr < H2 && pc >= 0 && pc < W2) {
 #pragma unroll
       for (int ch = 0; ch < 2; ch++) {
         const uint8_t* src = P.p30 + (size_t)(ch * 2) * Hs * Ws * 16 + (size_t)(pr * Ws + pc) * 16;
 #pragma unroll
-        for (int g = 0; g < 4; g++) { b[ch * 8 + 2 * g] = *(const uint32_t*)(src + 4 * g); b[ch * 8 + 2 * g + 1] = *(const uint32_t*)(src + (size_t)Hs * Ws * 16 + 4 * g); }
+        for (int g = 0; g < 4; g++) { cb[ch * 8 + 2 * g] = *(const uint32_t*)(src + 4 * g); cb[ch * 8 + 2 * g + 1] = *(const uint32_t*)(src + (size_t)Hs * Ws * 16 + 4 * g); }
       }
     }
     uint32_t cw[32];
@@ -148,7 +163,7 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
 #pragma unroll
           for (int hh = 0; hh < 2; hh++) {
             const int c = 16 * s2 + 4 * g + 2 * hh;
-            cw[(ch * 32 + pi32(c)) >> 1] = x256(e4x2((b[ch * 8 + 2 * g + s2] >> (16 * hh)) & 0xFFFFu));
+            cw[(ch * 32 + pi32(c)) >> 1] = x256(e4x2((cb[ch * 8 + 2 * g + s2] >> (16 * hh)) & 0xFFFFu));
           }
     float a[16] = {};
     const cwp wr = S + S_WR + wv * 512;
@@ -163,19 +178,6 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
   // ---- load the token: X = matmul input (q8), R = MLP residual (x, or the f16 blend when up)
   uint32_t X[16], R[16];
   {
-    uint32_t b[8] = {};
-    if (in) {
-      const int p = (row & 3) * 4 + (col & 3);
-      if (P.flags & 1) {
-        const uint8_t* src = P.in + (size_t)(row * W + col) * 16;
-#pragma unroll
-        for (int g = 0; g < 4; g++) { b[2 * g] = *(const uint32_t*)(src + 4 * g); b[2 * g + 1] = *(const uint32_t*)(src + (size_t)H * W * 16 + 4 * g); }
-      } else {
-        const uint8_t* src = P.in + (size_t)((row >> 2) * WT + (col >> 2)) * (C * 16) + (p & 7) * 64 + 4 * (p >> 3);
-#pragma unroll
-        for (int g = 0; g < 4; g++) { b[2 * g] = *(const uint32_t*)(src + 16 * g); b[2 * g + 1] = *(const uint32_t*)(src + 16 * g + 8); }
-      }
-    }
 #pragma unroll
     for (int g = 0; g < 4; g++)
 #pragma unroll
@@ -387,15 +389,17 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
 
   // ---- downsample: pooled = q8(pool2x2(out)) -> RA f16 [16 pix][32]; next = q8(f16(Wds . pooled)) -> +0x38 planes [4][H/2][W/2][16]
   {
-    _Float16* pl = (_Float16*)RA;   // RA (P) was last read before the ctx barrier
+    // RA (P) was last read before the ctx barrier
     const bool lead = !(t & 1) && !(t & 4);
+    uint32_t* pw = RA;
 #pragma unroll
-    for (int c = 0; c < 32; c++) {
-      const float ox = __shfl_xor(o[c], 1);
-      const _Float16 h = (_Float16)(o[c] + ox);
-      const _Float16 hy = __builtin_bit_cast(_Float16, (unsigned short)__shfl_xor((int)__builtin_bit_cast(unsigned short, h), 4));
-      const _Float16 tot = h + hy;
-      if (lead) pl[pix * C + c] = (_Float16)q8((float)tot * 0.25f);
+    for (int c = 0; c < 32; c += 2) {   // x partner = lane ^ 1 (DPP quad_perm [1,0,3,2]), y partner = lane ^ 4 (DPP row_xmask:4)
+      const float ox0 = __int_as_float(__builtin_amdgcn_mov_dpp(__float_as_int(o[c]), 0xB1, 0xF, 0xF, false));
+      const float ox1 = __int_as_float(__builtin_amdgcn_mov_dpp(__float_as_int(o[c + 1]), 0xB1, 0xF, 0xF, false));
+      const h2 h = (h2){(_Float16)(o[c] + ox0), (_Float16)(o[c + 1] + ox1)};
+      const h2 hy = __builtin_bit_cast(h2, __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, h), 0x164, 0xF, 0xF, false));
+      const h2 tot = h + hy;
+      if (lead) pw[pix * 16 + (c >> 1)] = pkz(q8f((float)tot.x * 0.25f), q8f((float)tot.y * 0.25f));
     }
   }
   __syncthreads();
