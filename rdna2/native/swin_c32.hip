@@ -40,27 +40,6 @@ typedef const __attribute__((address_space(4))) float* cfp;
 // neither sinks the math nor hoists all K * N scalar loads (SGPR spills).
 template <int K, int N>
 __device__ __forceinline__ void gemv(float* acc, const uint32_t* a, cwp w) {
-#ifdef GEMV_ROLLED   // compact code: rolled over row pairs, ping-pong prefetch, a[k] by uniform dynamic index
-  uint32_t A[N], B[N];
-#pragma unroll
-  for (int n = 0; n < N; n++) A[n] = w[n];
-#pragma unroll 1
-  for (int k = 0; k < K; k += 2) {
-    cwp w1 = w + (k + 1) * N, w2 = w + (k + 2 < K ? k + 2 : k) * N;
-#pragma unroll
-    for (int n = 0; n < N; n++) B[n] = w1[n];
-    const uint32_t a0 = a[k], a1 = a[k + 1];
-#pragma unroll
-    for (int n = 0; n < N; n++) { acc[n] = dot2(a0, A[n], acc[n]); asm volatile("" : "+v"(acc[n])); }
-    __builtin_amdgcn_sched_barrier(0);
-#pragma unroll
-    for (int n = 0; n < N; n++) A[n] = w2[n];
-#pragma unroll
-    for (int n = 0; n < N; n++) { acc[n] = dot2(a1, B[n], acc[n]); asm volatile("" : "+v"(acc[n])); }
-    __builtin_amdgcn_sched_barrier(0);
-  }
-  return;
-#endif
   uint32_t cur[N], nxt[N];
 #pragma unroll
   for (int n = 0; n < N; n++) cur[n] = w[n];
@@ -76,6 +55,45 @@ __device__ __forceinline__ void gemv(float* acc, const uint32_t* a, cwp w) {
 #pragma unroll
     for (int n = 0; n < N; n++) cur[n] = nxt[n];
   }
+}
+
+// q8 for values known finite (no NaN guard)
+__device__ __forceinline__ float q8f(float x) {
+  float a = fminf(fabsf(x), 448.f);
+  uint32_t b = __float_as_uint(a);
+  float rn = __uint_as_float((b + 0x7FFFFu + ((b >> 20) & 1u)) & 0xFFF00000u);
+  float rs = __fsub_rn(__fadd_rn(a, 24576.f), 24576.f);
+  return copysignf(a < 0.015625f ? rs : rn, x);
+}
+// pack two values already on the f16 grid (q8 outputs): the truncating conversion is exact
+__device__ __forceinline__ uint32_t pkz(float a, float b) { return __builtin_bit_cast(uint32_t, __builtin_amdgcn_cvt_pkrtz(a, b)); }
+// pk(q8(f16r(a)), q8(f16r(b))) from xb = pk(a, b), both halves at once on the f16 grid (q8h of swin_var / pre/post_native,
+// proof q8h_cpu.py); finite inputs (an f16 overflow to inf still gives 448 like q8)
+__device__ __forceinline__ uint32_t q8h(uint32_t xb) {
+  typedef unsigned short u2 __attribute__((ext_vector_type(2)));
+  const u2 ab = __builtin_elementwise_min(__builtin_bit_cast(u2, xb & 0x7FFF7FFFu), (u2){0x5F00, 0x5F00});
+  const u2 eb = __builtin_elementwise_max(ab & (u2){0x7C00, 0x7C00}, (u2){0x2400, 0x2400});
+  const h2 K = __builtin_bit_cast(h2, eb) * (h2){(_Float16)128.f, (_Float16)128.f};
+  const h2 r = (__builtin_bit_cast(h2, ab) + K) - K;
+  return (__builtin_bit_cast(uint32_t, r) & 0x7FFF7FFFu) | (xb & 0x80008000u);
+}
+// to_e4m3 bytes (low byte of each half) of a q8h word: normal (|v| >= 2^-6) = ((bits - 0x2400) >> 7) + 8, which wraps
+// to >= 448 below 2^-6; subnormal = |v| * 512 = bits(1024 + |v| * 512) - 0x6400, which is >= the normal code for
+// normals; so the u16 min picks. Sign only for nonzero (to_e4m3(-0) = 0). Exhaustive check: perf_c32b src/q8chk.py.
+__device__ __forceinline__ uint32_t e4h(uint32_t r) {
+  typedef unsigned short u2 __attribute__((ext_vector_type(2)));
+  const u2 ab = __builtin_bit_cast(u2, r & 0x7FFF7FFFu);
+  const u2 nb = ((ab - (u2){0x2400, 0x2400}) >> (u2){7, 7}) + (u2){8, 8};
+  const h2 sh = __builtin_bit_cast(h2, ab) * (h2){(_Float16)512.f, (_Float16)512.f} + (h2){(_Float16)1024.f, (_Float16)1024.f};
+  const u2 sb = __builtin_bit_cast(u2, sh) - (u2){0x6400, 0x6400};
+  const uint32_t nz = __builtin_bit_cast(uint32_t, ab + (u2){0x7FFF, 0x7FFF});   // bit 15 per half = nonzero
+  return __builtin_bit_cast(uint32_t, __builtin_elementwise_min(nb, sb)) | ((r & nz & 0x80008000u) >> 8);
+}
+// 4 e4m3 bytes of memory channels m..m+3 from f32 values: reference channels pi32(m), +1, pi32(m+2), +1
+__device__ __forceinline__ uint32_t e4x4(const float* o, int m) {
+  const int c0 = pi32(m), c1 = pi32(m + 2);
+  const uint32_t a = e4h(q8h(pk(o[c0], o[c0 + 1]))), b = e4h(q8h(pk(o[c1], o[c1 + 1])));
+  return __builtin_amdgcn_perm(b, a, 0x06040200u);   // bytes a0, a2, b0, b2
 }
 
 // record offsets (C = 32)
@@ -164,19 +182,23 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
       for (int s = 0; s < 2; s++)
 #pragma unroll
         for (int hh = 0; hh < 2; hh++) {
-          const int c = 16 * s + 4 * g + 2 * hh, rc = pi32(c);
-          const uint32_t v = x256(e4x2((b[2 * g + s] >> (16 * hh)) & 0xFFFFu));
-          if (up) {   // blend = f16(skip * gain + P(coarse)), zero outside the frame. skip * gain is exact in f32 and
-                      // skip * gain + P is exact in f64 (<= 49 significant bits), so one f32 rounding = the f64 reference.
-            const uint32_t pj = RA[pix * 16 + (rc >> 1)];
-            const float x0 = in ? f16r(__fadd_rn(__fmul_rn(lo(v), Sf[S_UG + rc]), lo(pj))) : 0.f;
-            const float x1 = in ? f16r(__fadd_rn(__fmul_rn(hi(v), Sf[S_UG + rc + 1]), hi(pj))) : 0.f;
-            R[rc >> 1] = pk(x0, x1);
-            X[rc >> 1] = pk(q8(x0), q8(x1));
-          } else {
-            R[rc >> 1] = v; X[rc >> 1] = v;
-          }
+          const int c = 16 * s + 4 * g + 2 * hh;
+          X[pi32(c) >> 1] = x256(e4x2((b[2 * g + s] >> (16 * hh)) & 0xFFFFu));
         }
+    if (up) {   // blend = f16(skip * gain + P(coarse)), zero outside the frame. skip * gain is exact in f32 and
+                // skip * gain + P is exact in f64 (<= 49 significant bits), so one f32 rounding = the f64 reference.
+#pragma unroll
+      for (int k = 0; k < 16; k++) {
+        const uint32_t v = X[k], pj = RA[pix * 16 + k];
+        const float x0 = f16r(__fadd_rn(__fmul_rn(lo(v), Sf[S_UG + 2 * k]), lo(pj)));
+        const float x1 = f16r(__fadd_rn(__fmul_rn(hi(v), Sf[S_UG + 2 * k + 1]), hi(pj)));
+        R[k] = in ? pk(x0, x1) : 0u;
+        X[k] = q8h(R[k]);
+      }
+    } else {
+#pragma unroll
+      for (int k = 0; k < 16; k++) R[k] = X[k];
+    }
   }
   if (up) __syncthreads();   // Pj (RA) is read; qn/kn overwrite it below
 
@@ -189,7 +211,7 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
     gemv<16, 32>(acc, X, we);
     uint32_t hd[16];
 #pragma unroll
-    for (int hp = 0; hp < 16; hp++) hd[hp] = pk(q8(act(acc[2 * hp] * 256.f)), q8(act(acc[2 * hp + 1] * 256.f)));
+    for (int hp = 0; hp < 16; hp++) hd[hp] = pkz(q8f(act(acc[2 * hp] * 256.f)), q8f(act(acc[2 * hp + 1] * 256.f)));
     const cwp wc = S + S_WC + q * 512;
     gemv<16, 32>(y, hd, wc);
   }
@@ -199,7 +221,7 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
 #pragma unroll
   for (int c = 0; c < 32; c++) y[c] = __fadd_rn(__fmul_rn((c & 1) ? hi(R[c >> 1]) : lo(R[c >> 1]), Sf[S_RSC + c]), y[c] * 256.f);
 #pragma unroll
-  for (int k = 0; k < 16; k++) Yq[k] = pk(q8(f16r(y[2 * k])), q8(f16r(y[2 * k + 1])));
+  for (int k = 0; k < 16; k++) Yq[k] = q8h(pk(y[2 * k], y[2 * k + 1]));
 
   // ================= attention (one head)
   uint32_t* qn = RA;          // [16 i][64 tok]
@@ -219,14 +241,14 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
       if (g == 0) sc = __fmul_rn(sc, Sf[S_HSC]);
       uint32_t* dst = g ? kn : qn;
 #pragma unroll
-      for (int d = 0; d < 32; d += 2) dst[(d >> 1) * 64 + t] = pk(q8(__fmul_rn(a[d], sc)), q8(__fmul_rn(a[d + 1], sc)));
+      for (int d = 0; d < 32; d += 2) dst[(d >> 1) * 64 + t] = pkz(q8f(__fmul_rn(a[d], sc)), q8f(__fmul_rn(a[d + 1], sc)));
     }
     float a[32] = {};
     const cwp wq = S + S_WQ + 2 * 512;
     gemv<16, 32>(a, Yq, wq);
     uint32_t own[16];   // own[k] = v(dims 2k, 2k+1) as f16 pairs
 #pragma unroll
-    for (int k = 0; k < 16; k++) own[k] = pk(q8(f16r(a[2 * k] * 256.f)), q8(f16r(a[2 * k + 1] * 256.f)));
+    for (int k = 0; k < 16; k++) own[k] = q8h(pk(a[2 * k] * 256.f, a[2 * k + 1] * 256.f));
     // the even token of a key pair writes dims 0..15, the odd one dims 16..31; each needs the partner's half
     const bool odd = t & 1;
     const int j = t >> 1;
@@ -294,7 +316,7 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
 #pragma unroll
     for (int j = 0; j < 32; j++) {
       const uint32_t u = __builtin_bit_cast(uint32_t, pp[j]);
-      Pm[j * 64 + t] = pk(q8(f16r(__fmul_rn(lo(u), rc))), q8(f16r(__fmul_rn(hi(u), rc))));
+      Pm[j * 64 + t] = q8h(pk(__fmul_rn(lo(u), rc), __fmul_rn(hi(u), rc)));
     }
   }
   __syncthreads();
@@ -317,7 +339,7 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
 #pragma unroll
     for (int a = 0; a < 8; a++)
 #pragma unroll
-      for (int e = 0; e < 4; e += 2) ctx[((4 * db + e) >> 1) * 64 + 8 * qb + a] = pk(q8(f16r(s[a][e])), q8(f16r(s[a][e + 1])));
+      for (int e = 0; e < 4; e += 2) ctx[((4 * db + e) >> 1) * 64 + 8 * qb + a] = q8h(pk(s[a][e], s[a][e + 1]));
   }
   __syncthreads();
   // ---- out_proj (lane = token), out = ars * y + Wo . ctx
@@ -332,13 +354,12 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
   }
   // ---- store q8(f16(out)) as e4m3: 32 bytes of the token
   if (in) {
-    auto e8 = [&](int mc) { return to_e4m3(q8(f16r(o[pi32(mc)]))); };
     if (P.flags & 2) {
 #pragma unroll
       for (int pl = 0; pl < 2; pl++) {
         uint32_t w[4];
 #pragma unroll
-        for (int k = 0; k < 4; k++) { const int m = 16 * pl + 4 * k; w[k] = e8(m) | (e8(m + 1) << 8) | (e8(m + 2) << 16) | (e8(m + 3) << 24); }
+        for (int k = 0; k < 4; k++) w[k] = e4x4(o, 16 * pl + 4 * k);
         *(uint4*)(P.out + (size_t)pl * H * W * 16 + (size_t)(row * W + col) * 16) = (uint4){w[0], w[1], w[2], w[3]};
       }
     } else {
@@ -348,8 +369,7 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
       for (int a = 0; a < 4; a++)
 #pragma unroll
         for (int b = 0; b < 2; b++) {
-          const int m = 4 * a + 16 * b;
-          *(uint32_t*)(dst + 16 * a + 8 * b) = e8(m) | (e8(m + 1) << 8) | (e8(m + 2) << 16) | (e8(m + 3) << 24);
+          *(uint32_t*)(dst + 16 * a + 8 * b) = e4x4(o, 4 * a + 16 * b);
         }
     }
   }
@@ -380,12 +400,13 @@ extern "C" __global__ __launch_bounds__(64) __attribute__((amdgpu_waves_per_eu(W
     const int H2 = H >> 1, W2 = W >> 1, Hs = (H2 + 3) & ~3, Ws = (W2 + 3) & ~3;
     const int pr = (r0 >> 1) + (px >> 2), pc = (c0 >> 1) + (px & 3);
     if (lane < 16 && pr >= 0 && pr < H2 && pc >= 0 && pc < W2) {
-      auto e8 = [&](int mc) { return to_e4m3(q8(f16r(acc[pi32(mc)] * 256.f))); };
+#pragma unroll
+      for (int n = 0; n < 32; n++) acc[n] *= 256.f;
 #pragma unroll
       for (int h = 0; h < 2; h++) {
         uint32_t w[4];
 #pragma unroll
-        for (int k = 0; k < 4; k++) { const int m = 16 * h + 4 * k; w[k] = e8(m) | (e8(m + 1) << 8) | (e8(m + 2) << 16) | (e8(m + 3) << 24); }
+        for (int k = 0; k < 4; k++) w[k] = e4x4(acc, 16 * h + 4 * k);
         *(uint4*)(P.p38 + (size_t)(wv * 2 + h) * Hs * Ws * 16 + (size_t)(pr * Ws + pc) * 16) = (uint4){w[0], w[1], w[2], w[3]};
       }
     }
