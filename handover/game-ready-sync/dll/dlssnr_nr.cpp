@@ -47,7 +47,7 @@ static int g_allowAny = 0, g_evictMs = 2000; static int g_sync = 1, g_spinMs = 2
 static int g_busy = 0, g_busyWaitMs = 100;   // busy_mode: 0 wait (CPU waits, bounded, for a free HIP slot), 1 reuse (last NR edit, warped) - never a native frame once NR ran
 static int g_compose = 0; static float g_detail = 1.f;   // compose= add (0: the edit added as is) | nv (1: NVIDIA's intensity) | ratio (2: OkLab matched residual); detail= live-frame detail above the model raster (1 = as is). handover/community-look/README.md
 static float g_pass2Gain = 0.5f; static std::atomic<int> g_live{0}; static UINT g_hdrP0 = 0; static ID3D12Resource* g_hl = nullptr; static float g_hdrKey = 0.18f, g_hdrAdapt = 0.05f, g_hdrBias = 1.f, g_hdrExp = 0.f;   // OptiScaler "2 passes": a later pass (a second feature on pass 1's output) adds its edit at gain * pass2_gain
-static float g_eT = 0.f, g_eL = 0.f; static int g_eFl = 0;   // edit_temporal (blend of the shown edit with the previous one, warped), edit_limit (cap vs local contrast), edit_warp bicubic (flag bit 2)
+static float g_eT = 0.f, g_eL = 0.f; static int g_eFl = 0; static float g_tS = 0.f, g_cS = 1.f, g_pw = 1.f;   // transfer_strength / color_strength / paper_white: RenoDX "Control-compatible color transfer" (kSyncHlsl rtx)   // edit_temporal (blend of the shown edit with the previous one, warped), edit_limit (cap vs local contrast), edit_warp bicubic (flag bit 2)
 static int g_split = 0, g_splitK[2] = {0, 0}; static int g_hist = 0; static float g_hLo = 0.08f, g_hHi = 0.25f;   // history=1: temporal history (previous NR output warped by the game's MVs) into the pre-block's +0x40, see handover/temporal-2026-10-11/DLL.md   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
 
 static void logf(const char* fmt, ...) {
@@ -104,6 +104,9 @@ static void loadSettings() {
     GetPrivateProfileStringA("nr", "edit_temporal", "0", b, sizeof b, narrow(ini).c_str()); g_eT = (float)atof(b); g_eT = g_eT > 0.f ? (std::min)(g_eT, 0.95f) : 0.f;   // 0 = off (bit-exact); blend weight of the previous shown edit (warped, depth-gated, clamped to the 3x3 range of the current edit)
     GetPrivateProfileStringA("nr", "edit_limit", "0", b, sizeof b, narrow(ini).c_str()); g_eL = (float)atof(b); g_eL = g_eL > 0.f ? (std::min)(g_eL, 100.f) : 0.f;   // 0 = off; |edit| <= edit_limit x (3x3 luma range + 0.02)
     { char m[16]; GetPrivateProfileStringA("nr", "edit_warp", "bilinear", m, sizeof m, narrow(ini).c_str()); g_eFl = !_stricmp(m, "bicubic") ? 4 : 0; }   // with edit_temporal/edit_limit: Catmull-Rom fetches (sharper, more flicker)
+    GetPrivateProfileStringA("nr", "transfer_strength", "0", b, sizeof b, narrow(ini).c_str()); g_tS = (float)atof(b); g_tS = g_tS > 0.f ? (std::min)(g_tS, 1.f) : 0.f;   // 0 = off (bit-exact)
+    GetPrivateProfileStringA("nr", "color_strength", "1", b, sizeof b, narrow(ini).c_str()); g_cS = (float)atof(b); g_cS = g_cS == g_cS ? (std::min)((std::max)(g_cS, 0.f), 1.f) : 1.f;   // with transfer_strength > 0
+    GetPrivateProfileStringA("nr", "paper_white", "1", b, sizeof b, narrow(ini).c_str()); g_pw = (float)atof(b); g_pw = g_pw > 0.01f && g_pw < 100.f ? g_pw : 1.f;   // HDR (hdr_mode) only: scene white divisor
     { const int i8 = (int)GetPrivateProfileIntA("nr", "int8_prepost", -1, narrow(ini).c_str()); if (i8 >= 0) SetEnvironmentVariableA("NR_INT8_PREPOST", i8 ? "1" : "0"); }   // opt-in int8 post-block MLP; absent = meta (default off)
     g_split = (int)GetPrivateProfileIntA("nr", "nr_split", 0, narrow(ini).c_str()); g_split = g_split <= 0 ? 0 : g_split == 1 ? 2 : (std::min)(g_split, 8);   // N >= 2: the network in N parts over N frames (1 = 2, as before), output = last finished NR, warped
     if (g_split) g_nrEvery = g_split;
@@ -200,7 +203,7 @@ static const char* kSyncHlsl =
 "GC RWByteAddressBuffer st : register(u2);\n"
 "cbuffer C : register(b0) { uint W; uint H; uint seq; uint maxIt; uint outOff; uint flagOff; float gain; uint FWH; uint minSeq; float gLo; float gHi; uint gate; uint frame; uint maxAge;\n"
 "  uint mvOn; float mvSx; float mvSy; uint mWH; uint mBase; uint dWH; uint dBase; uint dFl; float mLo; float mHi;\n"
-"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; float hk; float hx; float hkb; float hA; float amp; uint cm; float dt; float eT; float eL; uint tFl; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
+"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; float hk; float hx; float hkb; float hA; float amp; uint cm; float dt; float eT; float eL; uint tFl; float tS; float cS; float pw; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
 "Texture2D<float4> mot : register(t1);\n"
 "Texture2D<float> dep : register(t2);\n"   // minSeq != 0: fg mode, reuse the edit captured from a frame >= minSeq;   // W,H model; FWH = frame W | H << 16
 "RWByteAddressBuffer ob : register(u3);\n"
@@ -246,7 +249,7 @@ static const char* kSyncHlsl =
 // and comes back as Ti(T(live) + gain * edit). hdrM 0 off, 1 on, 2 auto: on once lat has latched st[16] (imp counts pixels > 1 into st[20]; lat latches when one frame had >= hdrM >> 2 of them, then resets the count).
 // Off, every path below is the old LDR code (bit-exact).
 "bool hd() { return hdrM == 1 || ((hdrM & 3) == 2 && st.Load(16) != 0) || ((hdrM & 3) == 3 && hl.Load(0) != 0); }\n"
-"float Ex() { if (hx > 0.0) return hx; float e = asfloat(hl.Load(4)); return e > 0.0 ? e : 1.0; }\n"   // HDR exposure: hx fixed (extra pass 1, hdr_exposure), else the metered E lat keeps in hl[4]
+"float Ex() { if (hx > 0.0) return hx / pw; float e = asfloat(hl.Load(4)); return (e > 0.0 ? e : 1.0) / pw; }\n"   // paper_white pw (HDR only, 1 = as before): scene white divisor; encode, decode, gates and history all go through T/Ti, so they stay in one space   // HDR exposure: hx fixed (extra pass 1, hdr_exposure), else the metered E lat keeps in hl[4]
 "float3 T(float3 x) { x = max(x * Ex(), 0.0); x = x / (1.0 + x); return lerp(1.055 * pow(x, 1.0 / 2.4) - 0.055, x * 12.92, step(x, 0.0031308)); }\n"
 "float3 Ti(float3 y) { y = saturate(y); float3 z = lerp(pow((y + 0.055) / 1.055, 2.4), y / 12.92, step(y, 0.04045)); z = min(z, 0.999); return z / (1.0 - z) / Ex(); }\n"   // <= 999: finite for e5 / half
 "float3 L(float4 c) { return hd() ? T(sn(c).rgb) : sn(c).rgb; }\n"   // live colour in network space (gates)
@@ -259,6 +262,21 @@ static const char* kSyncHlsl =
 "  float r = max((dot(b, w) + 1.0 / 512.0) / (dot(a, w) + 1.0 / 512.0), 1e-6); float3 o = b * (clamp(pow(r, amp), 0.5, 2.0) / r);\n"
 "  float m = max(o.r, max(o.g, o.b)), lim = max(1.0, max(b.r, max(b.g, b.b))); if (m > lim) o *= lim / m;\n"
 "  return hd() ? min(Ti(o), (1.0 + hk) * max(sn(c).rgb, 0.0) + 0.1 * hk / Ex()) : o; }\n"
+// transfer_strength tS (0 = off, bit-exact): RenoDX dlss5's "Control-compatible color transfer" (its legacy/v6 divisor codec, MIT,
+// github.com/Yukikaze20170315/RenoDX-DLSS5-Generic shaders/legacy_common.hlsli ResolvePixel + UpgradeToneMap; Copyright (c) 2025 Carlos Lopez Jr.,
+// MIT licence; the same UpgradeToneMap is OpenDLSS-NR demo/shaders/nr_composite.comp). Linear light: O = live colour
+// (HDR: x E, LDR: sRGB-decoded frame), P / N = sRGB-decoded network input / answer at this pixel. Below the proxy: N x O_y / P_y (the edit as a
+// luminance ratio, the full-res frame's own detail rides on the network's tone); above it: the excess O - P added back (RenoDX: N_y + (O_y - P_y)). color_strength cS:
+// 0 = only the luminance change on the live colour (ratio clamped 0..4), 1 = the network's colour. Shown = lerp(today's compose, this, tS).
+// ponytail: HueOkLab(N * r, N) == N * r for r >= 0 (OkLab chroma scales with the cube root like L), so it is left out.
+"float3 lin(float3 v) { v = max(v, 0.0); return lerp(pow((v + 0.055) / 1.055, 2.4), v / 12.92, step(v, 0.04045)); }\n"
+"float3 enc(float3 v) { v = max(v, 0.0); return lerp(1.055 * pow(v, 1.0 / 2.4) - 0.055, v * 12.92, step(v, 0.0031308)); }\n"
+"float3 rtx(float4 c, float3 a, float3 b) { const float3 w = float3(0.212639, 0.715169, 0.072192); bool h = hd();\n"
+"  float3 O = h ? max(sn(c).rgb, 0.0) * Ex() : lin(sn(c).rgb), P = lin(saturate(a)), N = lin(saturate(b)), U = O; float oy = dot(O, w), py = dot(P, w), ny = dot(N, w);\n"
+"  if (ny > 1e-5) U = oy >= py ? N + max(O - P, 0.0) : N * (oy / max(py, 1e-6));\n"   // above: RenoDX scales N to N_y + (O_y - P_y); per channel here (same luminance when O >= P per channel), because our input clips per channel and N has lost the hue of a > 1 pixel
+"  U = lerp(O * (oy > 0.0 ? clamp(dot(U, w) / oy, 0.0, 4.0) : 1.0), U, cS);\n"
+"  return h ? min(U / Ex(), (1.0 + hk) * max(sn(c).rgb, 0.0) + 0.1 * hk / Ex()) : enc(U); }\n"   // HDR: same highlight cap as cmp
+"float4 tx(float4 c, float3 a, float3 d, float4 v) { [branch] if (tS > 0.0) v.rgb = lerp(v.rgb, rtx(c, a, a + d), tS); return v; }\n"   // a = network input at this pixel, d = the edit as composed today (gain, gates)
 "float4 ld(float4 v) { v = sn(v); if (hd()) return float4(T(v.rgb), v.a);\n"
 "#ifdef HDR_IN\n"
 "  return v; }\n"
@@ -335,12 +353,13 @@ static const char* kSyncHlsl =
 "      if (dFl & 1) w *= 1.0 - smoothstep(0.05, 0.2, abs(dn - h.a) / max(max(dn, h.a), 1e-6));\n"   // disocclusion: current edit only
 "      e = lerp(e, clamp(h.rgb, mn, mx), w); } }\n"
 "  st.Store2(256 + (7 + (frame & 1)) * W * H * 8 + (id.y * W + id.x) * 8, uint2(pk(e.r, e.g), pk(e.b, dn))); }\n"
+"float4 txp(float4 c, uint2 q, float3 d, float4 v) { [branch] if (tS > 0.0) { uint FW = FWH & 0xFFFF, FH = FWH >> 16; float3 a = ((FW == W && FH == H) ? ld(c) : colAt(q + 0.5)).rgb; v.rgb = lerp(v.rgb, rtx(c, a, a + d), tS); } return v; }\n"   // tx with a = the live frame's model-footprint proxy (as imp feeds it): edit_temporal / fg keep no input per frame pixel
 "float3 tE(uint2 q) { uint FW = FWH & 0xFFFF, FH = FWH >> 16; float2 p = (q + 0.5) * float2(W, H) / float2(FW, FH); uint so = 256 + (7 + (frame & 1)) * W * H * 8; return (tFl & 4) ? stCR(p, so) : stAt(p, so).rgb; }\n"
 "[numthreads(8,8,1)] void exp(uint3 id : SV_DispatchThreadID) {\n"
 "  uint FW = FWH & 0xFFFF, FH = FWH >> 16; if (id.x >= FW || id.y >= FH) return; float4 c = col[id.xy];\n"
 "  if (split != 0) {\n"   // nr_split: the last finished NR edit (st+256, job frame st[8]) moved to this frame: by this frame's vectors, + (bit 2) the acc chain of the frame before, + (bit 4) the anchor (job frame -> frame of the edit before); age expected by the CPU in bits 4+
 "    uint age = frame - st.Load(8); if ((int)(st.Load(4) - minSeq) < 0 || age == 0 || ((split & 8) == 0 && age != (split >> 4))) { put(id.xy, c); return; }\n"   // none since the reset yet / not the edit the CPU expects (spin timeout): live frame; bit 8: chain broken, vectors only, any age
-"    if (tFl & 1) { float3 y = L(c); put(id.xy, float4(cmp(c, cm ? ced(y, y, y + tE(id.xy), gain) : gain * tE(id.xy)), c.a)); return; }\n"   // edit stabilisation: the stabilised edit (warped and gated per model texel by tea)
+"    if (tFl & 1) { float3 y = L(c); put(id.xy, txp(c, id.xy, gain * tE(id.xy), float4(cmp(c, cm ? ced(y, y, y + tE(id.xy), gain) : gain * tE(id.xy)), c.a))); return; }\n"   // edit stabilisation: the stabilised edit (warped and gated per model texel by tea)
 "    float2 uv = (id.xy + 0.5) / float2(FW, FH), pf = id.xy + 0.5;\n"   // frame px, same arithmetic as the mv reuse branch (age 1 is bit-identical to it)
 "    if (mvOn) { uint2 mn = uint2(mWH & 0xFFFF, mWH >> 16); pf = id.xy + 0.5 + mot[uint2(mBase & 0xFFFF, mBase >> 16) + min((uint2)(uv * mn), mn - 1)].xy * float2(mvSx, mvSy); }\n"
 "    if (split & 2) pf += accAt(pf / float2(FW, FH), frame - 1) * float2(FW, FH);\n"
@@ -349,7 +368,7 @@ static const char* kSyncHlsl =
 "    float2 p = pf * float2(W, H) / float2(FW, FH); float3 e = stAt(p, 256).rgb; float4 o = stAt(p, 256 + W * H * 8); float3 a = abs(L(c) - o.rgb);\n"
 "    float wt = 1.0 - smoothstep(mLo, mHi, max(a.r, max(a.g, a.b)));\n"   // colour gate as mv reuse
 "    if (dFl & 1) { float dn = depAt(uv); wt *= 1.0 - smoothstep(0.05, 0.2, abs(dn - o.a) / max(max(dn, o.a), 1e-6)); }\n"
-"    put(id.xy, float4(cmp(c, cm ? ced(L(c), o.rgb, o.rgb + wt * e, gain) : gain * wt * e), c.a)); return; }\n"
+"    put(id.xy, tx(c, o.rgb, gain * wt * e, float4(cmp(c, cm ? ced(L(c), o.rgb, o.rgb + wt * e, gain) : gain * wt * e), c.a))); return; }\n"
 "  if (st.Load(0) == 0) {\n"
 "    uint age = frame - st.Load(8);\n"   // fg: frames since the edit's own frame; older than maxAge -> live frame only
 "    if (mvOn != 0 && minSeq != 0 && (int)(st.Load(4) - minSeq) >= 0 && age <= maxAge) {\n"   // mv reuse: the edit moved by the game's vectors (previous = current + mv, frame pixels)
@@ -359,24 +378,24 @@ static const char* kSyncHlsl =
 "      float2 p = pf * float2(W, H) / float2(FW, FH); float3 e = stAt(p, 256).rgb; float4 o = stAt(p, 256 + W * H * 8); float3 a = abs(L(c) - o.rgb);\n"
 "      float wt = 1.0 - smoothstep(mLo, mHi, max(a.r, max(a.g, a.b)));\n"   // colour gate: live vs the edit's own input at the source
 "      if (dFl & 1) { float dn = depAt(uv); wt *= 1.0 - smoothstep(0.05, 0.2, abs(dn - o.a) / max(max(dn, o.a), 1e-6)); }\n"   // depth gate (relative); ponytail: fixed thresholds, add ini keys if a game needs them
-"      put(id.xy, float4(cmp(c, cm ? ced(L(c), o.rgb, o.rgb + wt * e, gain) : gain * wt * e), c.a)); return; }\n"
+"      put(id.xy, tx(c, o.rgb, gain * wt * e, float4(cmp(c, cm ? ced(L(c), o.rgb, o.rgb + wt * e, gain) : gain * wt * e), c.a))); return; }\n"
 "    if (minSeq != 0 && (int)(st.Load(4) - minSeq) >= 0 && age <= maxAge) { float2 p = (id.xy + 0.5) * float2(W, H) / float2(FW, FH);\n"   // fg: live frame + last NR edit
 "      p = clamp(p - 0.5, 0.0, float2(W - 1, H - 1)); uint2 a = (uint2)p; uint2 b = min(a + 1, uint2(W - 1, H - 1)); float2 t = p - a; float3 e[4]; uint2 ix[4] = { a, uint2(b.x, a.y), uint2(a.x, b.y), b };\n"
 "      for (int i = 0; i < 4; i++) { uint2 q = st.Load2(256 + (ix[i].y * W + ix[i].x) * 8); e[i] = float3(f16tof32(q.x & 0xFFFF), f16tof32(q.x >> 16), f16tof32(q.y & 0xFFFF));\n"
 "        if (gate) { uint2 u = st.Load2(256 + W * H * 8 + (ix[i].y * W + ix[i].x) * 8); float3 o = float3(f16tof32(u.x & 0xFFFF), f16tof32(u.x >> 16), f16tof32(u.y & 0xFFFF));\n"   // motion gate per model pixel: live colour (sampled as imp does) vs the edit's input
 "          float3 l = ((FW == W && FH == H) ? float4(L(col[ix[i]]), 0) : colAt((ix[i] + 0.5) * float2(FW, FH) / float2(W, H))).rgb; float3 a = abs(l - o);\n"
 "          e[i] *= 1.0 - smoothstep(gLo, gHi, max(a.r, max(a.g, a.b))); } }\n"
-"      float3 d = lerp(lerp(e[0], e[1], t.x), lerp(e[2], e[3], t.x), t.y) * (1.0 - (float)age / (maxAge + 1)); put(id.xy, float4(cmp(c, gain * d), c.a)); return; }\n"
+"      float3 d = lerp(lerp(e[0], e[1], t.x), lerp(e[2], e[3], t.x), t.y) * (1.0 - (float)age / (maxAge + 1)); put(id.xy, txp(c, id.xy, gain * d, float4(cmp(c, gain * d), c.a))); return; }\n"
 "    put(id.xy, c); return; }\n"
 "  if (FW != W || FH != H) {\n"     // resampled: carry the model's change (out - in, model size) up to the frame
 "    float2 p = (id.xy + 0.5) * float2(W, H) / float2(FW, FH); float4 d = sn(bil(p, outOff) - bil(p, 0));\n"
-"    if (tFl & 1) { float3 y = L(c); put(id.xy, float4(cmp(c, cm ? ced(y, y, y + tE(id.xy), gain) : gain * tE(id.xy)), c.a)); return; }\n"   // edit stabilisation: the stabilised edit (tea/teb); compose= applies to it as to any edit
-"    put(id.xy, float4(cmp(c, cm ? ced(L(c), sn(bil(p, 0)).rgb, sn(bil(p, outOff)).rgb, gain) : gain * d.rgb), c.a)); return; }\n"                       // timeout: native frame
+"    if (tFl & 1) { float3 y = L(c); put(id.xy, tx(c, sn(bil(p, 0)).rgb, gain * tE(id.xy), float4(cmp(c, cm ? ced(y, y, y + tE(id.xy), gain) : gain * tE(id.xy)), c.a))); return; }\n"   // edit stabilisation: the stabilised edit (tea/teb); compose= applies to it as to any edit
+"    put(id.xy, tx(c, sn(bil(p, 0)).rgb, gain * d.rgb, float4(cmp(c, cm ? ced(L(c), sn(bil(p, 0)).rgb, sn(bil(p, outOff)).rgb, gain) : gain * d.rgb), c.a))); return; }\n"                       // timeout: native frame
 "  uint2 r = io.Load2(outOff + (id.y * W + id.x) * 8);\n"
 "  float3 e = float3(san(f16tof32(r.x & 0xFFFF)), san(f16tof32(r.x >> 16)), san(f16tof32(r.y & 0xFFFF)));\n"
 "  uint2 q = io.Load2((id.y * W + id.x) * 8); float3 n = float3(f16tof32(q.x & 0xFFFF), f16tof32(q.x >> 16), f16tof32(q.y & 0xFFFF));\n"   // the network's (clamped) input
 "  float3 o = cm ? cmp(c, ced(L(c), n, e, gain)) : hd() ? cmp(c, gain * (e - T(sn(c).rgb))) : c.rgb + gain * (e - n);\n"   // LDR: frame + edit, so pixels above 1 keep their excess
-"  put(id.xy, float4(max(o, 0.0), c.a)); }\n"
+"  put(id.xy, tx(c, n, gain * (e - n), float4(max(o, 0.0), c.a))); }\n"
 // ---- temporal history (history=1). hst: after the spin, keep this frame's NR output in proxy space P (+ depth) at st+256+2n.
 // hwp: before the HIP release, write the network's history input into io+histOff (PAD_W x PAD_H x RGB32F, pre-block +0x40): the kept P warped
 // by the game's vectors to this frame (previous = current + mv*mvScale, frame pixels), with colour/depth gates; current P where invalid or reset.
@@ -416,7 +435,7 @@ static const char* kSyncHlsl =
 "  io.Store3(o, asuint(res)); }\n"
 "[numthreads(8,8,1)] void hwp(uint3 id : SV_DispatchThreadID) { hwpB(id, 1); }\n"   // previous frame was NR (bit-exact to the one-frame history)
 "[numthreads(8,8,1)] void hwp2(uint3 id : SV_DispatchThreadID) { hwpB(id, histOk); }\n";   // older NR output (nr_every > 1): histOk = its age in frames
-static const int kSyncRing = 16, kCb = 44;                                     // descriptor pairs (colour SRV, output UAV) in flight
+static const int kSyncRing = 16, kCb = 47;                                     // descriptor pairs (colour SRV, output UAV) in flight
 
 // ---------------------------------------------------------------- feature
 enum { S_LOADING = 0, S_IDLE = 1, S_WAIT_COPY = 2, S_RUNNING = 3, S_FAILED = 4, S_SYNC = 5 };
@@ -897,6 +916,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             float gain = (F->pass ? g_gain * g_pass2Gain : g_gain) * (std::min)(I, 1.f); memcpy(&cb[6], &gain, 4); memcpy(&cb[9], &g_gateLo, 4); memcpy(&cb[10], &g_gateHi, 4);   // gLo, gHi   // gain x intensity: NVIDIA's blend towards the NR result (up to 1; compose nv/ratio get it as their g)
             memcpy(&cb[15], &mvSx, 4); memcpy(&cb[16], &mvSy, 4); memcpy(&cb[22], &g_mvLo, 4); memcpy(&cb[23], &g_mvHi, 4); memcpy(&cb[28], &g_hLo, 4); memcpy(&cb[29], &g_hHi, 4);
             const bool teOn = s->tea && s->teb && (sp || w != F->W || h != F->H); memcpy(&cb[41], &g_eT, 4); memcpy(&cb[42], &g_eL, 4);   // edit stabilisation: split or resampled full-NR path
+            memcpy(&cb[44], &g_tS, 4); memcpy(&cb[45], &g_cS, 4); memcpy(&cb[46], &g_pw, 4);
             cb[43] = teOn ? 1u | (UINT)g_eFl | (s->teFrm + 1 == s->frm && reset != 1 ? 8u : 0u) : 0u;
             ID3D12DescriptorHeap* hp[] = { s->heap }; cmd->SetDescriptorHeaps(1, hp); cmd->SetComputeRootSignature(s->rs);
             cmd->SetComputeRootDescriptorTable(0, gpu); cmd->SetComputeRootUnorderedAccessView(1, s->io->GetGPUVirtualAddress()); cmd->SetComputeRootUnorderedAccessView(2, s->st->GetGPUVirtualAddress());
