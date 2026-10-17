@@ -19,6 +19,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <numeric>
 #include <atomic>
 #include <thread>
 #include <d3dcompiler.h>
@@ -161,6 +162,8 @@ int main(int argc, char** argv) {
             else { memcpy(d, s, 8); memcpy(upp + (size_t)y * pitch + x * 8, s, 8); }
             memcpy(&raw[d - in.data()], d, 8); for (int c = 0; c < 3; c++) d[c] = (d[c] & 0x8000) || (d[c] & 0x7C00) == 0x7C00 && (d[c] & 0x3FF) ? 0 : d[c] > 0x3C00 ? 0x3C00 : d[c]; } };   // the DLL (ldr_input=1, LDR) clamps the network input to [0,1]; NaN -> 0
     ID3D12Resource *fmv = nullptr, *fdp = nullptr, *fmu = nullptr, *fdu = nullptr; bool ffirst = true;   // flicker mode: motion/depth textures, their upload buffers (mvp/dpp)
+    ID3D12QueryHeap* tsq = nullptr; ID3D12Resource* tsb = nullptr; uint64_t* tsp = nullptr; UINT64 tsf = 1; std::vector<double> tsv;   // NR_TEST_TS: GPU time of the evaluate call per frame (timestamps around it)
+    if (getenv("NR_TEST_TS")) { D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 2, 0}; CK(dev->CreateQueryHeap(&qd, IID_PPV_ARGS(&tsq))); tsb = buf(D3D12_HEAP_TYPE_READBACK, 256, D3D12_RESOURCE_STATE_COPY_DEST); tsb->Map(0, nullptr, (void**)&tsp); q->GetTimestampFrequency(&tsf); }   // flicker mode: motion/depth textures, their upload buffers (mvp/dpp)
     auto frame = [&](int k, bool exec, double* ms) -> int {   // one game frame; returns evaluate's result, -100 on GPU timeout
         al->Reset(); cl->Reset(al, nullptr);
         if (fmv) { for (int g = 0; g < 2; g++) { ID3D12Resource* t = g ? fdp : fmv; DXGI_FORMAT fm = g ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R16G16_FLOAT;
@@ -169,7 +172,9 @@ int main(int argc, char** argv) {
             auto d0 = ts(t); cl->CopyTextureRegion(&d0, 0, 0, 0, &s0, nullptr); bar(t, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); } ffirst = false; }
         bar(color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST); { auto d = ts(color), s = fp(up, pitch, FMT); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
         bar(color, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        if (tsq) cl->EndQuery(tsq, D3D12_QUERY_TYPE_TIMESTAMP, 0);
         int r = k < 0 ? 1 : eval(cl, f, nullptr, color, fdp, fmv, out, W, H, W, H, W, H, 0, 0, 0, 0, fmv ? 1 : 0, k == 0, 1.f, 0, 1.f, 1.f, -1.f, 1, fmv ? (float)W : 1.f, fmv ? (float)H : 1.f);
+        if (tsq) { cl->EndQuery(tsq, D3D12_QUERY_TYPE_TIMESTAMP, 1); cl->ResolveQueryData(tsq, D3D12_QUERY_TYPE_TIMESTAMP, 0, 2, tsb, 0); }
         ID3D12Resource* fin_ = out;
         if (f2 && k >= 0) { bar(out, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);   // pass 2: pass 1's output is the input
             int r2 = eval(cl, f2, nullptr, out, fdp, fmv, out2, W, H, W, H, W, H, 0, 0, 0, 0, fmv ? 1 : 0, k == 0, 1.f, 0, 1.f, 1.f, -1.f, 1, fmv ? (float)W : 1.f, fmv ? (float)H : 1.f);
@@ -177,7 +182,7 @@ int main(int argc, char** argv) {
         bar(fin_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE); { auto d = fp(rb, opitch, OFMT), s = ts(fin_); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
         bar(fin_, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); cl->Close();
         if (!exec) return r;                                  // the host dropped this list
-        double a = now(); ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); if (!wait(5000)) return -100; *ms = now() - a; return r; };
+        double a = now(); ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); if (!wait(5000)) return -100; *ms = now() - a; if (tsq && k >= 8) tsv.push_back((tsp[1] - tsp[0]) * 1000.0 / tsf); return r; };
     double se_o = 0, se_i = 0; auto psnr = [&](double se) { return 10 * log10(3.0 * MW * MH / std::max(se, 1e-12)); };
     UINT bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;   // bounding box of the values beyond tolerance (printed on MISMATCH)
     auto compare = [&](size_t* beyond, double* maxerr) {
@@ -269,6 +274,11 @@ int main(int argc, char** argv) {
                     const UINT px = (UINT)(i / 4 % W), py = (UINT)(i / 4 / W); if (inObj(j, px, py) || inObj(j - 1, px, py)) { er += eo; erl += ei; cr++; } } }
             printf("ghost: %d reused frames, mean |out - NR(same frame)| %.5f (live frame without NR: %.5f)\n", nf, cnt ? e / cnt : 0, cnt ? el / cnt : 0);
             if (OBJ) printf("ghost object region (object now or one frame ago): %.5f (live %.5f)\n", cr ? er / cr : 0, cr ? erl / cr : 0);
+            if (getenv("NR_TEST_DUMP")) for (int j = n - 1; j >= 0; j--) if (!gout[j].empty()) {   // last reused frame: input, output, NR of the same frame (f32 RGB, W x H)
+                makeFrame(j); float gms; rrun(ref, in.data(), refo.data(), &gms); const uint16_t* src[3] = { in.data(), gout[j].data(), refo.data() }; const char* nm[3] = { "_in.bin", "_out.bin", "_ref.bin" };
+                for (int q = 0; q < 3; q++) { FILE* df = fopen((std::string(getenv("NR_TEST_DUMP")) + nm[q]).c_str(), "wb"); if (!df) continue;
+                    for (size_t i = 0; i < (size_t)W * H; i++) for (int c = 0; c < 3; c++) { float v = h2f(src[q][i * 4 + c]); v = v == v ? v : 0.f; fwrite(&v, 4, 1, df); } fclose(df); }
+                printf("ghost dump: frame %d\n", j); break; }
         }
         std::vector<double> d; for (size_t i = 10; i < done.size(); i++) d.push_back(done[i] - done[i - 1]);   // skip warm-up
         double s = 0, s2 = 0, oe[2] = {}; for (size_t i = 0; i < d.size(); i++) { s += d[i]; s2 += d[i] * d[i]; oe[(i + 11) & 1] += d[i]; } double av = s / d.size(), sd = sqrt(std::max(0.0, s2 / d.size() - av * av));
@@ -426,7 +436,7 @@ int main(int argc, char** argv) {
         fmu = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ); fdu = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ);
         if (!fmv || !fdp || !fmu || !fdu) { puts("FAIL guide resources"); return 1; } fmu->Map(0, nullptr, (void**)&mvp); fdu->Map(0, nullptr, (void**)&dpp);
         std::vector<float> fin((size_t)W * H * 3), fout(fin.size()), pin(fin.size()), pout(fin.size()), mi((size_t)MW * MH * 3), mo(mi.size()), pmi(mi.size()), pmo(mi.size());
-        double hfo = 0, hfi = 0; int nhf = 0; Fr tot, rtot; int nf = 0; double pulse[2] = {}; int npulse[2] = {}; uint64_t hsh = 1469598103934665603ull;
+        double hfo = 0, hfi = 0; int nhf = 0; Fr tot, rtot, sst; int nf = 0, nss = 0; double pulse[2] = {}; int npulse[2] = {}; double eabs = 0; int neabs = 0; uint64_t hsh = 1469598103934665603ull;
         for (int k = 0; k < frames; k++) {
             gen(fin, W, H, k); float a[2], b[2]; shift(k, a); shift(k - 1, b); const uint16_t hv[2] = { f2h((a[0] - b[0]) / W), f2h((a[1] - b[1]) / H) }; const float dv = 0.1f;
             for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { memcpy(mvp + (size_t)y * gpitch + x * 4, hv, 4); memcpy(dpp + (size_t)y * gpitch + x * 4, &dv, 4);
@@ -437,7 +447,8 @@ int main(int argc, char** argv) {
             int r = frame(k, true, &ms); if (r == -100) { printf("FAIL frame %d: GPU wait timed out\n", k); return 7; } if (r != 1) { printf("FAIL frame %d: evaluate returned %d\n", k, r); return 7; }
             for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { uint16_t o[4]; if (r11) unpack_r11g11b10(*(uint32_t*)(rbp + (size_t)y * pitch + x * 4), o); else memcpy(o, rbp + (size_t)y * opitch + x * 8, 8);
                 for (int c = 0; c < 3; c++) { double v = h2f(o[c]); fout[((size_t)y * W + x) * 3 + c] = v == v ? (float)v : 0.f; } }
-            { double e = 0; for (size_t i = 0; i < fin.size(); i += 3) for (int c = 0; c < 3; c++) e += (c == 0 ? .2126 : c == 1 ? .7152 : .0722) * (std::min(std::max(fout[i + c], 0.f), 1.f) - std::min(std::max(fin[i + c], 0.f), 1.f));
+            { double e = 0, ea = 0; for (size_t i = 0; i < fin.size(); i += 3) for (int c = 0; c < 3; c++) { const double d = std::min(std::max(fout[i + c], 0.f), 1.f) - std::min(std::max(fin[i + c], 0.f), 1.f); e += (c == 0 ? .2126 : c == 1 ? .7152 : .0722) * d; ea += fabs(d); }
+              if (k >= 4) { eabs += ea / fin.size(); neabs++; }   // effect strength: mean |out - in| (display, RGB)
               uint64_t fh = 1469598103934665603ull; for (float v : fout) { uint32_t b; memcpy(&b, &v, 4); hsh = (hsh ^ b) * 1099511628211ull; fh = (fh ^ b) * 1099511628211ull; }   // output hash over all frames (bit-exactness between builds)
               if (k >= frames - 4) printf("FHASH %d %016llx\n", k, (unsigned long long)fh);   // per frame (static sequences: split vs non-split once settled)
               if (k > 0) pulse[k & 1] += e / (fin.size() / 3), npulse[k & 1]++; }   // odd/even pulsing: mean luma edit (out - in, display) per frame parity
@@ -450,14 +461,18 @@ int main(int argc, char** argv) {
                     s += fabs(4 * L(x, y) - L(x - 1, y) - L(x + 1, y) - L(x, y - 1) - L(x, y + 1)); } return s / ((double)(W - 16) * (H - 16)); };   // high-frequency energy: mean |Laplacian| of display luma
               if (k >= 4) { hfo += hf(fout); hfi += hf(fin); nhf++; }
               if (k == frames - 1 && getenv("NR_TEST_DUMP")) { for (int q = 0; q < 2; q++) { std::string fn = std::string(getenv("NR_TEST_DUMP")) + (q ? "_out.bin" : "_in.bin"); FILE* df = fopen(fn.c_str(), "wb"); if (df) { fwrite(q ? fout.data() : fin.data(), 4, fin.size(), df); fclose(df); } } } }
-            if (k > 0) { Fr e = measure(fin, fout, pin, pout, W, H, k); tot.o += e.o; tot.i += e.i; tot.j += e.j; tot.v += e.v; tot.n += e.n; nf++; Fr er;
+            if (k > 0) { Fr e = measure(fin, fout, pin, pout, W, H, k); tot.o += e.o; tot.i += e.i; tot.j += e.j; tot.v += e.v; tot.n += e.n; nf++;
+                if (k >= 8) { sst.o += e.o; sst.i += e.i; sst.j += e.j; sst.v += e.v; sst.n += e.n; nss++; } Fr er;   // steady state (k >= 8): without the first edit's fade-in
                 if (doRef) { er = measure(mi, mo, pmi, pmo, MW, MH, k); rtot.o += er.o; rtot.i += er.i; rtot.j += er.j; rtot.v += er.v; rtot.n += er.n; }
-                if (k < 4 || k % 10 == 0) printf("frame %d: inst out %.5f in %.5f, white jumps %zu%s\n", k, e.o, e.i, e.j, doRef ? (std::string(" | network alone: inst out ") + std::to_string(er.o) + " in " + std::to_string(er.i) + ", jumps " + std::to_string(er.j)).c_str() : ""); }
+                if (k < 4 || k % 10 == 0 || getenv("NR_TEST_PERFRAME")) printf("frame %d: inst out %.5f in %.5f, white jumps %zu, visible %.3f%%%s\n", k, e.o, e.i, e.j, 100.0 * e.v / std::max<size_t>(e.n, 1), doRef ? (std::string(" | network alone: inst out ") + std::to_string(er.o) + " in " + std::to_string(er.i) + ", jumps " + std::to_string(er.j)).c_str() : ""); }
             std::swap(fin, pin); std::swap(fout, pout); std::swap(mi, pmi); std::swap(mo, pmo); }
         printf("OUTHASH %016llx\n", (unsigned long long)hsh);
         printf("PULSE mean luma edit odd %+.5f even %+.5f |diff| %.5f\n", pulse[1] / std::max(npulse[1], 1), pulse[0] / std::max(npulse[0], 1), fabs(pulse[1] / std::max(npulse[1], 1) - pulse[0] / std::max(npulse[0], 1)));
+        if (!tsv.empty()) { std::sort(tsv.begin(), tsv.end()); printf("TS evaluate GPU ms (frames >= 8): p10 %.3f median %.3f mean-of-lowest-half %.3f\n", tsv[tsv.size() / 10], tsv[tsv.size() / 2],
+            std::accumulate(tsv.begin(), tsv.begin() + tsv.size() / 2, 0.0) / (tsv.size() / 2)); }
+        printf("EDIT mean |out - in| (display RGB) %.5f over %d frames\n", eabs / std::max(neabs, 1), neabs);
         printf("HF mean |Laplacian| luma: out %.5f in %.5f (x%.3f) over %d frames\n", hfo / std::max(nhf, 1), hfi / std::max(nhf, 1), hfi > 0 ? hfo / hfi : 0, nhf);
-        report("FLICKER frame", tot, nf, W, H); if (doRef) report("FLICKER network-alone", rtot, nf, MW, MH);
+        report("FLICKER frame", tot, nf, W, H); report("FLICKER steady(k>=8)", sst, nss, W, H); if (doRef) report("FLICKER network-alone", rtot, nf, MW, MH);
         if (f2) release(f2); release(f); return 0;
     }
     // baseline: the same list without evaluate
