@@ -1,0 +1,20 @@
+== strict rgba
+frames 30: 30 evaluated+matched, 0 mismatched, 0 not run | after dropped list: 10/10 ran, worst 49.5 ms | release 10 ms
+PASS
+exit 0
+== strict r11
+frames 30: 30 evaluated+matched, 0 mismatched, 0 not run | after dropped list: 10/10 ran, worst 49.9 ms | release 71 ms
+PASS
+exit 0
+== strict e5
+frames 30: 30 evaluated+matched, 0 mismatched, 0 not run | after dropped list: 10/10 ran, worst 49.1 ms | release 10 ms
+PASS
+exit 0
+== flicker history=1 nr_split=1
+FHASH 36 61334ce64fd8e383
+FHASH 37 5ff3c016f06fc383
+FHASH 38 34944b5a71e3c383
+FHASH 39 27e7f6422db14383
+OUTHASH aa7ba493b6d2e383
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00346 in 0.00270 excess +0.00076 (x1.28) | white jumps 37714.1/frame (1.043% of px), visible flicker 2.665% of px, over 39 frames
+exit 0

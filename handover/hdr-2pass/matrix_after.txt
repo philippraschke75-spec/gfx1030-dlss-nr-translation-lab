@@ -1,0 +1,36 @@
+== e5 hdr_mode=off p1
+HDR frame 7 (passes 1): white-out (lin) 0.093%, white-out (display) 1.393%, mean |dP| 0.01691, max luma 41.1 | skin: white-out 0.000%, mean luma out/in 0.994
+exit 0
+== e5 hdr_mode=off p2raw
+HDR frame 7 (passes 2): white-out (lin) 0.754%, white-out (display) 2.785%, mean |dP| 0.02456, max luma 41.1 | skin: white-out 0.000%, mean luma out/in 0.990
+exit 0
+== e5 hdr_mode=off p2clamp
+HDR frame 7 (passes 2): white-out (lin) 0.720%, white-out (display) 2.819%, mean |dP| 0.06544, max luma 1.1 | skin: white-out 0.000%, mean luma out/in 0.652
+exit 0
+== e5 hdr_mode=auto p1
+HDR frame 7 (passes 1): white-out (lin) 0.215%, white-out (display) 0.070%, mean |dP| 0.01402, max luma 78.9 | skin: white-out 0.000%, mean luma out/in 0.977
+exit 0
+== e5 hdr_mode=auto p2raw
+HDR frame 7 (passes 2): white-out (lin) 0.508%, white-out (display) 0.585%, mean |dP| 0.02097, max luma 118.4 | skin: white-out 0.002%, mean luma out/in 0.971
+exit 0
+== e5 hdr_mode=auto p2clamp
+HDR frame 7 (passes 2): white-out (lin) 0.167%, white-out (display) 0.456%, mean |dP| 0.05637, max luma 1.5 | skin: white-out 0.000%, mean luma out/in 0.702
+exit 0
+== rgba hdr_mode=off p1
+HDR frame 7 (passes 1): white-out (lin) 0.078%, white-out (display) 1.342%, mean |dP| 0.01683, max luma 41.1 | skin: white-out 0.000%, mean luma out/in 0.994
+exit 0
+== rgba hdr_mode=off p2raw
+HDR frame 7 (passes 2): white-out (lin) 0.817%, white-out (display) 2.781%, mean |dP| 0.02479, max luma 41.0 | skin: white-out 0.000%, mean luma out/in 0.990
+exit 0
+== rgba hdr_mode=off p2clamp
+HDR frame 7 (passes 2): white-out (lin) 0.759%, white-out (display) 2.726%, mean |dP| 0.06493, max luma 1.1 | skin: white-out 0.000%, mean luma out/in 0.652
+exit 0
+== rgba hdr_mode=auto p1
+HDR frame 7 (passes 1): white-out (lin) 0.181%, white-out (display) 0.071%, mean |dP| 0.01489, max luma 79.7 | skin: white-out 0.000%, mean luma out/in 0.952
+exit 0
+== rgba hdr_mode=auto p2raw
+HDR frame 7 (passes 2): white-out (lin) 0.496%, white-out (display) 0.667%, mean |dP| 0.02153, max luma 119.0 | skin: white-out 0.002%, mean luma out/in 0.950
+exit 0
+== rgba hdr_mode=auto p2clamp
+HDR frame 7 (passes 2): white-out (lin) 0.195%, white-out (display) 0.549%, mean |dP| 0.05659, max luma 1.5 | skin: white-out 0.000%, mean luma out/in 0.704
+exit 0
