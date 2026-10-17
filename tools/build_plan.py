@@ -183,9 +183,10 @@ def native_candidates(op, A, C, grid):
            'conv2': ('native_c512.co', 'k_conv2_n', (gx, A['c_mid'] // 64, gz), 256, None if M310 else 'hardwired C_mid 512'),
            'ffwd2': ('native_c512.co', 'k_ffwd2_n', grid, 256, None if M310 else 'hardwired C_mid 512'),
            'attn': ('native_c512.co', 'k_qkv_attn_n', grid, 256, None if M310 else 'hardwired C_mid 512 / 16 heads'),
-           'expand': ('native_vit.co', 'k_vit_expand_n', (gx, A['hid'] // 64, gz), 256, None if V310 else 'hardwired 1024/4096'),
-           'contract': ('native_vit.co', 'k_vit_contract_n', (gx, A['c_vit'] // 64, gz), 256, None if V310 else 'hardwired 1024/4096'),
-           'qkv': ('native_vit.co', 'k_vit_qkv_n', (gx, 3 * A['c_vit'] // 64, gz), 256, None if V310 else 'hardwired 1024'),
+           # ViT GEMMs: 128 threads (vit_swz.hip, 8x4 register tile per thread)
+           'expand': ('native_vit.co', 'k_vit_expand_n', (gx, A['hid'] // 64, gz), 128, None if V310 else 'hardwired 1024/4096'),
+           'contract': ('native_vit.co', 'k_vit_contract_n', (gx, A['c_vit'] // 64, gz), 128, None if V310 else 'hardwired 1024/4096'),
+           'qkv': ('native_vit.co', 'k_vit_qkv_n', (gx, 3 * A['c_vit'] // 64, gz), 128, None if V310 else 'hardwired 1024'),
            'decup': ('native_decup.co', 'k_dec_upsample_n', (gx, 4, gz), 256, None if M310 and V310 else 'hardwired 512 <- 1024')}
     return [nat[op]] if op in nat else []
 
