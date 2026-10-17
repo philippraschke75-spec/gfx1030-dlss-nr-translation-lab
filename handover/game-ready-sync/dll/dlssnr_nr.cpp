@@ -192,7 +192,7 @@ static const char* kSyncHlsl =
 "globallycoherent RWByteAddressBuffer st : register(u2);\n"
 "cbuffer C : register(b0) { uint W; uint H; uint seq; uint maxIt; uint outOff; uint flagOff; float gain; uint FWH; uint minSeq; float gLo; float gHi; uint gate; uint frame; uint maxAge;\n"
 "  uint mvOn; float mvSx; float mvSy; uint mWH; uint mBase; uint dWH; uint dBase; uint dFl; float mLo; float mHi;\n"
-"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; float hk; float hx; float hkb; float hA; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
+"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; float hk; float hx; float hkb; float hA; float amp; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
 "Texture2D<float4> mot : register(t1);\n"
 "Texture2D<float> dep : register(t2);\n"   // minSeq != 0: fg mode, reuse the edit captured from a frame >= minSeq;   // W,H model; FWH = frame W | H << 16
 "RWByteAddressBuffer ob : register(u3);\n"
@@ -201,7 +201,9 @@ static const char* kSyncHlsl =
 "  c = clamp(c, 0.0, 65408.0); float m = max(c.r, max(c.g, c.b)); int e = max(-16, (int)floor(log2(max(m, 1e-30)))) + 16;\n"
 "  float d = exp2(e - 24); if (floor(m / d + 0.5) >= 512.0) { d *= 2.0; e++; } uint3 q = (uint3)floor(c / d + 0.5);\n"
 "  return q.r | (q.g << 9) | (q.b << 18) | ((uint)e << 27); }\n"
+"float3 boost(float4 c, float3 v);\n"
 "void put(uint2 p, float4 v) {\n"
+"  if (amp > 1.0 && any(v.rgb != col[p].rgb)) v.rgb = boost(col[p], v.rgb);\n"
 "#ifdef PACKED\n"
 "  ob.Store(p.y * ((((FWH & 0xFFFF) * 4) + 255) & ~255) + p.x * 4, e5(v.rgb));\n"
 "#else\n"
@@ -225,6 +227,14 @@ static const char* kSyncHlsl =
 "float3 Ti(float3 y) { y = saturate(y); float3 z = lerp(pow((y + 0.055) / 1.055, 2.4), y / 12.92, step(y, 0.04045)); z = min(z, 0.999); return z / (1.0 - z) / Ex(); }\n"   // <= 999: finite for e5 / half
 "float3 L(float4 c) { return hd() ? T(sn(c).rgb) : sn(c).rgb; }\n"   // live colour in network space (gates)
 "float3 cmp(float4 c, float3 d) { return hd() ? min(Ti(T(sn(c).rgb) + d), (1.0 + hk) * max(sn(c).rgb, 0.0) + 0.1 * hk / Ex()) : max(c.rgb + d, 0.0); }\n"   // live colour + network-space edit; HDR: at most (1+hk)x + 0.1hk brighter (pass 0 hk 1 = 2x + 0.1; extra pass hk pass2_gain, so passes cannot compound to 4x) (Ti is steep near 1, a small edit must not blow a highlight out)
+// intensity > 1 (amp): dlssnr-pytorch PostBlock.compose / NVIDIA's library: the luminance ratio r = out/frame (network space, at intensity 1)
+// is raised to the intensity (bounded to 0.5..2x) and the colour rescaled by it, which keeps the hue (the old linear extrapolation pushed the
+// channels apart: chroma shift x2 at intensity 2). Over-range: the peak channel is brought back by one scalar (hue kept), not clamped per channel.
+"float3 boost(float4 c, float3 v) {\n"
+"  float3 a = L(c), b = hd() ? T(max(v, 0.0)) : max(v, 0.0); const float3 w = float3(0.2126, 0.7152, 0.0722);\n"
+"  float r = max((dot(b, w) + 1.0 / 512.0) / (dot(a, w) + 1.0 / 512.0), 1e-6); float3 o = b * (clamp(pow(r, amp), 0.5, 2.0) / r);\n"
+"  float m = max(o.r, max(o.g, o.b)), lim = max(1.0, max(b.r, max(b.g, b.b))); if (m > lim) o *= lim / m;\n"
+"  return hd() ? min(Ti(o), (1.0 + hk) * max(sn(c).rgb, 0.0) + 0.1 * hk / Ex()) : o; }\n"
 "float4 ld(float4 v) { v = sn(v); if (hd()) return float4(T(v.rgb), v.a);\n"
 "#ifdef HDR_IN\n"
 "  return v; }\n"
@@ -343,7 +353,7 @@ static const char* kSyncHlsl =
 "  io.Store3(o, asuint(res)); }\n"
 "[numthreads(8,8,1)] void hwp(uint3 id : SV_DispatchThreadID) { hwpB(id, 1); }\n"   // previous frame was NR (bit-exact to the one-frame history)
 "[numthreads(8,8,1)] void hwp2(uint3 id : SV_DispatchThreadID) { hwpB(id, histOk); }\n";   // older NR output (nr_every > 1): histOk = its age in frames
-static const int kSyncRing = 16, kCb = 38;                                     // descriptor pairs (colour SRV, output UAV) in flight
+static const int kSyncRing = 16, kCb = 39;                                     // descriptor pairs (colour SRV, output UAV) in flight
 
 // ---------------------------------------------------------------- feature
 enum { S_LOADING = 0, S_IDLE = 1, S_WAIT_COPY = 2, S_RUNNING = 3, S_FAILED = 4, S_SYNC = 5 };
@@ -818,7 +828,8 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             cb[33] = g_hdr == 1 ? 1u : g_hdr == 2 && (cd.Format == DXGI_FORMAT_R16G16B16A16_FLOAT || cd.Format == DXGI_FORMAT_R9G9B9E5_SHAREDEXP) ? 2u | ((UINT)(g_hdrFrac * F->W * F->H) << 2) : 0u;   // hdrM | auto threshold << 2
             if (!F->pass) g_hdrP0 = cb[33] & 3; else if (g_hdr == 2) cb[33] = g_hdrP0 == 2 ? 3u : g_hdrP0;   // extra pass: its input is pass 0's output after the host's ClampProxy (saturated to [0,1]), it cannot detect HDR itself -> pass 0's decision (3 = follow hl)
             { const float hk = F->pass ? g_pass2Gain : 1.f, hx = F->pass ? 1.f : g_hdrExp * g_hdrBias, hkb = g_hdrKey * g_hdrBias; memcpy(&cb[34], &hk, 4); memcpy(&cb[35], &hx, 4); memcpy(&cb[36], &hkb, 4); memcpy(&cb[37], &g_hdrAdapt, 4); }   // extra pass: E = 1 (its input is ClampProxy's unit cube, not scene-linear; pass 0's E would squeeze it to T(E) ~ 0.25, near black)
-            float gain = (F->pass ? g_gain * g_pass2Gain : g_gain) * curIntensity(F); memcpy(&cb[6], &gain, 4); memcpy(&cb[9], &g_gateLo, 4); memcpy(&cb[10], &g_gateHi, 4);   // gLo, gHi   // gain x intensity: NVIDIA's blend towards the NR result (above 1 extrapolated linearly)
+            const float I = curIntensity(F), amp = I > 1.f ? I : 0.f; memcpy(&cb[38], &amp, 4);   // intensity > 1: the blend stays at 1, put() applies the reference's ratio compose (boost)
+            float gain = (F->pass ? g_gain * g_pass2Gain : g_gain) * (std::min)(I, 1.f); memcpy(&cb[6], &gain, 4); memcpy(&cb[9], &g_gateLo, 4); memcpy(&cb[10], &g_gateHi, 4);   // gLo, gHi   // gain x intensity: NVIDIA's blend towards the NR result (up to 1)
             memcpy(&cb[15], &mvSx, 4); memcpy(&cb[16], &mvSy, 4); memcpy(&cb[22], &g_mvLo, 4); memcpy(&cb[23], &g_mvHi, 4); memcpy(&cb[28], &g_hLo, 4); memcpy(&cb[29], &g_hHi, 4);
             ID3D12DescriptorHeap* hp[] = { s->heap }; cmd->SetDescriptorHeaps(1, hp); cmd->SetComputeRootSignature(s->rs);
             cmd->SetComputeRootDescriptorTable(0, gpu); cmd->SetComputeRootUnorderedAccessView(1, s->io->GetGPUVirtualAddress()); cmd->SetComputeRootUnorderedAccessView(2, s->st->GetGPUVirtualAddress());
