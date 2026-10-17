@@ -47,7 +47,7 @@ struct nr_ctx {
   // temporal history (nr_run2 / nr_ext_enqueue2): own PAD_H x PAD_W x RGB32F buffer, pointed to by pre-block +0x40 and post-block +0x40 when valid
   float* hist = nullptr; uint64_t netout = 0; int hist_mask = 0; unsigned ph = 0, pw = 0; bool have_prev = false; int dbg_n = 0; size_t io_size = 0, hin = 0, hout = 0;
   std::vector<hipEvent_t> prof; std::vector<std::string> names;   // NR_PROF only
-  int ksplit[2] = {0, 0};   // nr_ext_split: first dispatch of part 2 for a full / a skipping (vit_every) frame; 0 = no split
+  int nsplit = 0, kb[2][9] = {};   // nr_ext_split(n): parts per job (0 = no split); kb[full|skipping][j] = first dispatch of part j+1 (kb[.][0] = 0, kb[.][nsplit] = n)
   std::atomic<bool> broken{false}; long checked = 0;   // output self-check (ext path): broken -> nr_ext_enqueue* returns -2, the DLL stays native
   int devid = 0;   // HIP device of this context; HIP's current device is per thread, so every entry point selects it
 };
@@ -476,19 +476,21 @@ static void ext_thread(nr_ctx* c) {
     }
 #endif
     if (ready) {   // late/never-executed frame: skip it; D3D12's bounded spin shows the native frame
-      hipStream_t s = c->s; const size_t n = c->steps.size(), k = part ? (size_t)c->ksplit[skipping(c)] : n;   // part 1 = [0, k), part 2 = [k, n); the arena keeps everything in between
+      hipStream_t s = c->s; const size_t n = c->steps.size(); const int* b = c->kb[skipping(c)]; const bool last = part == 0 || part == c->nsplit;   // part j = [kb[j-1], kb[j]); the arena keeps everything in between
+      const size_t lo = part > 1 ? (size_t)b[part - 1] : 0, hi = last ? n : (size_t)b[part];
       bool ok = true;
-      if (part != 2) { apply_strength(c);
+      if (part <= 1) { apply_strength(c);
         ok = hipMemcpyAsync(c->d + PAD + c->off_src, c->io, c->src_size, hipMemcpyDeviceToDevice, s) == hipSuccess &&
              hist_begin(c, s, hv, hv && c->hin ? c->io + c->hin : nullptr) &&
              hipMemsetAsync(c->d + PAD + c->off_dst, 0, c->dst_size, s) == hipSuccess &&   // k_export accumulates into its destination, see nr_run
-             launch_range(c, s, 0, k); }
-      if (part != 1)
-        ok = ok && launch_range(c, s, part ? k : n, n) && hist_end(c, s) &&
+             launch_range(c, s, 0, hi); }
+      else ok = launch_range(c, s, lo, hi);
+      if (last)
+        ok = ok && hist_end(c, s) &&
              hipMemcpyAsync(c->io + c->out_off, c->d + PAD + c->off_dst, c->dst_size, hipMemcpyDeviceToDevice, s) == hipSuccess;
       ok = ok && hipStreamWriteValue32(s, c->io + c->flag_off, seq, 0) == hipSuccess;
-      hipStreamSynchronize(s); if (part != 1) c->frame++;
-      if (ok && part != 1 && ++c->checked == 10) self_check(c);
+      hipStreamSynchronize(s); if (last) c->frame++;
+      if (ok && last && ++c->checked == 10) self_check(c);
       if (!ok) fprintf(stderr, "nr_ext: frame %u launch failed\n", seq);
     }
     c->inflight--;
@@ -503,19 +505,20 @@ NR_API int nr_ext_history(nr_ctx* c, unsigned long long hist_in_off, unsigned lo
 }
 NR_API int nr_ext_enqueue2(nr_ctx* c, unsigned seq, int max_inflight, int hist_valid) { return nr_ext_enqueue3(c, seq, max_inflight, hist_valid, 0); }
 NR_API int nr_ext_enqueue3(nr_ctx* c, unsigned seq, int max_inflight, int hist_valid, int part) {
-  if (!c || !c->s || part < 0 || part > 2 || (part && !c->ksplit[0])) return -1;
+  if (!c || !c->s || part < 0 || part > c->nsplit) return -1;
   if (c->broken) return -2;   // self-check failed: the DLL goes native for the session
   if (c->inflight >= (max_inflight < 1 ? 1 : max_inflight)) return 1;
   c->inflight++; { std::lock_guard<std::mutex> g(c->mx); c->q.push_back({seq, part == 2 ? 0 : hist_valid, part}); } c->cv.notify_one(); return 0;
 }
-// Split point: k where the dispatches before it take half the GPU time. Measured once (3 runs on the default stream, the 1st is warm-up; the
-// arena only sees two extra frames on its pristine input before the first real one), or fixed by the caller. Skipping frames (vit_every)
-// get their own k over the dispatches they run.
-NR_API int nr_ext_split(nr_ctx* c, int* k_full, int* k_skip, float* ms) {
+// Split points: N-1 dispatch indices so that each of the N parts takes ~1/N of the GPU time. Measured once (3 runs on the default stream, the 1st
+// is warm-up; the arena only sees two extra frames on its pristine input before the first real one), or fixed by the caller. Skipping frames
+// (vit_every) get their own points over the dispatches they run (the ViT range lands in whichever part balances best).
+NR_API int nr_ext_splitn(nr_ctx* c, int np, int* k_full, int* k_skip, float* ms) {
   use_dev(c);
-  if (!c || !c->s || !k_full || !k_skip) return 1;
-  const int n = (int)c->steps.size(); std::vector<double> t(n, 0.0);
-  if (*k_full <= 0 || *k_skip <= 0) {
+  const int n = c ? (int)c->steps.size() : 0;
+  if (!c || !c->s || !k_full || !k_skip || np < 2 || np > 8 || n < np) return 1;
+  std::vector<double> t(n, 0.0); bool meas = false; for (int j = 0; j < np - 1; j++) meas |= k_full[j] <= 0 || k_skip[j] <= 0;
+  if (meas) {
     std::vector<hipEvent_t> ev(n + 1); for (auto& e : ev) if (hipEventCreate(&e) != hipSuccess) return 2;
     bool ok = true; const long f0 = c->frame; c->frame = 0;   // frame 0: every dispatch runs
     for (int r = 0; r < 3 && ok; r++) {
@@ -526,14 +529,25 @@ NR_API int nr_ext_split(nr_ctx* c, int* k_full, int* k_skip, float* ms) {
     }
     c->frame = f0; for (auto& e : ev) hipEventDestroy(e); if (!ok) return 3;
   }
-  auto half = [&](bool skip) { double tot = 0, acc = 0; for (int i = 0; i < n; i++) if (!(skip && i >= c->vit_lo && i < c->vit_hi)) tot += t[i];
-    int best = n / 2; double bd = 1e30; for (int i = 0; i < n; i++) { if (fabs(acc - tot / 2) < bd) { bd = fabs(acc - tot / 2); best = i; } if (!(skip && i >= c->vit_lo && i < c->vit_hi)) acc += t[i]; }
-    return best < 1 ? 1 : best; };
-  if (*k_full <= 0) *k_full = half(false); if (*k_skip <= 0) *k_skip = c->vit_every > 1 ? half(true) : *k_full;
-  if (*k_full >= n) *k_full = n - 1; if (*k_skip >= n) *k_skip = n - 1;
-  c->ksplit[0] = *k_full; c->ksplit[1] = *k_skip;
-  if (ms) for (int j = 0; j < 4; j++) { ms[j] = 0; for (int i = 0; i < n; i++) if ((i < (j < 2 ? *k_full : *k_skip)) == !(j & 1) && !(j >= 2 && c->vit_every > 1 && i >= c->vit_lo && i < c->vit_hi)) ms[j] += (float)(t[i] / 2); }
+  auto runs = [&](bool skip, int i) { return !(skip && c->vit_every > 1 && i >= c->vit_lo && i < c->vit_hi); };
+  auto pick = [&](bool skip, int* k) {   // greedy: point j at the dispatch where the running sum is nearest j/N of the total, strictly increasing
+    double tot = 0; for (int i = 0; i < n; i++) if (runs(skip, i)) tot += t[i];
+    int prev = 0;
+    for (int j = 1; j < np; j++) {
+      if (k[j - 1] > 0) { prev = k[j - 1] = (std::max)(prev + 1, (std::min)(k[j - 1], n - (np - j))); continue; }
+      double acc = 0, bd = 1e30; int best = prev + 1;
+      for (int i = 0; i < n; i++) { if (i > prev && i <= n - (np - j) && fabs(acc - tot * j / np) < bd) { bd = fabs(acc - tot * j / np); best = i; } if (runs(skip, i)) acc += t[i]; }
+      prev = k[j - 1] = best;
+    } };
+  pick(false, k_full); if (c->vit_every > 1) pick(true, k_skip); else for (int j = 0; j < np - 1; j++) k_skip[j] = k_full[j];
+  for (int f = 0; f < 2; f++) { c->kb[f][0] = 0; for (int j = 1; j < np; j++) c->kb[f][j] = (f ? k_skip : k_full)[j - 1]; c->kb[f][np] = n; }
+  c->nsplit = np;
+  if (ms) for (int f = 0; f < 2; f++) for (int j = 0; j < np; j++) { ms[f * np + j] = 0; for (int i = c->kb[f][j]; i < c->kb[f][j + 1]; i++) if (runs(f == 1, i)) ms[f * np + j] += (float)(t[i] / 2); }
   return 0;
+}
+NR_API int nr_ext_split(nr_ctx* c, int* k_full, int* k_skip, float* ms) {
+  if (k_skip && *k_skip <= 0 && k_full && *k_full > 0 && c && c->vit_every <= 1) *k_skip = *k_full;
+  return nr_ext_splitn(c, 2, k_full, k_skip, ms);
 }
 NR_API int nr_ext_close(nr_ctx* c, int) {
   use_dev(c);
