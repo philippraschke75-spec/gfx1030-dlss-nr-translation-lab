@@ -55,6 +55,12 @@ static uint16_t f2h(float f) {                              // round to nearest 
 static double h2f(uint16_t h) { int e = (h >> 10) & 31, m = h & 1023; double v = e == 0 ? ldexp((double)m, -24) : e == 31 ? 1e9 : ldexp((double)(1024 + m), e - 25); return (h & 0x8000) ? -v : v; }
 typedef void* (*P_create)(const char*, int, int, int, char*, int); typedef int (*P_run)(void*, const void*, void*, float*);
 
+// NR_TEST_V1=1: every evaluate goes through the v1 export (AMDNR's forwarder path); depth/motion must then share one extent at (0,0)
+static PFN_NrEvaluateV1 g_v1;
+static int __cdecl v1shim(ID3D12GraphicsCommandList* cmd, void* f, void* p, ID3D12Resource* c, ID3D12Resource* d, ID3D12Resource* m, ID3D12Resource* o, unsigned w, unsigned h,
+                          unsigned dW, unsigned dH, unsigned mW, unsigned mH, unsigned dBx, unsigned dBy, unsigned mBx, unsigned mBy, int di, int rs, float in, int st, float ls, float lt, float ss, int am, float sx, float sy) {
+    if (dW != mW || dH != mH || dBx || dBy || mBx || mBy) { puts("FAIL NR_TEST_V1: this test path has separate depth / motion extents"); exit(1); }
+    return g_v1(cmd, f, p, c, d, m, o, w, h, dW, dH, di, rs, in, st, ls, lt, ss, am, sx, sy); }
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IONBF, 0);
     if (getenv("NR_TEST_W")) { W = atoi(getenv("NR_TEST_W")); H = atoi(getenv("NR_TEST_H")); }
@@ -93,6 +99,9 @@ int main(int argc, char** argv) {
 
     HMODULE m = LoadLibraryA((dir + "\\nvngx.dll_dlssnr.dll").c_str()); if (!m) { printf("load failed %lu\n", GetLastError()); return 1; }
     auto create = (PFN_NrCreate)GetProcAddress(m, "dlssnr_call_create"); auto eval = (PFN_NrEvaluate)GetProcAddress(m, "dlssnr_call_evaluate_v2");
+    if (getenv("NR_TEST_V1")) { g_v1 = (PFN_NrEvaluateV1)GetProcAddress(m, "dlssnr_call_evaluate"); auto qr = (PFN_NrQueryScalingRatio)GetProcAddress(m, "dlssnr_query_scaling_ratio"); float ratio = -1.f;
+        if (!g_v1 || !qr || qr(L"nvngx_dlssnr.dll", nullptr, 2, &ratio) != 1 || ratio != 1.f) { printf("FAIL v1 exports (evaluate %p, query_scaling_ratio %p, ratio %.2f)\n", (void*)g_v1, (void*)qr, ratio); return 1; }
+        eval = v1shim; puts("v1: evaluate through dlssnr_call_evaluate, scaling ratio 1.00"); }
     auto release = (PFN_NrRelease)GetProcAddress(m, "dlssnr_call_release"); auto err = (PFN_NrError)GetProcAddress(m, "dlssnr_call_error");
     auto state = (int (*)(void*))GetProcAddress(m, "dlssnr_port_state");
     HMODULE rt = GetModuleHandleA("nr_runtime.dll"); if (!rt) rt = LoadLibraryA((dir + "\\nr_runtime.dll").c_str());

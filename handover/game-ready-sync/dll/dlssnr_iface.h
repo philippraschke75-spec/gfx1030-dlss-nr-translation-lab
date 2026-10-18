@@ -31,7 +31,16 @@ using PFN_NrEvaluate = int(__cdecl*)(ID3D12GraphicsCommandList* cmd, void* featu
                                      float skinStructure, int useAutoMask,
                                      float mvScaleX, float mvScaleY);   // returns 1 = NVSDK_NGX_Result_Success
 
-using PFN_NrRelease = void(__cdecl*)(void* feature);
+// v1 (older janblade forwarder; AMDNR's NVIDIA path calls this one): depth and motion share one extent (guideW x guideH), bases 0.
+using PFN_NrEvaluateV1 = int(__cdecl*)(ID3D12GraphicsCommandList* cmd, void* feature, void* capabilityParams,
+                                       ID3D12Resource* color, ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* output,
+                                       unsigned int width, unsigned int height, unsigned int guideWidth, unsigned int guideHeight,
+                                       int depthInverted, int reset, float intensity, int style, float localStructure,
+                                       float localTone, float skinStructure, int useAutoMask, float mvScaleX, float mvScaleY);
+// 1 = ratio written (the port: 1.0, NR does not upscale); 0 = not available; -1 = refused.
+using PFN_NrQueryScalingRatio = int(__cdecl*)(const wchar_t* snippetPath, void* capabilityParams, unsigned int perfQuality, float* outRatio);
+
+using PFN_NrRelease =void(__cdecl*)(void* feature);
 using PFN_NrSetExtras = void(__cdecl*)(void* capabilityParams, float globalTone, ID3D12Resource* ui,
                                        ID3D12Resource* uiAlpha, ID3D12Resource* backbuffer,
                                        unsigned int uiWidth, unsigned int uiHeight,

@@ -1,6 +1,6 @@
 @echo off
 rem ROCm 6.4 explicitly (HIP_PATH 7.2 links amdhip64_7.dll). v0.4.4-rc build (copy of v042\src\b.bat, own S/OUT)
-set S=E:\dlss 5\.claude\worktrees\agent-a890e91467cd42b7b\handover\game-ready-sync
+set S=E:\dlss 5\.claude\worktrees\agent-a96d4a5622d1c6e46\handover\game-ready-sync
 set OUT=E:\dlss-runtime\v044\build
 set HIP_PATH=C:\Program Files\AMD\ROCm\6.4\
 if not exist "%OUT%" mkdir "%OUT%"

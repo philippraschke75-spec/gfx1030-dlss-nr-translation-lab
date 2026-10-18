@@ -47,7 +47,7 @@ static int g_allowAny = 0, g_evictMs = 2000; static int g_sync = 1, g_spinMs = 2
 static int g_busy = 0, g_busyWaitMs = 100;   // busy_mode: 0 wait (CPU waits, bounded, for a free HIP slot), 1 reuse (last NR edit, warped) - never a native frame once NR ran
 static int g_compose = 0; static float g_detail = 1.f;   // compose= add (0: the edit added as is) | nv (1: NVIDIA's intensity) | ratio (2: OkLab matched residual); detail= live-frame detail above the model raster (1 = as is). handover/community-look/README.md
 static float g_pass2Gain = 0.5f; static std::atomic<int> g_live{0}; static UINT g_hdrP0 = 0; static ID3D12Resource* g_hl = nullptr; static ID3D12Device* g_hlDev = nullptr; static ID3D12Resource* g_eRb = nullptr; static uint8_t* g_eRbp = nullptr; /* g_hl / g_eRb (HDR latch + its log readback) belong to g_hlDev */ static float g_hdrKey = 0.18f, g_hdrAdapt = 0.05f, g_hdrBias = 1.f, g_hdrExp = 0.f;   // OptiScaler "2 passes": a later pass (a second feature on pass 1's output) adds its edit at gain * pass2_gain
-static float g_eT = 0.f, g_eL = 0.f; static int g_eFl = 0; static float g_tS = 0.f, g_cS = 1.f, g_pw = 1.f;   // transfer_strength / color_strength / paper_white: RenoDX "Control-compatible color transfer" (kSyncHlsl rtx)   // edit_temporal (blend of the shown edit with the previous one, warped), edit_limit (cap vs local contrast), edit_warp bicubic (flag bit 2)
+static float g_eT = 0.f, g_eL = 0.f; static int g_eFl = 0, g_dbg = 0; static float g_tS = 0.f, g_cS = 1.f, g_pw = 1.f;   // transfer_strength / color_strength / paper_white: RenoDX "Control-compatible color transfer" (kSyncHlsl rtx)   // edit_temporal (blend of the shown edit with the previous one, warped), edit_limit (cap vs local contrast), edit_warp bicubic (flag bit 2)
 static int g_split = 0, g_splitK[2] = {0, 0}; static int g_hist = 0; static float g_hLo = 0.08f, g_hHi = 0.25f;   // history=1: temporal history (previous NR output warped by the game's MVs) into the pre-block's +0x40, see handover/temporal-2026-10-11/DLL.md   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
 
 static void logf(const char* fmt, ...) {
@@ -107,6 +107,7 @@ static void loadSettings() {
     GetPrivateProfileStringA("nr", "transfer_strength", "0", b, sizeof b, narrow(ini).c_str()); g_tS = (float)atof(b); g_tS = g_tS > 0.f ? (std::min)(g_tS, 1.f) : 0.f;   // 0 = off (bit-exact)
     GetPrivateProfileStringA("nr", "color_strength", "1", b, sizeof b, narrow(ini).c_str()); g_cS = (float)atof(b); g_cS = g_cS == g_cS ? (std::min)((std::max)(g_cS, 0.f), 1.f) : 1.f;   // with transfer_strength > 0
     GetPrivateProfileStringA("nr", "paper_white", "1", b, sizeof b, narrow(ini).c_str()); g_pw = (float)atof(b); g_pw = g_pw > 0.01f && g_pw < 100.f ? g_pw : 1.f;   // HDR (hdr_mode) only: scene white divisor
+    g_dbg = (int)GetPrivateProfileIntA("nr", "debug_view", 0, narrow(ini).c_str()); g_dbg = g_dbg == 1 || g_dbg == 2 ? g_dbg : 0;   // 1 raw network output (upsampled), 2 edit x4 + 0.5 (sync path; no compose / gate / temporal / boost)
     { const int i8 = (int)GetPrivateProfileIntA("nr", "int8_prepost", -1, narrow(ini).c_str()); if (i8 >= 0) SetEnvironmentVariableA("NR_INT8_PREPOST", i8 ? "1" : "0"); }   // opt-in int8 post-block MLP; absent = meta (default off)
     g_split = (int)GetPrivateProfileIntA("nr", "nr_split", 0, narrow(ini).c_str()); g_split = g_split <= 0 ? 0 : g_split == 1 ? 2 : (std::min)(g_split, 8);   // N >= 2: the network in N parts over N frames (1 = 2, as before), output = last finished NR, warped
     if (g_split) g_nrEvery = g_split;
@@ -203,7 +204,7 @@ static const char* kSyncHlsl =
 "GC RWByteAddressBuffer st : register(u2);\n"
 "cbuffer C : register(b0) { uint W; uint H; uint seq; uint maxIt; uint outOff; uint flagOff; float gain; uint FWH; uint minSeq; float gLo; float gHi; uint gate; uint frame; uint maxAge;\n"
 "  uint mvOn; float mvSx; float mvSy; uint mWH; uint mBase; uint dWH; uint dBase; uint dFl; float mLo; float mHi;\n"
-"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; float hk; float hx; float hkb; float hA; float amp; uint cm; float dt; float eT; float eL; uint tFl; float tS; float cS; float pw; uint jobSeq; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
+"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; float hk; float hx; float hkb; float hA; float amp; uint cm; float dt; float eT; float eL; uint tFl; float tS; float cS; float pw; uint jobSeq; uint dbg; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
 "Texture2D<float4> mot : register(t1);\n"
 "Texture2D<float> dep : register(t2);\n"   // minSeq != 0: fg mode, reuse the edit captured from a frame >= minSeq;   // W,H model; FWH = frame W | H << 16
 "RWByteAddressBuffer ob : register(u3);\n"
@@ -214,7 +215,7 @@ static const char* kSyncHlsl =
 "  return q.r | (q.g << 9) | (q.b << 18) | ((uint)e << 27); }\n"
 "float3 boost(float4 c, float3 v);\n"
 "void put(uint2 p, float4 v) {\n"
-"  if (amp > 1.0 && any(v.rgb != col[p].rgb)) v.rgb = boost(col[p], v.rgb);\n"
+"  if (dbg == 0 && amp > 1.0 && any(v.rgb != col[p].rgb)) v.rgb = boost(col[p], v.rgb);\n"
 "#ifdef PACKED\n"
 "  ob.Store(p.y * ((((FWH & 0xFFFF) * 4) + 255) & ~255) + p.x * 4, e5(v.rgb));\n"
 "#else\n"
@@ -369,6 +370,10 @@ static const char* kSyncHlsl =
 "  return d; }\n"
 "[numthreads(8,8,1)] void exp(uint3 id : SV_DispatchThreadID) {\n"
 "  uint FW = FWH & 0xFFFF, FH = FWH >> 16; if (id.x >= FW || id.y >= FH) return; float4 c = col[id.xy];\n"
+"  if (dbg != 0) { float2 p = (id.xy + 0.5) * float2(W, H) / float2(FW, FH); float3 a, b;\n"   // debug_view: 1 raw network output, 2 edit x4 + 0.5 (model raster, bilinear; no compose / gate / temporal)
+"    if (split != 0) { if ((int)(st.Load(4) - minSeq) < 0) { put(id.xy, c); return; } a = stAt(p, 256 + W * H * 8).rgb; b = a + stAt(p, 256).rgb; }\n"   // split: the last finished job (its input + edit), unwarped
+"    else if (st.Load(0) != 0) { a = sn(bil(p, 0)).rgb; b = sn(bil(p, outOff)).rgb; } else { put(id.xy, c); return; }\n"
+"    put(id.xy, float4(dbg == 1 ? (hd() ? Ti(b) : b) : (b - a) * 4.0 + 0.5, c.a)); return; }\n"
 "  if (split != 0) {\n"   // nr_split: the last finished NR edit (st+256, job frame st[8]) moved to this frame: by this frame's vectors, + (bit 2) the acc chain of the frame before, + (bit 4) the anchor (job frame -> frame of the edit before); age expected by the CPU in bits 4+
 "    uint age = frame - st.Load(8); if ((int)(st.Load(4) - minSeq) < 0 || age == 0 || ((split & 8) == 0 && age != (split >> 4))) { put(id.xy, c); return; }\n"   // none since the reset yet / not the edit the CPU expects (spin timeout): live frame; bit 8: chain broken, vectors only, any age
 "    if (tFl & 1) { put(id.xy, txp(c, id.xy, gain * tE(id.xy), float4(cmp(c, tSe(id.xy, c)), c.a))); return; }\n"   // edit stabilisation: the stabilised edit (warped and gated per model texel by tea)
@@ -449,7 +454,7 @@ static const char* kSyncHlsl =
 "  io.Store3(o, asuint(res)); }\n"
 "[numthreads(8,8,1)] void hwp(uint3 id : SV_DispatchThreadID) { hwpB(id, 1); }\n"   // previous frame was NR (bit-exact to the one-frame history)
 "[numthreads(8,8,1)] void hwp2(uint3 id : SV_DispatchThreadID) { hwpB(id, histOk); }\n";   // older NR output (nr_every > 1): histOk = its age in frames
-static const int kSyncRing = 16, kCb = 48;                                     // descriptor pairs (colour SRV, output UAV) in flight
+static const int kSyncRing = 16, kCb = 49;                                     // descriptor pairs (colour SRV, output UAV) in flight
 
 // ---------------------------------------------------------------- feature
 enum { S_LOADING = 0, S_IDLE = 1, S_WAIT_COPY = 2, S_RUNNING = 3, S_FAILED = 4, S_SYNC = 5 };
@@ -843,7 +848,7 @@ __declspec(dllexport) void* dlssnr_call_create(const wchar_t* snippet, const wch
             if (F->upOld[0] && F->upOld[1] && F->zero) { memset(F->zerop, 0, (size_t)sz); F->delta = makeDelta(F); } else logf("delta: cannot allocate extra buffers, falling back to copy");
         }
         if (g_sync) F->sy = makeSync(F);
-        logf("create: sync %s; async fallback apply mode %s gain %.2f; compose %s detail %.2f", F->sy ? "resources ready" : "off", F->delta ? "delta (live frame + NR edit)" : "copy (stale NR image)", g_gain, g_compose == 1 ? "nv" : g_compose == 2 ? "ratio" : "add", g_detail);
+        logf("create: sync %s; async fallback apply mode %s gain %.2f; compose %s detail %.2f%s", F->sy ? "resources ready" : "off", F->delta ? "delta (live frame + NR edit)" : "copy (stale NR image)", g_gain, g_compose == 1 ? "nv" : g_compose == 2 ? "ratio" : "add", g_detail, g_dbg == 1 ? "; DEBUG_VIEW 1 (raw network output)" : g_dbg == 2 ? "; DEBUG_VIEW 2 (edit x4 + 0.5)" : "");
         { std::lock_guard<std::mutex> g(g_featMu); g_feats.push_back(F); }
         F->th = std::thread(worker, F);
         dlssnr_call_last_create = 1; return F;
@@ -1007,7 +1012,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             memcpy(&cb[15], &mvSx, 4); memcpy(&cb[16], &mvSy, 4); memcpy(&cb[22], &g_mvLo, 4); memcpy(&cb[23], &g_mvHi, 4); memcpy(&cb[28], &g_hLo, 4); memcpy(&cb[29], &g_hHi, 4);
             const bool teOn = s->tea && s->teb && (sp || w != F->W || h != F->H); memcpy(&cb[41], &g_eT, 4); memcpy(&cb[42], &g_eL, 4);   // edit stabilisation: split or resampled full-NR path
             memcpy(&cb[44], &g_tS, 4); memcpy(&cb[45], &g_cS, 4); memcpy(&cb[46], &g_pw, 4);
-            cb[43] = teOn ? 1u | (UINT)g_eFl | (s->teFrm + 1 == s->frm && reset != 1 ? 8u : 0u) | (mvBound ? 16u : 0u) : 0u; cb[47] = sp ? s->jobSeq : 0u;
+            cb[43] = teOn ? 1u | (UINT)g_eFl | (s->teFrm + 1 == s->frm && reset != 1 ? 8u : 0u) | (mvBound ? 16u : 0u) : 0u; cb[47] = sp ? s->jobSeq : 0u; cb[48] = (UINT)g_dbg;
             ID3D12DescriptorHeap* hp[] = { s->heap }; cmd->SetDescriptorHeaps(1, hp); cmd->SetComputeRootSignature(s->rs);
             cmd->SetComputeRootDescriptorTable(0, gpu); cmd->SetComputeRootUnorderedAccessView(1, s->io->GetGPUVirtualAddress()); cmd->SetComputeRootUnorderedAccessView(2, s->st->GetGPUVirtualAddress());
             if (g_hlDev != F->dev) { if (g_hl) g_hl->Release(); if (g_eRb) g_eRb->Release(); g_hl = g_eRb = nullptr; g_eRbp = nullptr; g_hlDev = F->dev; }   // a new device (the host recreated it): latch + its readback belong to the old one
@@ -1141,6 +1146,18 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
         barrier(out, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         return 1;
     } catch (...) { return 0; }
+}
+// v1 (older janblade forwarder, AMDNR's NVIDIA path): depth and motion share one extent guideW x guideH at (0,0).
+__declspec(dllexport) int dlssnr_call_evaluate(ID3D12GraphicsCommandList* cmd, void* f, void* params, ID3D12Resource* color, ID3D12Resource* depth,
+        ID3D12Resource* motion, ID3D12Resource* out, unsigned w, unsigned h, unsigned gW, unsigned gH,
+        int depthInv, int reset, float intensity, int style, float localStructure, float localTone, float skinStructure, int useAutoMask, float mvSx, float mvSy) {
+    return dlssnr_call_evaluate_v2(cmd, f, params, color, depth, motion, out, w, h, gW, gH, gW, gH, 0, 0, 0, 0,
+                                   depthInv, reset, intensity, style, localStructure, localTone, skinStructure, useAutoMask, mvSx, mvSy);
+}
+// NR does not upscale: every quality level runs at the output size (ratio 1.0).
+__declspec(dllexport) int dlssnr_query_scaling_ratio(const wchar_t*, void*, unsigned, float* outRatio) {
+    dlssnr_last_ratio_stage = 0; if (!outRatio) return 0;
+    *outRatio = 1.f; dlssnr_last_ratio_result = 1; dlssnr_last_ratio_stage = 5; return 1;
 }
 
 }   // extern "C"
