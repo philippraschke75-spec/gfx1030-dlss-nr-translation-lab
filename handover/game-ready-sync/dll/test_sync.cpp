@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
     auto rcreate = (P_create)GetProcAddress(rt, "nr_create"); auto rrun = (P_run)GetProcAddress(rt, "nr_run");
     if (!create || !eval || !release || !state || !rcreate || !rrun) { puts("missing exports"); return 1; }
 
-    al->Reset(); cl->Reset(al, nullptr); void* f = create(L"nvngx_dlssnr.dll", L"data", dev, cl, nullptr, W, H, 0, 1.f, 0, 1.f, 1.f, -1.f, 1, 1); cl->Close();
+    al->Reset(); cl->Reset(al, nullptr); void* f = create(L"nvngx_dlssnr.dll", L"data", dev, cl, nullptr, W, H, getenv("NR_TEST_PRESET") ? atoi(getenv("NR_TEST_PRESET")) : 0, 1.f, 0, 1.f, 1.f, -1.f, 1, 1); cl->Close();   // NR_TEST_PRESET: the host's DLSSNR.Hint.Render.Preset (310.9: 1 = large model)
     { ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); } if (!wait(5000)) { puts("FAIL timeout"); return 2; }
     if (!f) { printf("FAIL create: %s\n", err()); return 3; }
     if (auto pdir = (const char* (*)(void*))GetProcAddress(m, "dlssnr_port_dir")) if (*pdir(f)) { snprintf(dd, sizeof dd, "%s", pdir(f)); printf("data dir (picked by the DLL): %s\n", dd); }   // model folder + step
