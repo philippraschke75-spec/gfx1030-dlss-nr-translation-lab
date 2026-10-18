@@ -204,7 +204,7 @@ static const char* kSyncHlsl =
 "GC RWByteAddressBuffer st : register(u2);\n"
 "cbuffer C : register(b0) { uint W; uint H; uint seq; uint maxIt; uint outOff; uint flagOff; float gain; uint FWH; uint minSeq; float gLo; float gHi; uint gate; uint frame; uint maxAge;\n"
 "  uint mvOn; float mvSx; float mvSy; uint mWH; uint mBase; uint dWH; uint dBase; uint dFl; float mLo; float mHi;\n"
-"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; float hk; float hx; float hkb; float hA; float amp; uint cm; float dt; float eT; float eL; uint tFl; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
+"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; float hk; float hx; float hkb; float hA; float amp; uint cm; float dt; float eT; float eL; uint tFl; uint sy; float sT; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
 "Texture2D<float4> mot : register(t1);\n"
 "Texture2D<float> dep : register(t2);\n"   // minSeq != 0: fg mode, reuse the edit captured from a frame >= minSeq;   // W,H model; FWH = frame W | H << 16
 "RWByteAddressBuffer ob : register(u3);\n"
@@ -230,6 +230,19 @@ static const char* kSyncHlsl =
 "  float4 v[4]; for (int i = 0; i < 4; i++) v[i] = float4(f16tof32(q[i].x & 0xFFFF), f16tof32(q[i].x >> 16), f16tof32(q[i].y & 0xFFFF), f16tof32(q[i].y >> 16));\n"
 "  return lerp(lerp(v[0], v[1], t.x), lerp(v[2], v[3], t.x), t.y); }\n"
 "float4 sn(float4 v) { return float4(san(v.x), san(v.y), san(v.z), san(v.w)); }\n"
+// Style (sy 1 Natural, 2 Cinematic): NVIDIA's cg2r_post_process_kernel grades the network answer before the intensity blend
+// (OpenDLSS-NR demo/shaders/nr_composite.comp nrStyle, MIT): exposure / smoothstep contrast per channel, then an HSL saturation
+// scale, all x clamp(local tone, 0, 1). Natural: -0.1 EV, -0.25 contrast, -10% saturation; Cinematic: -15% saturation.
+// ponytail: the reference's identity exp2(log2()) round trips (f32 rounding only) are left out.
+"float hue1(float p, float q, float h) { h = frac(h); return h < 1.0 / 6.0 ? p + (q - p) * 6.0 * h : h < 0.5 ? q : h < 2.0 / 3.0 ? p + (q - p) * (2.0 / 3.0 - h) * 6.0 : p; }\n"
+"float4 sty(float4 v) {\n"
+"  if (sy == 0) return v; float t = saturate(sT), ex = sy == 1 ? -0.1 * t : 0.0, co = sy == 1 ? -0.25 * t : 0.0, sa = sy == 1 ? -0.1 * t : -0.15 * t;\n"
+"  float3 e = saturate(saturate(v.rgb) * exp2(ex)), c = saturate(e + co * (e * e * (3.0 - 2.0 * e) - e));\n"
+"  float hi = max(c.r, max(c.g, c.b)), lo = min(c.r, min(c.g, c.b)), l = (hi + lo) * 0.5; if (hi <= lo) return float4(c, v.a);\n"
+"  float d = hi - lo, s = l > 0.5 ? d / (2.0 - hi - lo) : d / (hi + lo), h = hi == c.r ? (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0) : hi == c.g ? (c.b - c.r) / d + 2.0 : (c.r - c.g) / d + 4.0;\n"
+"  h /= 6.0; s = saturate(s * (sa + 1.0)); if (s <= 0.0) return float4(l, l, l, v.a);\n"
+"  float q = l < 0.5 ? l * (1.0 + s) : l + s - l * s, p = 2.0 * l - q;\n"
+"  return float4(saturate(float3(hue1(p, q, h + 1.0 / 3.0), hue1(p, q, h), hue1(p, q, h - 1.0 / 3.0))), v.a); }\n"
 // compose= (cm != 0, handover/community-look/README.md). OkLab with Ottosson's constants, for the ratio mode. The ratio mode adapts
 // NvidiaResidualModel from janblade's OptiScaler-F5-DLSSNR (GPL-3, shaders/dlssnr/precompile/dlssnr.hlsl); the nv mode follows
 // dlssnr-pytorch layers/pre_post.py compose(); its intensity > 1 rule is boost() below (one implementation, cb[38] amp).
@@ -299,7 +312,7 @@ static const char* kSyncHlsl =
 "  return lerp(lerp(v[0], v[1], t.x), lerp(v[2], v[3], t.x), t.y); }\n"
 "[numthreads(8,8,1)] void cap(uint3 id : SV_DispatchThreadID) {\n"   // fg: keep the NR edit (out - in, model size) of a finished frame at st+256
 "  if (id.x >= W || id.y >= H || st.Load(0) == 0) return; uint o = (id.y * W + id.x) * 8;\n"
-"  float4 i = bil(id.xy + 0.5, 0), d = sn(bil(id.xy + 0.5, outOff) - i); st.Store2(256 + o, uint2(pk(d.r, d.g), pk(d.b, 0)));\n"
+"  float4 i = bil(id.xy + 0.5, 0), d = sn(sty(bil(id.xy + 0.5, outOff)) - i); st.Store2(256 + o, uint2(pk(d.r, d.g), pk(d.b, 0)));\n"
 "  st.Store2(256 + W * H * 8 + o, uint2(pk(i.r, i.g), pk(i.b, depAt((id.xy + 0.5) / float2(W, H)))));\n"   // + the model input the edit belongs to (motion gate) and its depth
 "  if (id.x == 0 && id.y == 0) { st.Store(4, seq); st.Store(8, frame); } }\n"
 "float2 accAt(float2 q, uint f); float2 slotAt(float2 q, uint k);\n"
@@ -325,7 +338,7 @@ static const char* kSyncHlsl =
 "        float wt = 1.0 - smoothstep(mLo, mHi, max(a.r, max(a.g, a.b)));\n"
 "        if (dFl & 1) { float dn = depAt(uv); wt *= 1.0 - smoothstep(0.05, 0.2, abs(dn - o.a) / max(max(dn, o.a), 1e-6)); }\n"
 "        e = wt * jobE(p); } } }\n"
-"  else { float4 i = bil(id.xy + 0.5, 0); l = i.rgb; if (st.Load(0) != 0) e = sn(bil(id.xy + 0.5, outOff) - i).rgb; }\n"   // full NR frame: out - in
+"  else { float4 i = bil(id.xy + 0.5, 0); l = i.rgb; if (st.Load(0) != 0) e = sn(sty(bil(id.xy + 0.5, outOff)) - i).rgb; }\n"   // full NR frame: out - in
 "  st.Store2(256 + 6 * W * H * 8 + (id.y * W + id.x) * 8, uint2(pk(e.r, e.g), pk(e.b, dot(l, float3(0.2126, 0.7152, 0.0722))))); }\n"
 "[numthreads(8,8,1)] void teb(uint3 id : SV_DispatchThreadID) {\n"
 "  if (id.x >= W || id.y >= H) return; uint FW = FWH & 0xFFFF, FH = FWH >> 16; float2 uv = (id.xy + 0.5) / float2(W, H);\n"
@@ -373,11 +386,11 @@ static const char* kSyncHlsl =
 "      float3 d = lerp(lerp(e[0], e[1], t.x), lerp(e[2], e[3], t.x), t.y) * (1.0 - (float)age / (maxAge + 1)); put(id.xy, float4(cmp(c, gain * d), c.a)); return; }\n"
 "    put(id.xy, c); return; }\n"
 "  if (FW != W || FH != H) {\n"     // resampled: carry the model's change (out - in, model size) up to the frame
-"    float2 p = (id.xy + 0.5) * float2(W, H) / float2(FW, FH); float4 d = sn(bil(p, outOff) - bil(p, 0));\n"
+"    float2 p = (id.xy + 0.5) * float2(W, H) / float2(FW, FH); float4 d = sn(sty(bil(p, outOff)) - bil(p, 0));\n"
 "    if (tFl & 1) { float3 y = L(c); put(id.xy, float4(cmp(c, cm ? ced(y, y, y + tE(id.xy), gain) : gain * tE(id.xy)), c.a)); return; }\n"   // edit stabilisation: the stabilised edit (tea/teb); compose= applies to it as to any edit
-"    put(id.xy, float4(cmp(c, cm ? ced(L(c), sn(bil(p, 0)).rgb, sn(bil(p, outOff)).rgb, gain) : gain * d.rgb), c.a)); return; }\n"                       // timeout: native frame
+"    put(id.xy, float4(cmp(c, cm ? ced(L(c), sn(bil(p, 0)).rgb, sn(sty(bil(p, outOff))).rgb, gain) : gain * d.rgb), c.a)); return; }\n"                       // timeout: native frame
 "  uint2 r = io.Load2(outOff + (id.y * W + id.x) * 8);\n"
-"  float3 e = float3(san(f16tof32(r.x & 0xFFFF)), san(f16tof32(r.x >> 16)), san(f16tof32(r.y & 0xFFFF)));\n"
+"  float3 e = sty(float4(san(f16tof32(r.x & 0xFFFF)), san(f16tof32(r.x >> 16)), san(f16tof32(r.y & 0xFFFF)), 0.0)).rgb;\n"
 "  uint2 q = io.Load2((id.y * W + id.x) * 8); float3 n = float3(f16tof32(q.x & 0xFFFF), f16tof32(q.x >> 16), f16tof32(q.y & 0xFFFF));\n"   // the network's (clamped) input
 "  float3 o = cm ? cmp(c, ced(L(c), n, e, gain)) : hd() ? cmp(c, gain * (e - T(sn(c).rgb))) : c.rgb + gain * (e - n);\n"   // LDR: frame + edit, so pixels above 1 keep their excess
 "  put(id.xy, float4(max(o, 0.0), c.a)); }\n"
@@ -427,7 +440,7 @@ static const char* kSyncHlsl =
 "  io.Store3(o, asuint(res)); }\n"
 "[numthreads(8,8,1)] void hwp(uint3 id : SV_DispatchThreadID) { hwpB(id, 1); }\n"   // previous frame was NR (bit-exact to the one-frame history)
 "[numthreads(8,8,1)] void hwp2(uint3 id : SV_DispatchThreadID) { hwpB(id, histOk); }\n";   // older NR output (nr_every > 1): histOk = its age in frames
-static const int kSyncRing = 16, kCb = 44;                                     // descriptor pairs (colour SRV, output UAV) in flight
+static const int kSyncRing = 16, kCb = 46;                                     // descriptor pairs (colour SRV, output UAV) in flight
 
 // ---------------------------------------------------------------- feature
 enum { S_LOADING = 0, S_IDLE = 1, S_WAIT_COPY = 2, S_RUNNING = 3, S_FAILED = 4, S_SYNC = 5 };
@@ -912,6 +925,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             cb[43] = teOn ? 1u | (UINT)g_eFl | (s->teFrm + 1 == s->frm && reset != 1 ? 8u : 0u) : 0u;
             if (g_hCR) cb[43] |= 16u;   // history_filter=catmull (hwp)
             if (!g_hGate) { const float big[2] = {1e30f, 2e30f}; memcpy(&cb[28], big, 8); }   // history_gate=0 (NVIDIA): no colour gate
+            { const float sy = F->appliedCond[0], sT = F->appliedCond[1]; cb[44] = sy == 1.f || sy == 2.f ? (UINT)sy : 0u; memcpy(&cb[45], &sT, 4); }   // style grade (sty) with the conditioning the runtime got
             ID3D12DescriptorHeap* hp[] = { s->heap }; cmd->SetDescriptorHeaps(1, hp); cmd->SetComputeRootSignature(s->rs);
             cmd->SetComputeRootDescriptorTable(0, gpu); cmd->SetComputeRootUnorderedAccessView(1, s->io->GetGPUVirtualAddress()); cmd->SetComputeRootUnorderedAccessView(2, s->st->GetGPUVirtualAddress());
             if (!g_hl) g_hl = sharedBuffer(F->dev, 65536, D3D12_HEAP_FLAG_NONE, nullptr);   // ponytail: one process-global latch, never freed; one device assumed
