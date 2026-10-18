@@ -84,7 +84,8 @@ int main(int argc, char** argv) {
     CK(dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, al, nullptr, IID_PPV_ARGS(&cl))); cl->Close();
     CK(dev->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))); ev = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     const UINT pitch = (W * BPP + 255) & ~255u; const UINT64 sz = (UINT64)pitch * H;
-    const DXGI_FORMAT OFMT = e5 ? DXGI_FORMAT_R16G16B16A16_FLOAT : FMT; const UINT opitch = e5 ? (W * 8 + 255) & ~255u : pitch;   // R9G9B9E5 cannot be a UAV on AMD
+    const bool o16 = e5 || getenv("NR_TEST_OFMT");   // NR_TEST_OFMT=f16: RGBA16F output whatever the colour format (format-converting pass-through)
+    const DXGI_FORMAT OFMT = o16 ? DXGI_FORMAT_R16G16B16A16_FLOAT : FMT; const UINT opitch = o16 ? (W * 8 + 255) & ~255u : pitch;   // R9G9B9E5 cannot be a UAV on AMD
     auto color = tex(e5 ? D3D12_RESOURCE_FLAG_NONE : D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, FMT),
          out = tex(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, OFMT);
     auto up = buf(D3D12_HEAP_TYPE_UPLOAD, sz, D3D12_RESOURCE_STATE_GENERIC_READ), rb = buf(D3D12_HEAP_TYPE_READBACK, (UINT64)opitch * H, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -115,15 +116,29 @@ int main(int argc, char** argv) {
         for (int i = 0; i < N; i++) {
             const UINT fw = i % 2 ? W * 3 / 4 : W, fh = i % 2 ? H * 3 / 4 : H; const int kind = i % 3;   // 0 normal, 1 abandon, 2 release while loading
             if (i && (i - 1) % 3 == 1) Sleep(2100);   // the abandoned one must be idle >= evict_idle_ms (2000) when the next create loads
+            // NR_TEST_EVICTRACE=1: the host evaluates the abandoned feature while this create's worker evicts it. dlssnr_port_test(ms) holds that
+            // evaluate between its first state check and its lock until the eviction is done, so it lands exactly there (v0.4.3: null heap -> crash).
+            std::thread race; int raceR = -1; ID3D12CommandAllocator* ra = nullptr; ID3D12GraphicsCommandList* rl = nullptr; void* rg = nullptr; auto ptest = (void (*)(int))GetProcAddress(m, "dlssnr_port_test");
+            if (getenv("NR_TEST_EVICTRACE") && kind == 2 && !abandoned.empty()) {
+                if (!ptest) { puts("FAIL no dlssnr_port_test"); return 1; }
+                CK(dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&ra))); CK(dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, ra, nullptr, IID_PPV_ARGS(&rl)));
+                rg = abandoned.back(); const UINT pw = (i - 1) % 2 ? W * 3 / 4 : W, ph = (i - 1) % 2 ? H * 3 / 4 : H; ptest(60000);
+                race = std::thread([&, pw, ph] { raceR = eval(rl, rg, nullptr, color, nullptr, nullptr, out, pw, ph, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1.f, 1.f); });
+                Sleep(200); }
             al->Reset(); cl->Reset(al, nullptr); void* g = create(L"nvngx_dlssnr.dll", L"data", dev, cl, nullptr, fw, fh, 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1); cl->Close();
+            if (race.joinable()) { const double t2 = now(); while (state(rg) != 4 && now() - t2 < 60000) Sleep(20); const bool ev = state(rg) == 4; ptest(0); race.join();   // the new worker evicts it, then the held evaluate goes on
+                rl->Close(); ID3D12CommandList* l[] = {rl}; q->ExecuteCommandLists(1, l); const bool ok = wait(5000);
+                printf("evict race: feature %s, the evaluate held across it returned %d, list %s, device 0x%08lx\n", ev ? "evicted" : "NOT evicted (race not exercised)", raceR, ok ? "executed" : "TIMEOUT", (unsigned long)dev->GetDeviceRemovedReason());
+                if (!ev || raceR != 1 || !ok || dev->GetDeviceRemovedReason() != S_OK) { puts("FAIL evict race"); return 9; } rl->Release(); ra->Release(); }
             { ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); } if (!wait(5000) || !g) { printf("FAIL recreate %d: %s\n", i, err()); return 3; }
-            if (kind == 2) { release(g); printf("cycle %2d %ux%u released while loading\n", i, fw, fh); continue; }
+            if (kind == 2) { release(g); printf("cycle %2d %ux%u released while loading, device 0x%08lx\n", i, fw, fh, (unsigned long)dev->GetDeviceRemovedReason()); continue; }
             const double t1 = now(); while (state(g) == 0 && now() - t1 < 30000) Sleep(20);
             if (state(g) != 5) { printf("FAIL recreate %d: state %d (%s)\n", i, state(g), err()); return 4; }
             for (int k = 0; k < 3; k++) { al->Reset(); cl->Reset(al, nullptr); eval(cl, g, nullptr, color, nullptr, nullptr, out, fw, fh, 0, 0, 0, 0, 0, 0, 0, 0, 0, k == 0, 1.f, 0, 1.f, 1.f, 1.f, 0, 1.f, 1.f); cl->Close();
                 ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); if (!wait(5000)) { puts("FAIL recreate: GPU timeout"); return 2; } }
             size_t fr = 0, tot = 0; mem(&fr, &tot); if (i >= 3) { lo = std::min(lo, fr); hi = std::max(hi, fr); }
-            printf("cycle %2d %ux%u loaded in %.0f ms, free VRAM %zu MB%s\n", i, fw, fh, now() - t1, fr >> 20, kind == 1 ? " (abandoned, no release)" : "");
+            printf("cycle %2d %ux%u loaded in %.0f ms, free VRAM %zu MB%s, device 0x%08lx\n", i, fw, fh, now() - t1, fr >> 20, kind == 1 ? " (abandoned, no release)" : "", (unsigned long)dev->GetDeviceRemovedReason());
+            if (dev->GetDeviceRemovedReason() != S_OK) { puts("FAIL recreate: device removed"); return 9; }   // a removed device completes every fence: the waits above cannot see it
             if (kind == 1) abandoned.push_back(g); else release(g);
         }
         for (void* g : abandoned) release(g);
@@ -201,7 +216,12 @@ int main(int argc, char** argv) {
     if (guard) {   // every frame must come back as the native input, evaluate returning 1
         int bad = 0; double ms = 0;
         for (int k = 0; k < 5; k++) { makeFrame(k); int r = frame(k, true, &ms); if (r == -100) { puts("FAIL GPU wait timed out"); return 7; }
-            size_t diff = 0; for (UINT y = 0; y < H; y++) diff += memcmp(rbp + (size_t)y * opitch, upp + (size_t)y * pitch, (size_t)W * BPP) != 0;
+            size_t diff = 0;
+            if (OFMT == FMT) for (UINT y = 0; y < H; y++) diff += memcmp(rbp + (size_t)y * opitch, upp + (size_t)y * pitch, (size_t)W * BPP) != 0;
+            else for (UINT y = 0; y < H; y++) { bool rd = false;   // converted: the decoded colour (r11 / e5 -> half, exact) vs the RGBA16F output, rgb
+                for (UINT x = 0; x < W && !rd; x++) { uint16_t a[4], o[4]; uint32_t v; memcpy(&v, upp + (size_t)y * pitch + x * 4, 4); if (r11) unpack_r11g11b10(v, a); else up5(v, a);
+                    memcpy(o, rbp + (size_t)y * opitch + x * 8, 8); for (int c = 0; c < 3; c++) rd |= fabs(h2f(a[c]) - h2f(o[c])) > 1e-3 * fabs(h2f(a[c])) + 1e-6; }
+                diff += rd; }
             printf("frame %d: evaluate %d, %zu rows differ from the input\n", k, r, diff); bad += r != 1 || diff; }
         release(f); printf("device 0x%08lx\n", (unsigned long)dev->GetDeviceRemovedReason());
         puts(bad || dev->GetDeviceRemovedReason() != S_OK ? "FAIL passthrough" : "PASSTHROUGH PASS (NR off, native frames)"); return bad ? 9 : 0; }
@@ -436,7 +456,7 @@ int main(int argc, char** argv) {
         fmu = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ); fdu = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ);
         if (!fmv || !fdp || !fmu || !fdu) { puts("FAIL guide resources"); return 1; } fmu->Map(0, nullptr, (void**)&mvp); fdu->Map(0, nullptr, (void**)&dpp);
         std::vector<float> fin((size_t)W * H * 3), fout(fin.size()), pin(fin.size()), pout(fin.size()), mi((size_t)MW * MH * 3), mo(mi.size()), pmi(mi.size()), pmo(mi.size());
-        double hfo = 0, hfi = 0; int nhf = 0; Fr tot, rtot, sst; int nf = 0, nss = 0; double pulse[2] = {}; int npulse[2] = {}; double eabs = 0; int neabs = 0; uint64_t hsh = 1469598103934665603ull;
+        double hfo = 0, hfi = 0, lmax = 0; int nhf = 0, lmaxK = -1; Fr tot, rtot, sst; int nf = 0, nss = 0; double pulse[2] = {}; int npulse[2] = {}; double eabs = 0; int neabs = 0; uint64_t hsh = 1469598103934665603ull;
         for (int k = 0; k < frames; k++) {
             gen(fin, W, H, k); float a[2], b[2]; shift(k, a); shift(k - 1, b); const uint16_t hv[2] = { f2h((a[0] - b[0]) / W), f2h((a[1] - b[1]) / H) }; const float dv = 0.1f;
             for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { memcpy(mvp + (size_t)y * gpitch + x * 4, hv, 4); memcpy(dpp + (size_t)y * gpitch + x * 4, &dv, 4);
@@ -445,6 +465,7 @@ int main(int argc, char** argv) {
                 else memcpy(upp + (size_t)y * pitch + x * 8, h4, 8);
                 for (int c = 0; c < 3; c++) p[c] = (float)h2f(h4[c]); }   // what the network really gets
             int r = frame(k, true, &ms); if (r == -100) { printf("FAIL frame %d: GPU wait timed out\n", k); return 7; } if (r != 1) { printf("FAIL frame %d: evaluate returned %d\n", k, r); return 7; }
+            if (k >= 2 && ms > lmax) { lmax = ms; lmaxK = k; }   // longest list (submit -> done) after warm-up: a GPU wait running into its bound shows here
             for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { uint16_t o[4]; if (r11) unpack_r11g11b10(*(uint32_t*)(rbp + (size_t)y * pitch + x * 4), o); else memcpy(o, rbp + (size_t)y * opitch + x * 8, 8);
                 for (int c = 0; c < 3; c++) { double v = h2f(o[c]); fout[((size_t)y * W + x) * 3 + c] = v == v ? (float)v : 0.f; } }
             { double e = 0, ea = 0; for (size_t i = 0; i < fin.size(); i += 3) for (int c = 0; c < 3; c++) { const double d = std::min(std::max(fout[i + c], 0.f), 1.f) - std::min(std::max(fin[i + c], 0.f), 1.f); e += (c == 0 ? .2126 : c == 1 ? .7152 : .0722) * d; ea += fabs(d); }
@@ -471,6 +492,7 @@ int main(int argc, char** argv) {
         if (!tsv.empty()) { std::sort(tsv.begin(), tsv.end()); printf("TS evaluate GPU ms (frames >= 8): p10 %.3f median %.3f mean-of-lowest-half %.3f\n", tsv[tsv.size() / 10], tsv[tsv.size() / 2],
             std::accumulate(tsv.begin(), tsv.begin() + tsv.size() / 2, 0.0) / (tsv.size() / 2)); }
         printf("EDIT mean |out - in| (display RGB) %.5f over %d frames\n", eabs / std::max(neabs, 1), neabs);
+        printf("LISTMAX %.1f ms (frame %d)\n", lmax, lmaxK);
         printf("HF mean |Laplacian| luma: out %.5f in %.5f (x%.3f) over %d frames\n", hfo / std::max(nhf, 1), hfi / std::max(nhf, 1), hfi > 0 ? hfo / hfi : 0, nhf);
         report("FLICKER frame", tot, nf, W, H); report("FLICKER steady(k>=8)", sst, nss, W, H); if (doRef) report("FLICKER network-alone", rtot, nf, MW, MH);
         if (f2) release(f2); release(f); return 0;

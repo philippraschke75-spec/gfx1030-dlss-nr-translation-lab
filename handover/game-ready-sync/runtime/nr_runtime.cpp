@@ -43,6 +43,7 @@ struct nr_ctx {
   // No GPU-side cross-API wait (hipStreamWaitValue32 hung the HIP queue forever when D3D12 never wrote flag_in -> TDR/PC freeze on 2026-10-08):
   // a CPU thread polls flag_in with a timeout and only then launches the frame.
   hipStream_t s = nullptr, ps = nullptr; uint32_t* hf = nullptr; std::thread th; std::condition_variable cv; struct Job { unsigned seq; int hv, part; }; std::deque<Job> q;
+  bool job_ok = false;   // ext thread: the job in flight got its part 1 (input, strength, history) on the GPU
   std::atomic<bool> stop{false}; std::atomic<int> inflight{0};
   // temporal history (nr_run2 / nr_ext_enqueue2): own PAD_H x PAD_W x RGB32F buffer, pointed to by pre-block +0x40 and post-block +0x40 when valid
   float* hist = nullptr; uint64_t netout = 0; int hist_mask = 0; unsigned ph = 0, pw = 0; bool have_prev = false; int dbg_n = 0; size_t io_size = 0, hin = 0, hout = 0;
@@ -475,7 +476,12 @@ static void ext_thread(nr_ctx* c) {
       Sleep(0);
     }
 #endif
-    if (ready) {   // late/never-executed frame: skip it; D3D12's bounded spin shows the native frame
+    // Test hook NR_TEST_DROP_PART=n: treat the n-th job start (part 0/1) as never executed (its flag_in wait timed out)
+    static const int drop = getenv("NR_TEST_DROP_PART") ? atoi(getenv("NR_TEST_DROP_PART")) : 0; static int starts = 0;
+    if (part <= 1 && ++starts == drop) { ready = false; rlog("runtime: NR_TEST_DROP_PART: job %d (seq %u) dropped", starts, seq); }
+    // nr_split: a job whose part 1 was dropped has no input in the arena; its later parts must not run on it (stale arena)
+    c->job_ok = part <= 1 ? ready : c->job_ok && ready;
+    if (c->job_ok) {   // late/never-executed frame (or a part of a dropped job): skip it; D3D12's bounded spin shows the last edit / native frame
       hipStream_t s = c->s; const size_t n = c->steps.size(); const int* b = c->kb[skipping(c)]; const bool last = part == 0 || part == c->nsplit;   // part j = [kb[j-1], kb[j]); the arena keeps everything in between
       const size_t lo = part > 1 ? (size_t)b[part - 1] : 0, hi = last ? n : (size_t)b[part];
       bool ok = true;
