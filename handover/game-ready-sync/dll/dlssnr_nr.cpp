@@ -48,7 +48,7 @@ static int g_allowAny = 0, g_evictMs = 2000; static int g_sync = 1, g_spinMs = 2
 static int g_busy = 0, g_busyWaitMs = 100;   // busy_mode: 0 wait (CPU waits, bounded, for a free HIP slot), 1 reuse (last NR edit, warped) - never a native frame once NR ran
 static int g_compose = 0; static float g_detail = 1.f;   // compose= add (0: the edit added as is) | nv (1: NVIDIA's intensity) | ratio (2: OkLab matched residual); detail= live-frame detail above the model raster (1 = as is). handover/community-look/README.md
 static float g_pass2Gain = 0.5f; static std::atomic<int> g_live{0}; static UINT g_hdrP0 = 0; static ID3D12Resource* g_hl = nullptr; static float g_hdrKey = 0.18f, g_hdrAdapt = 0.05f, g_hdrBias = 1.f, g_hdrExp = 0.f;   // OptiScaler "2 passes": a later pass (a second feature on pass 1's output) adds its edit at gain * pass2_gain
-static unsigned g_dumpFrame = 0; static std::vector<DumpItem> g_dumpItems; static std::mutex g_dumpMu;   // dump_frame=N: frame_dump.h
+static float g_mvK = 1.f; static unsigned g_dumpFrame = 0, g_dumpFrames = 1; static std::vector<DumpItem> g_dumpItems; static std::mutex g_dumpMu;   // dump_frame=N: frame_dump.h
 static float g_eT = 0.f, g_eL = 0.f; static int g_eFl = 0;   // edit_temporal (blend of the shown edit with the previous one, warped), edit_limit (cap vs local contrast), edit_warp bicubic (flag bit 2)
 static int g_hGate = 0, g_hCR = 1, g_hSeed = 1, g_hZp = 0;   /* history_pad reflect (NVIDIA) | zero (v0.4.3) */   // history_gate (colour gate, 0 = NVIDIA), history_filter catmull (NVIDIA) | bilinear, history_seed frame (NVIDIA) | 0
 static int g_split = 0, g_splitK[2] = {0, 0}; static int g_hist = 0; static float g_hLo = 0.08f, g_hHi = 0.25f;   // history=1: temporal history (previous NR output warped by the game's MVs) into the pre-block's +0x40, see handover/temporal-2026-10-11/DLL.md   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
@@ -113,6 +113,8 @@ static void loadSettings() {
     { char m[16]; GetPrivateProfileStringA("nr", "edit_warp", "bilinear", m, sizeof m, narrow(ini).c_str()); g_eFl = !_stricmp(m, "bicubic") ? 4 : 0; }   // with edit_temporal/edit_limit: Catmull-Rom fetches (sharper, more flicker)
     { const int i8 = (int)GetPrivateProfileIntA("nr", "int8_prepost", -1, narrow(ini).c_str()); if (i8 >= 0) SetEnvironmentVariableA("NR_INT8_PREPOST", i8 ? "1" : "0"); }   // opt-in int8 post-block MLP; absent = meta (default off)
     g_dumpFrame = (unsigned)GetPrivateProfileIntA("nr", "dump_frame", 0, narrow(ini).c_str());   // 0 = off; N = dump the main feature's N-th sync frame (colour, depth, motion, output) next to the log
+    { char b2[32]; GetPrivateProfileStringA("nr", "mv_scale", "1", b2, sizeof b2, narrow(ini).c_str()); g_mvK = (float)atof(b2); if (!(g_mvK == g_mvK)) g_mvK = 1.f; }
+    g_dumpFrames =(std::min)((std::max)((unsigned)GetPrivateProfileIntA("nr", "dump_frames", 1, narrow(ini).c_str()), 1u), 8u);   // consecutive frames from dump_frame on (2: check the vectors, frame f0 warped by f1's motion vs f1)
     g_split = (int)GetPrivateProfileIntA("nr", "nr_split", 0, narrow(ini).c_str()); g_split = g_split <= 0 ? 0 : g_split == 1 ? 2 : (std::min)(g_split, 8);   // N >= 2: the network in N parts over N frames (1 = 2, as before), output = last finished NR, warped
     if (g_split) g_nrEvery = g_split;
     GetPrivateProfileStringA("nr", "nr_split_k", "0", b, sizeof b, narrow(ini).c_str()); g_splitK[0] = g_splitK[1] = 0; sscanf_s(b, "%d,%d", &g_splitK[0], &g_splitK[1]);   // first dispatch of part 2 (full[,skipping] frames); 0 = measure
@@ -460,7 +462,7 @@ struct Sync {                                       // D3D12 side of the sync pa
     unsigned waitFails = 0; unsigned padW = 0, padH = 0, lastNrFrm = 0xFFFFFFF0u, accFrm = 0xFFFFFFF0u; bool histOn = false;   // history=1   // fg: frame counter, frame of each in-flight seq (edit age)
     ID3D12PipelineState* anc = nullptr; unsigned np = 0, ancFrm = 0xFFFFFFF0u, ancTo = 0xFFFFFFF0u, ageSum = 0, ageCnt = 0, ageMax = 0, loose = 0;   // nr_split N: parts per job; anchor (st slot 5) = offsets from frame ancFrm to ancTo; edit age stats
     ID3D12PipelineState *tea = nullptr, *teb = nullptr; unsigned teFrm = 0xFFFFFFF0u;   // edit stabilisation passes, frame teb last ran
-    bool split = false; unsigned part = 0, jobFrm = 0, doneFrm = 0xFFFFFFF0u, accTo = 0xFFFFFFF0u;   // nr_split: next part (0 = start a job), frame of the job in flight / last finished one, NR frame the acc chain points to
+    bool split = false, mvLogged = false; unsigned part = 0, jobFrm = 0, doneFrm = 0xFFFFFFF0u, accTo = 0xFFFFFFF0u;   // nr_split: next part (0 = start a job), frame of the job in flight / last finished one, NR frame the acc chain points to
 };
 struct Feature;
 static void applyCond(Feature* F); static float curIntensity(Feature* F);
@@ -927,6 +929,8 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             { const float hk = F->pass ? g_pass2Gain : 1.f, hx = F->pass ? 1.f : g_hdrExp * g_hdrBias, hkb = g_hdrKey * g_hdrBias; memcpy(&cb[34], &hk, 4); memcpy(&cb[35], &hx, 4); memcpy(&cb[36], &hkb, 4); memcpy(&cb[37], &g_hdrAdapt, 4); cb[39] = (UINT)g_compose; memcpy(&cb[40], &g_detail, 4); }   // extra pass: E = 1 (its input is ClampProxy's unit cube, not scene-linear; pass 0's E would squeeze it to T(E) ~ 0.25, near black)
             const float I = curIntensity(F), amp = I > 1.f ? (g_iRatio ? -I : I) : 0.f; memcpy(&cb[38], &amp, 4);   // intensity > 1: the blend stays at 1, put() applies the reference's ratio compose (boost)
             float gain = (F->pass ? g_gain * g_pass2Gain : g_gain) * (std::min)(I, 1.f); memcpy(&cb[6], &gain, 4); memcpy(&cb[9], &g_gateLo, 4); memcpy(&cb[10], &g_gateHi, 4);   // gLo, gHi   // gain x intensity: NVIDIA's blend towards the NR result (up to 1; compose nv/ratio get it as their g)
+            if (!s->mvLogged && (mvOn || hMv)) { s->mvLogged = true; logf("motion: %ux%u fmt %d base %u,%u, host scale %g x %g, mv_scale %g (previous = current + mv * scale, frame px)", mW, mH, (int)mf, mBx, mBy, mvSx, mvSy, g_mvK); }
+            mvSx *= g_mvK; mvSy *= g_mvK;   // mv_scale: calibration knob for a host whose vectors are off (-1 = flipped, 2 = half-length); 1 = as the host says
             memcpy(&cb[15], &mvSx, 4); memcpy(&cb[16], &mvSy, 4); memcpy(&cb[22], &g_mvLo, 4); memcpy(&cb[23], &g_mvHi, 4); memcpy(&cb[28], &g_hLo, 4); memcpy(&cb[29], &g_hHi, 4);
             const bool teOn = s->tea && s->teb && (sp || w != F->W || h != F->H); memcpy(&cb[41], &g_eT, 4); memcpy(&cb[42], &g_eL, 4);   // edit stabilisation: split or resampled full-NR path
             cb[43] = teOn ? 1u | (UINT)g_eFl | (s->teFrm + 1 == s->frm && reset != 1 ? 8u : 0u) : 0u;
@@ -1022,11 +1026,12 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             cmd->SetComputeRootUnorderedAccessView(4, s->st->GetGPUVirtualAddress());   // unused by exp; bound so the root signature is complete
             cmd->SetPipelineState(s->exp); cmd->Dispatch((w + 7) / 8, (h + 7) / 8, 1); cmd->ResourceBarrier(1, &uav);
             if (g_dumpFrame && !F->pass) { std::lock_guard<std::mutex> dg(g_dumpMu);   // dump_frame: queue the copies on frame N, write them 10 frames later (that list has run by then)
-                if (s->frm == g_dumpFrame) { const auto st = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-                    dumpQueue(F->dev, cmd, color, st, w, h, "colour", g_dumpItems); dumpQueue(F->dev, cmd, depth, st, dW, dH, "depth", g_dumpItems);
-                    dumpQueue(F->dev, cmd, motion, st, mW, mH, "motion", g_dumpItems); dumpQueue(F->dev, cmd, out, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, w, h, "output", g_dumpItems);
+                if (s->frm - g_dumpFrame < g_dumpFrames) { const auto st = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                    const std::string sf = g_dumpFrames > 1 ? "_f" + std::to_string(s->frm - g_dumpFrame) : "";   // dump_frames > 1: colour_f0, colour_f1, ...
+                    dumpQueue(F->dev, cmd, color, st, w, h, ("colour" + sf).c_str(), g_dumpItems); dumpQueue(F->dev, cmd, depth, st, dW, dH, ("depth" + sf).c_str(), g_dumpItems);
+                    dumpQueue(F->dev, cmd, motion, st, mW, mH, ("motion" + sf).c_str(), g_dumpItems); dumpQueue(F->dev, cmd, out, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, w, h, ("output" + sf).c_str(), g_dumpItems);
                     logf("dump_frame: frame %u queued (%zu resources; intensity %.2f style %d tone %.2f structure %.2f skin %.2f mask %d)", s->frm, g_dumpItems.size(), curIntensity(F), F->hostStyle.load(), F->hostTone.load(), F->hostStruct.load(), F->hostSkin.load(), F->hostMask.load()); }
-                else if (s->frm == g_dumpFrame + 10 && !g_dumpItems.empty()) { const std::string lp = (g_logName.size() > 1 && g_logName[1] == ':') ? g_logName : narrow(g_dir) + g_logName;
+                else if (s->frm == g_dumpFrame + g_dumpFrames + 9 && !g_dumpItems.empty()) { const std::string lp = (g_logName.size() > 1 && g_logName[1] == ':') ? g_logName : narrow(g_dir) + g_logName;
                     logf("dump_frame: written%s", dumpWrite(lp.substr(0, lp.find_last_of("\\/") + 1), g_dumpItems).c_str()); } }
             return 1;
         }
