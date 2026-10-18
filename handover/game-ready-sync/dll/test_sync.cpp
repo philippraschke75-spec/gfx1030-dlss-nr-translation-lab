@@ -481,6 +481,7 @@ int main(int argc, char** argv) {
                 for (int c = 0; c < 3; c++) { double v = h2f(o[c]); fout[((size_t)y * W + x) * 3 + c] = v == v ? (float)v : 0.f; } }
             { double e = 0, ea = 0; for (size_t i = 0; i < fin.size(); i += 3) for (int c = 0; c < 3; c++) { const double d = std::min(std::max(fout[i + c], 0.f), 1.f) - std::min(std::max(fin[i + c], 0.f), 1.f); e += (c == 0 ? .2126 : c == 1 ? .7152 : .0722) * d; ea += fabs(d); }
               if (k >= 4) { eabs += ea / fin.size(); neabs++; }   // effect strength: mean |out - in| (display, RGB)
+              if (getenv("NR_TEST_PERFRAME")) printf("EDITF %d %.5f\n", k, ea / fin.size());   // per-frame effect strength (temporal audit: does history weaken/strengthen it over time)
               uint64_t fh = 1469598103934665603ull; for (float v : fout) { uint32_t b; memcpy(&b, &v, 4); hsh = (hsh ^ b) * 1099511628211ull; fh = (fh ^ b) * 1099511628211ull; }   // output hash over all frames (bit-exactness between builds)
               if (k >= frames - 4) printf("FHASH %d %016llx\n", k, (unsigned long long)fh);   // per frame (static sequences: split vs non-split once settled)
               if (k > 0) pulse[k & 1] += e / (fin.size() / 3), npulse[k & 1]++; }   // odd/even pulsing: mean luma edit (out - in, display) per frame parity
