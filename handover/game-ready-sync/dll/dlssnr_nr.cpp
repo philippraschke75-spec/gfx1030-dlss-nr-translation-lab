@@ -39,7 +39,7 @@ static CRITICAL_SECTION g_cs; static FILE* g_log; static char g_err[512] = "";
 static std::wstring g_dir;                         // folder of this DLL
 static std::string g_dataDir, g_modelRes = "auto", g_model = "auto", g_logName = "dlssnr_nr.log"; static int g_reuseBn = 0, g_vitEvery = 1, g_settleMs = 20, g_jobTimeoutMs = 3000;
 static std::atomic<int> g_evalCalls{0};
-static float g_intensity = -1.0f;                       // ini override of the host's intensity (output blend towards the NR result, 0..2); <0 = the host's value
+static int g_iRatio = 0;   /* intensity_rule=ratio: old luminance-ratio boost above 1 (default linear) */ static float g_intensity = -1.0f;                       // ini override of the host's intensity (output blend towards the NR result, 0..2); <0 = the host's value
 static float g_iniCond[5] = {NAN, NAN, NAN, NAN, NAN};   // ini overrides: style, local_tone, local_structure, skin_structure, auto_mask; NaN = the host's value
 static std::atomic<bool> g_exiting{false};              // set by atexit: at process exit never join/destroy anything (leak it, the OS reclaims)
 static struct ExitHook { ExitHook() { atexit([] { g_exiting = true; }); } } g_exitHook;
@@ -50,7 +50,7 @@ static int g_compose = 0; static float g_detail = 1.f;   // compose= add (0: the
 static float g_pass2Gain = 0.5f; static std::atomic<int> g_live{0}; static UINT g_hdrP0 = 0; static ID3D12Resource* g_hl = nullptr; static float g_hdrKey = 0.18f, g_hdrAdapt = 0.05f, g_hdrBias = 1.f, g_hdrExp = 0.f;   // OptiScaler "2 passes": a later pass (a second feature on pass 1's output) adds its edit at gain * pass2_gain
 static unsigned g_dumpFrame = 0; static std::vector<DumpItem> g_dumpItems; static std::mutex g_dumpMu;   // dump_frame=N: frame_dump.h
 static float g_eT = 0.f, g_eL = 0.f; static int g_eFl = 0;   // edit_temporal (blend of the shown edit with the previous one, warped), edit_limit (cap vs local contrast), edit_warp bicubic (flag bit 2)
-static int g_hGate = 0, g_hCR = 1, g_hSeed = 1;   // history_gate (colour gate, 0 = NVIDIA), history_filter catmull (NVIDIA) | bilinear, history_seed frame (NVIDIA) | 0
+static int g_hGate = 0, g_hCR = 1, g_hSeed = 1, g_hZp = 0;   /* history_pad reflect (NVIDIA) | zero (v0.4.3) */   // history_gate (colour gate, 0 = NVIDIA), history_filter catmull (NVIDIA) | bilinear, history_seed frame (NVIDIA) | 0
 static int g_split = 0, g_splitK[2] = {0, 0}; static int g_hist = 0; static float g_hLo = 0.08f, g_hHi = 0.25f;   // history=1: temporal history (previous NR output warped by the game's MVs) into the pre-block's +0x40, see handover/temporal-2026-10-11/DLL.md   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
 
 static void logf(const char* fmt, ...) {
@@ -84,7 +84,7 @@ static void loadSettings() {
     GetPrivateProfileStringA("nr", "hdr_exposure", "0", b, sizeof b, narrow(ini).c_str()); g_hdrExp = (float)atof(b); if (!(g_hdrExp > 0.f && g_hdrExp < 1000.f)) g_hdrExp = 0.f;   // fixed E (0 = auto)
     GetPrivateProfileStringA("nr", "gate_lo", "0.03", b, sizeof b, narrow(ini).c_str()); g_gateLo = (float)atof(b);
     GetPrivateProfileStringA("nr", "gate_hi", "0.15", b, sizeof b, narrow(ini).c_str()); g_gateHi = (float)atof(b);
-    GetPrivateProfileStringA("nr", "intensity", "-1", b, sizeof b, narrow(ini).c_str()); g_intensity = (float)atof(b); if (!(g_intensity >= 0.f)) g_intensity = -1.f; if (g_intensity > 2.f) g_intensity = 2.f;
+    GetPrivateProfileStringA("nr", "intensity", "-1", b, sizeof b, narrow(ini).c_str()); g_intensity = (float)atof(b); if (!(g_intensity >= 0.f)) g_intensity = -1.f; if (g_intensity > 2.f) g_intensity = 2.f; GetPrivateProfileStringA("nr", "intensity_rule", "linear", b, sizeof b, narrow(ini).c_str()); g_iRatio = _stricmp(b, "ratio") == 0;
     { const char* k[5] = {"style", "local_tone", "local_structure", "skin_structure", "auto_mask"};   // empty = follow the host (OptiScaler menu)
       for (int i = 0; i < 5; i++) { GetPrivateProfileStringA("nr", k[i], "", b, sizeof b, narrow(ini).c_str()); g_iniCond[i] = b[0] ? (float)atof(b) : NAN; } }
     g_sync = (int)GetPrivateProfileIntA("nr", "sync", 1, narrow(ini).c_str());
@@ -101,6 +101,7 @@ static void loadSettings() {
     g_hGate = (int)GetPrivateProfileIntA("nr", "history_gate", 0, narrow(ini).c_str());
     { char m[16]; GetPrivateProfileStringA("nr", "history_filter", "catmull", m, sizeof m, narrow(ini).c_str()); g_hCR = _stricmp(m, "bilinear") != 0; }
     { char m[16]; GetPrivateProfileStringA("nr", "history_seed", "frame", m, sizeof m, narrow(ini).c_str()); g_hSeed = _stricmp(m, "0") != 0; }
+    { char m[16]; GetPrivateProfileStringA("nr", "history_pad", "reflect", m, sizeof m, narrow(ini).c_str()); g_hZp = _stricmp(m, "zero") == 0; }
     GetPrivateProfileStringA("nr", "history_gate_lo", "0.08", b, sizeof b, narrow(ini).c_str()); g_hLo = (float)atof(b);
     GetPrivateProfileStringA("nr", "history_gate_hi", "0.25", b, sizeof b, narrow(ini).c_str()); g_hHi = (float)atof(b);
     { char m[16]; GetPrivateProfileStringA("nr", "compose", "add", m, sizeof m, narrow(ini).c_str()); g_compose = !_stricmp(m, "nv") ? 1 : !_stricmp(m, "ratio") ? 2 : 0; }
@@ -218,7 +219,7 @@ static const char* kSyncHlsl =
 "  return q.r | (q.g << 9) | (q.b << 18) | ((uint)e << 27); }\n"
 "float3 boost(float4 c, float3 v);\n"
 "void put(uint2 p, float4 v) {\n"
-"  if (amp > 1.0 && any(v.rgb != col[p].rgb)) v.rgb = boost(col[p], v.rgb);\n"
+"  if (abs(amp) > 1.0 && any(v.rgb != col[p].rgb)) v.rgb = boost(col[p], v.rgb);\n"
 "#ifdef PACKED\n"
 "  ob.Store(p.y * ((((FWH & 0xFFFF) * 4) + 255) & ~255) + p.x * 4, e5(v.rgb));\n"
 "#else\n"
@@ -276,8 +277,10 @@ static const char* kSyncHlsl =
 // channels apart: chroma shift x2 at intensity 2). Over-range: the peak channel is brought back by one scalar (hue kept), not clamped per channel.
 "float3 boost(float4 c, float3 v) {\n"
 "  float3 a = L(c), b = hd() ? T(max(v, 0.0)) : max(v, 0.0); const float3 w = float3(0.2126, 0.7152, 0.0722);\n"
-"  float r = max((dot(b, w) + 1.0 / 512.0) / (dot(a, w) + 1.0 / 512.0), 1e-6); float3 o = b * (clamp(pow(r, amp), 0.5, 2.0) / r);\n"
-"  float m = max(o.r, max(o.g, o.b)), lim = max(1.0, max(b.r, max(b.g, b.b))); if (m > lim) o *= lim / m;\n"
+"  float3 o; float lim = max(1.0, max(b.r, max(b.g, b.b)));\n"
+"  if (amp > 0.0) o = clamp(a + amp * (b - a), 0.0, lim);\n"   // linear (default, OpenDLSS-NR): proxy + I (styled - proxy), clamped to the valid range
+"  else { float r = max((dot(b, w) + 1.0 / 512.0) / (dot(a, w) + 1.0 / 512.0), 1e-6); o = b * (clamp(pow(r, -amp), 0.5, 2.0) / r);\n"   // intensity_rule=ratio (amp < 0): old luminance-ratio boost
+"  float m = max(o.r, max(o.g, o.b)); if (m > lim) o *= lim / m; }\n"
 "  return hd() ? min(Ti(o), (1.0 + hk) * max(sn(c).rgb, 0.0) + 0.1 * hk / Ex()) : o; }\n"
 "float4 ld(float4 v) { v = sn(v); if (hd()) return float4(T(v.rgb), v.a);\n"
 "#ifdef HDR_IN\n"
@@ -428,6 +431,7 @@ static const char* kSyncHlsl =
 "  return (hB(float2(lo.x, ce.y)) * a + hB(float2(ce.x, lo.y)) * bb + hB(ce) * cc + hB(float2(ce.x, hi.y)) * d + hB(float2(hi.x, ce.y)) * e) / (a + bb + cc + d + e); }\n"
 "void hwpB(uint3 id, uint age) {\n"
 "  uint PW = hPWH & 0xFFFF, PH = hPWH >> 16; if (id.x >= PW || id.y >= PH) return; uint o = histOff + (id.y * PW + id.x) * 12;\n"
+"  if ((tFl & 32) && (id.x >= W || id.y >= H)) { io.Store3(o, uint3(0, 0, 0)); return; }\n"   // history_pad=zero (v0.4.3)
 "  int2 rx = int2(id.xy < uint2(W, H) ? (int2)id.xy : 2 * int2(W, H) - (int2)id.xy - 2); id.xy = (uint2)clamp(rx, 0, int2(W, H) - 1);\n"   // padding = reflected copy (the network's own padding; OpenDLSS-NR preprocess), was 0
 "  uint2 r = io.Load2((id.y * W + id.x) * 8); float3 cur = Pf(float3(f16tof32(r.x & 0xFFFF), f16tof32(r.x >> 16), f16tof32(r.y & 0xFFFF))), res = cur;\n"
 "  if (histOk != 0 && st.Load(12) == frame - age) {\n"
@@ -921,12 +925,12 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             cb[33] = g_hdr == 1 ? 1u : g_hdr == 2 && (cd.Format == DXGI_FORMAT_R16G16B16A16_FLOAT || cd.Format == DXGI_FORMAT_R9G9B9E5_SHAREDEXP) ? 2u | ((UINT)(g_hdrFrac * F->W * F->H) << 2) : 0u;   // hdrM | auto threshold << 2
             if (!F->pass) g_hdrP0 = cb[33] & 3; else if (g_hdr == 2) cb[33] = g_hdrP0 == 2 ? 3u : g_hdrP0;   // extra pass: its input is pass 0's output after the host's ClampProxy (saturated to [0,1]), it cannot detect HDR itself -> pass 0's decision (3 = follow hl)
             { const float hk = F->pass ? g_pass2Gain : 1.f, hx = F->pass ? 1.f : g_hdrExp * g_hdrBias, hkb = g_hdrKey * g_hdrBias; memcpy(&cb[34], &hk, 4); memcpy(&cb[35], &hx, 4); memcpy(&cb[36], &hkb, 4); memcpy(&cb[37], &g_hdrAdapt, 4); cb[39] = (UINT)g_compose; memcpy(&cb[40], &g_detail, 4); }   // extra pass: E = 1 (its input is ClampProxy's unit cube, not scene-linear; pass 0's E would squeeze it to T(E) ~ 0.25, near black)
-            const float I = curIntensity(F), amp = I > 1.f ? I : 0.f; memcpy(&cb[38], &amp, 4);   // intensity > 1: the blend stays at 1, put() applies the reference's ratio compose (boost)
+            const float I = curIntensity(F), amp = I > 1.f ? (g_iRatio ? -I : I) : 0.f; memcpy(&cb[38], &amp, 4);   // intensity > 1: the blend stays at 1, put() applies the reference's ratio compose (boost)
             float gain = (F->pass ? g_gain * g_pass2Gain : g_gain) * (std::min)(I, 1.f); memcpy(&cb[6], &gain, 4); memcpy(&cb[9], &g_gateLo, 4); memcpy(&cb[10], &g_gateHi, 4);   // gLo, gHi   // gain x intensity: NVIDIA's blend towards the NR result (up to 1; compose nv/ratio get it as their g)
             memcpy(&cb[15], &mvSx, 4); memcpy(&cb[16], &mvSy, 4); memcpy(&cb[22], &g_mvLo, 4); memcpy(&cb[23], &g_mvHi, 4); memcpy(&cb[28], &g_hLo, 4); memcpy(&cb[29], &g_hHi, 4);
             const bool teOn = s->tea && s->teb && (sp || w != F->W || h != F->H); memcpy(&cb[41], &g_eT, 4); memcpy(&cb[42], &g_eL, 4);   // edit stabilisation: split or resampled full-NR path
             cb[43] = teOn ? 1u | (UINT)g_eFl | (s->teFrm + 1 == s->frm && reset != 1 ? 8u : 0u) : 0u;
-            if (g_hCR) cb[43] |= 16u;   // history_filter=catmull (hwp)
+            if (g_hCR) cb[43] |= 16u; if (g_hZp) cb[43] |= 32u;   // history_filter=catmull (hwp)
             if (!g_hGate) { const float big[2] = {1e30f, 2e30f}; memcpy(&cb[28], big, 8); }   // history_gate=0 (NVIDIA): no colour gate
             { const float sy = F->appliedCond[0], sT = F->appliedCond[1]; cb[44] = sy == 1.f || sy == 2.f ? (UINT)sy : 0u; memcpy(&cb[45], &sT, 4); }   // style grade (sty) with the conditioning the runtime got
             ID3D12DescriptorHeap* hp[] = { s->heap }; cmd->SetDescriptorHeaps(1, hp); cmd->SetComputeRootSignature(s->rs);
