@@ -171,14 +171,20 @@ int main(int argc, char** argv) {
     const UINT gpitch = (W * 4 + 255) & ~255u; std::vector<uint8_t> mvScratch((size_t)gpitch * H), dScratch((size_t)gpitch * H); uint8_t *mvp = mvScratch.data(), *dpp = dScratch.data();   // this frame's motion (RG16F) / depth (R32F) upload rows
     const UINT ow = MW / 3, oh = MH / 3, oy = MH / 3; auto objX = [&](int k) { return (UINT)(((long long)k * DX % (MW - ow) + (MW - ow)) % (MW - ow)); };
     auto inObj = [&](int k, UINT x, UINT y) { UINT ox = objX(k); return OBJ && k >= 0 && x >= ox && x < ox + ow && y >= oy && y < oy + oh; };
-    const double NOISE = getenv("NR_TEST_NOISE") ? atof(getenv("NR_TEST_NOISE")) : 0.0;
+    const double ZOOM = getenv("NR_TEST_ZOOM") ? atof(getenv("NR_TEST_ZOOM")) : 0.0; const float MVK = getenv("NR_TEST_MVK") ? (float)atof(getenv("NR_TEST_MVK")) : 1.f;
+    const double NOISE =getenv("NR_TEST_NOISE") ? atof(getenv("NR_TEST_NOISE")) : 0.0;
     auto makeFrame = [&](int k) {   // shifted base image -> texture format bytes in upload, and the exact half4 the network sees in `in`
         const int sx = (int)(((long long)k * DX % MW + MW) % MW), sy = (int)(((long long)k * DY % MH + MH) % MH);
         for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) {
             const UINT bx = x * MW / W, by = y * MH / H; const bool ob = inObj(k, bx, by);   // frame -> model-size source (any frame size)
+            const double zk = ZOOM > 0 ? pow(ZOOM, -(double)k) : 1.0;   // NR_TEST_ZOOM=s: walking forward, the image grows by s per frame about the centre (per-pixel vectors, as FO4)
             const uint16_t* s = OBJ ? (ob ? &base[((size_t)(by - oy + MH / 2) * MW + (bx - objX(k) + MW / 2)) * 4] : &base[((size_t)by * MW + bx) * 4])
+                              : ZOOM > 0 ? &base[((size_t)std::min<double>(MH - 1, MH / 2 + (by + 0.5 - MH / 2.0) * zk) * MW + (size_t)std::min<double>(MW - 1, MW / 2 + (bx + 0.5 - MW / 2.0) * zk)) * 4]
                                     : &base[((size_t)((by + sy) % MH) * MW + (bx + sx) % MW) * 4];
-            { float mv[2] = { OBJ ? (ob ? (float)DX : 0.f) : (float)DX, OBJ ? 0.f : (float)DY }; uint16_t hv[2] = { f2h(mv[0] / MW), f2h(mv[1] / MH) }; memcpy(mvp + (size_t)y * gpitch + x * 4, hv, 4);
+            { float mv[2] = { OBJ ? (ob ? (float)-DX : 0.f) : (float)DX, OBJ ? 0.f : (float)DY };   // object moves +DX: previous = current - DX
+              if (ZOOM > 0) { mv[0] = (float)((x + 0.5 - W / 2.0) * (1.0 / ZOOM - 1.0)) * MW / W; mv[1] = (float)((y + 0.5 - H / 2.0) * (1.0 / ZOOM - 1.0)) * MH / H; }   // previous = centre + (cur - centre) / s
+              mv[0] *= MVK; mv[1] *= MVK;   // NR_TEST_MVK: scale the vectors (-1 = wrong sign, 0 = none) to show the ghost metric catches a bad warp
+              uint16_t hv[2] = { f2h(mv[0] / MW), f2h(mv[1] / MH) }; memcpy(mvp + (size_t)y * gpitch + x * 4, hv, 4);
               float dv = OBJ && ob ? 0.5f : 0.1f; memcpy(dpp + (size_t)y * gpitch + x * 4, &dv, 4); } uint16_t* d = &in[((size_t)by * MW + bx) * 4];
             if (r11) { uint32_t v; pack_r11g11b10(s, &v); memcpy(upp + (size_t)y * pitch + x * 4, &v, 4); unpack_r11g11b10(v, d); }
             else if (e5) { uint32_t v = pk5(s); memcpy(upp + (size_t)y * pitch + x * 4, &v, 4); up5(v, d); }
@@ -264,7 +270,7 @@ int main(int argc, char** argv) {
         makeFrame(0); for (int i = 1; i < NQ; i++) { memcpy(mup[i], mup[0], (size_t)gpitch * H); memcpy(dup[i], dup[0], (size_t)gpitch * H); }
         bool gfirst = true; std::vector<double> done; std::vector<UINT64> fvs; unsigned n0, b0, r0; stats(f, &n0, &b0, &r0);
         // NR_TEST_GHOST=1: the image moves (makeFrame(k) shift) every frame; reused frames are compared with the reference NR of the SAME frame
-        const bool ghost = getenv("NR_TEST_GHOST") && UP == 1 && !r11; ID3D12Resource *gu[8] = {}, *gr[8] = {}; uint8_t *gup[8] = {}, *grp[8] = {};
+        const bool ghost = getenv("NR_TEST_GHOST") && !r11;   /* UP > 1: each frame pixel vs the model pixel it was made from (the game's resampled path) */ ID3D12Resource *gu[8] = {}, *gr[8] = {}; uint8_t *gup[8] = {}, *grp[8] = {};
         std::vector<int> greu(n, 0); std::vector<std::vector<uint16_t>> gout(n); ID3D12Resource* up0 = up; uint8_t* upp0 = upp;
         if (ghost) for (int i = 0; i < NQ; i++) { gu[i] = buf(D3D12_HEAP_TYPE_UPLOAD, sz, D3D12_RESOURCE_STATE_GENERIC_READ); gr[i] = buf(D3D12_HEAP_TYPE_READBACK, (UINT64)opitch * H, D3D12_RESOURCE_STATE_COPY_DEST); gu[i]->Map(0, nullptr, (void**)&gup[i]); gr[i]->Map(0, nullptr, (void**)&grp[i]); }
         auto grab = [&](int j) { if (!ghost || j < 0 || !greu[j]) return; auto& o = gout[j]; o.resize((size_t)W * H * 4); for (UINT y = 0; y < H; y++) memcpy(&o[(size_t)y * W * 4], grp[j % NQ] + (size_t)y * opitch, (size_t)W * 8); };
@@ -300,12 +306,12 @@ int main(int argc, char** argv) {
         if (ghost) {   // ghosting: mean |out - refNR(same frame)| over reused frames; "live" = the plain live frame for scale
             double e = 0, el = 0, er = 0, erl = 0; size_t cnt = 0, cr = 0; int nf = 0; up = up0; upp = upp0; mvp = mvScratch.data(); dpp = dScratch.data();
             for (int j = 0; j < n; j++) { if (gout[j].empty()) continue; makeFrame(j); float gms; if (rrun(ref, in.data(), refo.data(), &gms)) { puts("FAIL reference nr_run"); return 6; } nf++;
-                for (size_t i = 0; i < (size_t)W * H * 4; i++) { if ((i & 3) == 3) continue; uint16_t b = refo[i]; double bv = (b & 0x7C00) == 0x7C00 ? 0 : std::max(0.0, (double)h2f(b));
-                    double eo = fabs(h2f(gout[j][i]) - bv), ei = fabs(h2f(in[i]) - bv); e += eo; el += ei; cnt++;
-                    const UINT px = (UINT)(i / 4 % W), py = (UINT)(i / 4 / W); if (inObj(j, px, py) || inObj(j - 1, px, py)) { er += eo; erl += ei; cr++; } } }
+                for (size_t i = 0; i < (size_t)W * H * 4; i++) { if ((i & 3) == 3) continue; const UINT px = (UINT)(i / 4 % W), py = (UINT)(i / 4 / W); const size_t mi = ((size_t)(py / UP) * MW + px / UP) * 4 + (i & 3);
+                    uint16_t b = refo[mi]; double bv = (b & 0x7C00) == 0x7C00 ? 0 : std::max(0.0, (double)h2f(b));
+                    double eo = fabs(h2f(gout[j][i]) - bv), ei = fabs(h2f(in[mi]) - bv); e += eo; el += ei; cnt++; if (inObj(j, px / UP, py / UP) || inObj(j - 1, px / UP, py / UP)) { er += eo; erl += ei; cr++; } } }
             printf("ghost: %d reused frames, mean |out - NR(same frame)| %.5f (live frame without NR: %.5f)\n", nf, cnt ? e / cnt : 0, cnt ? el / cnt : 0);
             if (OBJ) printf("ghost object region (object now or one frame ago): %.5f (live %.5f)\n", cr ? er / cr : 0, cr ? erl / cr : 0);
-            if (getenv("NR_TEST_DUMP")) for (int j = n - 1; j >= 0; j--) if (!gout[j].empty()) {   // last reused frame: input, output, NR of the same frame (f32 RGB, W x H)
+            if (getenv("NR_TEST_DUMP") && UP == 1) for (int j = n - 1; j >= 0; j--) if (!gout[j].empty()) {   // last reused frame: input, output, NR of the same frame (f32 RGB, W x H)
                 makeFrame(j); float gms; rrun(ref, in.data(), refo.data(), &gms); const uint16_t* src[3] = { in.data(), gout[j].data(), refo.data() }; const char* nm[3] = { "_in.bin", "_out.bin", "_ref.bin" };
                 for (int q = 0; q < 3; q++) { FILE* df = fopen((std::string(getenv("NR_TEST_DUMP")) + nm[q]).c_str(), "wb"); if (!df) continue;
                     for (size_t i = 0; i < (size_t)W * H; i++) for (int c = 0; c < 3; c++) { float v = h2f(src[q][i * 4 + c]); v = v == v ? v : 0.f; fwrite(&v, 4, 1, df); } fclose(df); }
