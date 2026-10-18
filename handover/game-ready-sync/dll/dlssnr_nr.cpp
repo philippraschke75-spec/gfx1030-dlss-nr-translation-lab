@@ -48,6 +48,7 @@ static int g_busy = 0, g_busyWaitMs = 100;   // busy_mode: 0 wait (CPU waits, bo
 static int g_compose = 0; static float g_detail = 1.f;   // compose= add (0: the edit added as is) | nv (1: NVIDIA's intensity) | ratio (2: OkLab matched residual); detail= live-frame detail above the model raster (1 = as is). handover/community-look/README.md
 static float g_pass2Gain = 0.5f; static std::atomic<int> g_live{0}; static UINT g_hdrP0 = 0; static ID3D12Resource* g_hl = nullptr; static float g_hdrKey = 0.18f, g_hdrAdapt = 0.05f, g_hdrBias = 1.f, g_hdrExp = 0.f;   // OptiScaler "2 passes": a later pass (a second feature on pass 1's output) adds its edit at gain * pass2_gain
 static float g_eT = 0.f, g_eL = 0.f; static int g_eFl = 0;   // edit_temporal (blend of the shown edit with the previous one, warped), edit_limit (cap vs local contrast), edit_warp bicubic (flag bit 2)
+static int g_hGate = 0, g_hCR = 1, g_hSeed = 1;   // history_gate (colour gate, 0 = NVIDIA), history_filter catmull (NVIDIA) | bilinear, history_seed frame (NVIDIA) | 0
 static int g_split = 0, g_splitK[2] = {0, 0}; static int g_hist = 0; static float g_hLo = 0.08f, g_hHi = 0.25f;   // history=1: temporal history (previous NR output warped by the game's MVs) into the pre-block's +0x40, see handover/temporal-2026-10-11/DLL.md   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
 
 static void logf(const char* fmt, ...) {
@@ -95,6 +96,9 @@ static void loadSettings() {
     GetPrivateProfileStringA("nr", "mv_gate_lo", "0.05", b, sizeof b, narrow(ini).c_str()); g_mvLo = (float)atof(b);
     GetPrivateProfileStringA("nr", "mv_gate_hi", "0.25", b, sizeof b, narrow(ini).c_str()); g_mvHi = (float)atof(b);
     g_hist = (int)GetPrivateProfileIntA("nr", "history", 0, narrow(ini).c_str()); g_hist = g_hist < 0 ? 0 : g_hist > 2 ? 2 : g_hist;   // 1 = history into pre- and post-block, 2 = post-block lerp only (runtime hist_valid)
+    g_hGate = (int)GetPrivateProfileIntA("nr", "history_gate", 0, narrow(ini).c_str());
+    { char m[16]; GetPrivateProfileStringA("nr", "history_filter", "catmull", m, sizeof m, narrow(ini).c_str()); g_hCR = _stricmp(m, "bilinear") != 0; }
+    { char m[16]; GetPrivateProfileStringA("nr", "history_seed", "frame", m, sizeof m, narrow(ini).c_str()); g_hSeed = _stricmp(m, "0") != 0; }
     GetPrivateProfileStringA("nr", "history_gate_lo", "0.08", b, sizeof b, narrow(ini).c_str()); g_hLo = (float)atof(b);
     GetPrivateProfileStringA("nr", "history_gate_hi", "0.25", b, sizeof b, narrow(ini).c_str()); g_hHi = (float)atof(b);
     { char m[16]; GetPrivateProfileStringA("nr", "compose", "add", m, sizeof m, narrow(ini).c_str()); g_compose = !_stricmp(m, "nv") ? 1 : !_stricmp(m, "ratio") ? 2 : 0; }
@@ -397,9 +401,18 @@ static const char* kSyncHlsl =
 "  st.Store2(256 + k * W * H * 8 + (id.y * W + id.x) * 8, asuint(m)); }\n"
 "[numthreads(8,8,1)] void acc(uint3 id : SV_DispatchThreadID) { accB(id, 3 + (frame & 1)); }\n"
 "[numthreads(8,8,1)] void anc(uint3 id : SV_DispatchThreadID) { accB(id, 5); }\n"
+"float3 hB(float2 p) {\n"   // bilinear in the runtime's P_{t-1} (io+histOut, PW stride), p in texel units (0 = first texel centre), clamped
+"  uint PW = hPWH & 0xFFFF; p = clamp(p, 0.0, float2(W - 1, H - 1)); uint2 a0 = (uint2)p, b0 = min(a0 + 1, uint2(W - 1, H - 1)); float2 t = p - a0;\n"
+"  float3 v00 = asfloat(io.Load3(histOut + (a0.y * PW + a0.x) * 12)), v10 = asfloat(io.Load3(histOut + (a0.y * PW + b0.x) * 12)), v01 = asfloat(io.Load3(histOut + (b0.y * PW + a0.x) * 12)), v11 = asfloat(io.Load3(histOut + (b0.y * PW + b0.x) * 12));\n"
+"  return lerp(lerp(v00, v10, t.x), lerp(v01, v11, t.x), t.y); }\n"
+"float3 hCR(float2 q) {\n"   // OpenDLSS-NR historySample: 5-tap Catmull-Rom (4 axis taps + centre, bilinear-weight trick) at pixel position q (centres at +0.5)
+"  float2 b = floor(q - 0.5) + 0.5, f = saturate(q - b), s = f * f, c = f * s;\n"
+"  float2 w0 = -0.5 * (f + c) + s, w1 = c * 1.5 - s * 2.5 + 1.0, w3 = (c - s) * 0.5, w2 = 1.0 - w0 - w1 - w3, m = w1 + w2, ce = b + w2 / m - 0.5, lo = b - 1.5, hi = b + 1.5;\n"
+"  float a = w0.x * m.y, bb = w0.y * m.x, cc = m.x * m.y, d = w3.y * m.x, e = w3.x * m.y;\n"
+"  return (hB(float2(lo.x, ce.y)) * a + hB(float2(ce.x, lo.y)) * bb + hB(ce) * cc + hB(float2(ce.x, hi.y)) * d + hB(float2(hi.x, ce.y)) * e) / (a + bb + cc + d + e); }\n"
 "void hwpB(uint3 id, uint age) {\n"
 "  uint PW = hPWH & 0xFFFF, PH = hPWH >> 16; if (id.x >= PW || id.y >= PH) return; uint o = histOff + (id.y * PW + id.x) * 12;\n"
-"  if (id.x >= W || id.y >= H) { io.Store3(o, uint3(0, 0, 0)); return; }\n"   // padding
+"  int2 rx = int2(id.xy < uint2(W, H) ? (int2)id.xy : 2 * int2(W, H) - (int2)id.xy - 2); id.xy = (uint2)clamp(rx, 0, int2(W, H) - 1);\n"   // padding = reflected copy (the network's own padding; OpenDLSS-NR preprocess), was 0
 "  uint2 r = io.Load2((id.y * W + id.x) * 8); float3 cur = Pf(float3(f16tof32(r.x & 0xFFFF), f16tof32(r.x >> 16), f16tof32(r.y & 0xFFFF))), res = cur;\n"
 "  if (histOk != 0 && st.Load(12) == frame - age) {\n"
 "    uint FW = FWH & 0xFFFF, FH = FWH >> 16; float2 uv = (id.xy + 0.5) / float2(W, H), m = 0;\n"
@@ -407,10 +420,8 @@ static const char* kSyncHlsl =
 "    if (age > 1) m += accAt(uv + m, frame - 1);\n"   // older NR output (nr_every > 1): + the offsets accumulated over the in-between frames
 "    float2 q = uv + m;\n"
 "    if (all(m == m) && all(abs(m) < 0.25) && all(q >= 0.0) && all(q <= 1.0)) {\n"   // off screen / NaN / absurd vector: current
-"      float2 p = clamp(q * float2(W, H) - 0.5, 0.0, float2(W - 1, H - 1)); uint2 a0 = (uint2)p, b0 = min(a0 + 1, uint2(W - 1, H - 1)); float2 t = p - a0;\n"   // bilinear in the runtime's P_{t-1} (io+histOut, PW stride)
-"      float3 v00 = asfloat(io.Load3(histOut + (a0.y * PW + a0.x) * 12)), v10 = asfloat(io.Load3(histOut + (a0.y * PW + b0.x) * 12)), v01 = asfloat(io.Load3(histOut + (b0.y * PW + a0.x) * 12)), v11 = asfloat(io.Load3(histOut + (b0.y * PW + b0.x) * 12));\n"
-"      float4 h = float4(lerp(lerp(v00, v10, t.x), lerp(v01, v11, t.x), t.y), stAt(q * float2(W, H), 256 + 2 * W * H * 8).a); float3 a = abs(h.rgb - cur);\n"
-"      float w = 1.0 - smoothstep(hLo, hHi, max(a.r, max(a.g, a.b)));\n"   // colour disocclusion / wrong vector
+"      float4 h = float4((tFl & 16) ? hCR(q * float2(W, H)) : hB(q * float2(W, H) - 0.5), stAt(q * float2(W, H), 256 + 2 * W * H * 8).a); float3 a = abs(h.rgb - cur);\n"   // tFl bit4: Catmull-Rom (history_filter=catmull, NVIDIA), else bilinear
+"      float w = 1.0 - smoothstep(hLo, hHi, max(a.r, max(a.g, a.b)));\n"   // colour gate (history_gate=1; off = hLo/hHi huge -> w = 1): compares against the input without the edit, so it also rejects where the edit is strong
 "      if (dFl & 1) { float dn = depAt(uv); w *= 1.0 - smoothstep(0.05, 0.2, abs(dn - h.a) / max(max(dn, h.a), 1e-6)); }\n"   // depth disocclusion (as mv reuse)
 "      res = lerp(cur, h.rgb, w); } }\n"
 "  io.Store3(o, asuint(res)); }\n"
@@ -520,7 +531,8 @@ static void workerBody(Feature* F) {
             else { applyCond(F);
                    if (g_hist) { unsigned pw = 0, ph = 0; int r = p_extHist && p_histLayout && p_extEnqueue2 ? p_histLayout(F->ctx, &pw, &ph) : -1; if (!r) r = p_extHist(F->ctx, F->sy->histOff, F->sy->histOut);
                        if (r || (UINT64)pw * ph * 12 > F->sy->histOut - F->sy->histOff || (unsigned)pw < F->W || (unsigned)ph < F->H) logf("history: unavailable (%s, code %d) - history off", p_extHist ? "this data dir / runtime cannot take it" : "nr_runtime.dll has no nr_ext_history", r);
-                       else { F->sy->padW = pw; F->sy->padH = ph; F->sy->histOn = true; F->sy->impScale = importScale(F->dir); logf("history: k_import scale %.3g (0 = mode 0, raw colour)", F->sy->impScale); logf("history: mode %d on (warped history io+%llu, runtime output io+%llu, %ux%u RGB32F, gate %.2f..%.2f)", g_hist, F->sy->histOff, F->sy->histOut, pw, ph, g_hLo, g_hHi); } }
+                       else { F->sy->padW = pw; F->sy->padH = ph; F->sy->histOn = true; F->sy->impScale = importScale(F->dir);
+                              { auto sm = (int (*)(nr_ctx*, int))GetProcAddress(GetModuleHandleA("nr_runtime.dll"), "nr_set_seed_mode"); if (sm && g_hSeed) sm(F->ctx, 1); logf("history: noise seed %s, filter %s, colour gate %s", sm && g_hSeed ? "frame counter" : "0", g_hCR ? "catmull" : "bilinear", g_hGate ? "on" : "off"); } logf("history: k_import scale %.3g (0 = mode 0, raw colour)", F->sy->impScale); logf("history: mode %d on (warped history io+%llu, runtime output io+%llu, %ux%u RGB32F, gate %.2f..%.2f)", g_hist, F->sy->histOff, F->sy->histOut, pw, ph, g_hLo, g_hHi); } }
                    if (g_split) { const int np = g_split > 2 && !p_extSplitN ? 2 : g_split; int kf[8] = {}, ks[8] = {}; float ms[16] = {};
                        if (np == 2) { kf[0] = g_splitK[0]; ks[0] = g_splitK[1] > 0 ? g_splitK[1] : g_splitK[0]; }   // nr_split_k fixes the 2-part point; N > 2: always measured
                        const int r = !p_extEnqueue3 ? -1 : p_extSplitN ? p_extSplitN(F->ctx, np, kf, ks, ms) : p_extSplit ? p_extSplit(F->ctx, kf, ks, ms) : -1;
@@ -898,6 +910,8 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             memcpy(&cb[15], &mvSx, 4); memcpy(&cb[16], &mvSy, 4); memcpy(&cb[22], &g_mvLo, 4); memcpy(&cb[23], &g_mvHi, 4); memcpy(&cb[28], &g_hLo, 4); memcpy(&cb[29], &g_hHi, 4);
             const bool teOn = s->tea && s->teb && (sp || w != F->W || h != F->H); memcpy(&cb[41], &g_eT, 4); memcpy(&cb[42], &g_eL, 4);   // edit stabilisation: split or resampled full-NR path
             cb[43] = teOn ? 1u | (UINT)g_eFl | (s->teFrm + 1 == s->frm && reset != 1 ? 8u : 0u) : 0u;
+            if (g_hCR) cb[43] |= 16u;   // history_filter=catmull (hwp)
+            if (!g_hGate) { const float big[2] = {1e30f, 2e30f}; memcpy(&cb[28], big, 8); }   // history_gate=0 (NVIDIA): no colour gate
             ID3D12DescriptorHeap* hp[] = { s->heap }; cmd->SetDescriptorHeaps(1, hp); cmd->SetComputeRootSignature(s->rs);
             cmd->SetComputeRootDescriptorTable(0, gpu); cmd->SetComputeRootUnorderedAccessView(1, s->io->GetGPUVirtualAddress()); cmd->SetComputeRootUnorderedAccessView(2, s->st->GetGPUVirtualAddress());
             if (!g_hl) g_hl = sharedBuffer(F->dev, 65536, D3D12_HEAP_FLAG_NONE, nullptr);   // ponytail: one process-global latch, never freed; one device assumed

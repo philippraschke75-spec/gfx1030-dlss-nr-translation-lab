@@ -68,6 +68,7 @@ NR_API int nr_run2(nr_ctx*, const void* in, void* out, float* gpu_ms, int hist_v
 //   hist_out_off: after every frame the runtime writes this frame's P here (before flag_out = seq), for the DLL's next warp.
 // Call after nr_ext_open. Returns 0 ok, 1 not open, 2 bad offsets.
 NR_API int nr_ext_history(nr_ctx*, unsigned long long hist_in_off, unsigned long long hist_out_off);
+NR_API int nr_set_seed_mode(nr_ctx*, int mode);   // 1 = noise seed counts frames on history frames (0 on no-history frames, as NVIDIA); 0 = seed 0 always (default)
 NR_API int nr_ext_enqueue2(nr_ctx*, unsigned seq, int max_inflight, int hist_valid);
 // Split jobs (ABI v3, additive): part 1 = dispatches [0, k) after input + history, part 2 = [k, n) + history out + output; flag_out = seq after each
 // part. Part 2 waits for its own flag_in too, so the D3D12 side places each half in a frame of its own. part 0 = whole frame (= enqueue2).

@@ -47,7 +47,8 @@ struct nr_ctx {
   // temporal history (nr_run2 / nr_ext_enqueue2): own PAD_H x PAD_W x RGB32F buffer, pointed to by pre-block +0x40 and post-block +0x40 when valid
   float* hist = nullptr; uint64_t netout = 0; int hist_mask = 0; unsigned ph = 0, pw = 0; bool have_prev = false; int dbg_n = 0; size_t io_size = 0, hin = 0, hout = 0;
   std::vector<hipEvent_t> prof; std::vector<std::string> names;   // NR_PROF only
-  int nsplit = 0, kb[2][9] = {};   // nr_ext_split(n): parts per job (0 = no split); kb[full|skipping][j] = first dispatch of part j+1 (kb[.][0] = 0, kb[.][nsplit] = n)
+  int seed_mode = 0; unsigned seed_n = 0, seed_cur = 0;   // nr_set_seed_mode(1): pre-block seed (+0x24) = frames since the last no-history frame (NVIDIA counts frames; 0 without history)
+  int nsplit = 0, kb[2][9] = {};  // nr_ext_split(n): parts per job (0 = no split); kb[full|skipping][j] = first dispatch of part j+1 (kb[.][0] = 0, kb[.][nsplit] = n)
   std::atomic<bool> broken{false}; long checked = 0;   // output self-check (ext path): broken -> nr_ext_enqueue* returns -2, the DLL stays native
   int devid = 0;   // HIP device of this context; HIP's current device is per thread, so every entry point selects it
 };
@@ -327,6 +328,12 @@ static bool hist_begin(nr_ctx* c, hipStream_t s, int valid, const uint8_t* src) 
       if (k.size() >= 0x48) { memcpy(k.data() + 0x40, &p, 8); if (st.ov) nr_apply_override(*st.ov, st.src, st.ka); } }
     c->hist_mask = mask;
   }
+  if (c->seed_mode) {   // NVIDIA: the frame counter is the noise seed, held at 0 while there is no history
+    c->seed_n = v ? c->seed_n + 1 : 0;
+    if (c->seed_n != c->seed_cur) {
+      for (auto& st : c->steps) if (st.pre) { auto& k = st.ov ? st.src : st.ka; if (k.size() >= 0x28) { memcpy(k.data() + 0x24, &c->seed_n, 4); if (st.ov) nr_apply_override(*st.ov, st.src, st.ka); } }
+      c->seed_cur = c->seed_n; }
+  }
   return true;
 }
 static bool hist_end(nr_ctx* c, hipStream_t s) {   // RGBA f32 (16 B/px) -> RGB f32 (12 B/px), same padded layout
@@ -503,6 +510,7 @@ NR_API int nr_ext_history(nr_ctx* c, unsigned long long hist_in_off, unsigned lo
   for (unsigned long long o : {hist_in_off, hist_out_off}) if (o && (o < c->src_size || o + n > c->io_size || o % 4)) return 2;
   c->hin = hist_in_off; c->hout = hist_out_off; return 0;
 }
+NR_API int nr_set_seed_mode(nr_ctx* c, int mode) { if (!c) return 1; c->seed_mode = mode ? 1 : 0; return 0; }   // set before the first frame
 NR_API int nr_ext_enqueue2(nr_ctx* c, unsigned seq, int max_inflight, int hist_valid) { return nr_ext_enqueue3(c, seq, max_inflight, hist_valid, 0); }
 NR_API int nr_ext_enqueue3(nr_ctx* c, unsigned seq, int max_inflight, int hist_valid, int part) {
   if (!c || !c->s || part < 0 || part > c->nsplit) return -1;
