@@ -49,7 +49,7 @@ struct nr_ctx {
   float* hist = nullptr; uint64_t netout = 0; int hist_mask = 0; unsigned ph = 0, pw = 0; bool have_prev = false; int dbg_n = 0; size_t io_size = 0, hin = 0, hout = 0;
   std::vector<hipEvent_t> prof; std::vector<std::string> names;   // NR_PROF only
   int nsplit = 0, kb[2][9] = {};   // nr_ext_split(n): parts per job (0 = no split); kb[full|skipping][j] = first dispatch of part j+1 (kb[.][0] = 0, kb[.][nsplit] = n)
-  std::atomic<bool> broken{false}; long checked = 0;   // output self-check (ext path): broken -> nr_ext_enqueue* returns -2, the DLL stays native
+  std::atomic<bool> broken{false}; long checked = 0; std::vector<uint16_t> chk_in;   // chk_in: the self-checked job's input, read at its part 1 (io input is the next frame's by the time the output lands)   // output self-check (ext path): broken -> nr_ext_enqueue* returns -2, the DLL stays native
   int devid = 0;   // HIP device of this context; HIP's current device is per thread, so every entry point selects it
 };
 #ifndef NR_BUILD_ID
@@ -446,8 +446,9 @@ static float h2f_(uint16_t h) { uint32_t s = (h & 0x8000u) << 16, e = (h >> 10) 
   float f; memcpy(&f, &u, 4); return f; }
 static void self_check(nr_ctx* c) {
   if (getenv("NR_SELFCHECK_TEST") && atoi(getenv("NR_SELFCHECK_TEST"))) hipMemsetAsync(c->io + c->out_off, 0xFF, c->dst_size, c->s);   // all NaN
-  const size_t n = c->dst_size < c->src_size ? c->dst_size : c->src_size; std::vector<uint16_t> in(n / 2), out(n / 2);
-  if (hipMemcpyAsync(in.data(), c->io, n, hipMemcpyDeviceToHost, c->s) != hipSuccess || hipMemcpyAsync(out.data(), c->io + c->out_off, n, hipMemcpyDeviceToHost, c->s) != hipSuccess ||
+  const size_t n = c->dst_size < c->src_size ? c->dst_size : c->src_size; std::vector<uint16_t> in = std::move(c->chk_in), out(n / 2);
+  if (in.size() != n / 2) { rlog("selfcheck: no input snapshot of this job - skipped"); return; }   // v0.4.3 read io's input here: by now the D3D12 side may have imported the next frame (|out-in| inflated by motion)
+  if (hipMemcpyAsync(out.data(), c->io + c->out_off, n, hipMemcpyDeviceToHost, c->s) != hipSuccess ||
       hipStreamSynchronize(c->s) != hipSuccess) { rlog("selfcheck: readback failed - skipped"); return; }
   size_t px = 0, bad = 0, bwo = 0, bwi = 0; double mean = 0, dif = 0;
   auto bw = [](const float* v) { return (v[0] <= 0 && v[1] <= 0 && v[2] <= 0) || (v[0] >= 1 && v[1] >= 1 && v[2] >= 1); };
@@ -485,6 +486,9 @@ static void ext_thread(nr_ctx* c) {
       hipStream_t s = c->s; const size_t n = c->steps.size(); const int* b = c->kb[skipping(c)]; const bool last = part == 0 || part == c->nsplit;   // part j = [kb[j-1], kb[j]); the arena keeps everything in between
       const size_t lo = part > 1 ? (size_t)b[part - 1] : 0, hi = last ? n : (size_t)b[part];
       bool ok = true;
+      if (part <= 1 && c->checked == 9) {   // the job self_check will look at: keep its input (io's input belongs to the D3D12 side again once this job's flag is out)
+        const size_t ci = c->dst_size < c->src_size ? c->dst_size : c->src_size; c->chk_in.resize(ci / 2);
+        if (hipMemcpyAsync(c->chk_in.data(), c->io, ci, hipMemcpyDeviceToHost, s) != hipSuccess || hipStreamSynchronize(s) != hipSuccess) c->chk_in.clear(); }
       if (part <= 1) { apply_strength(c);
         ok = hipMemcpyAsync(c->d + PAD + c->off_src, c->io, c->src_size, hipMemcpyDeviceToDevice, s) == hipSuccess &&
              hist_begin(c, s, hv, hv && c->hin ? c->io + c->hin : nullptr) &&

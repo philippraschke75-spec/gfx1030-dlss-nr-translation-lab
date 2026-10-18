@@ -1,0 +1,92 @@
+runtime: HIP device 0: AMD Radeon RX 6900 XT (gfx1030), 40 CUs, 16368 MB
+runtime: no D3D12 adapter LUID given - using HIP device 0 (dGPU with the most CUs)
+runtime: build Oct 18 2026 10:34:00 | GPU AMD Radeon RX 6900 XT (gfx1030), 40 CUs (HIP count, WGPs on RDNA), VRAM 16368 MB total / 16226 MB free | HIP runtime 60450101, driver 60450101
+int8_swin: on (swin MLP expand on int8 dot4 where the module has _i8 kernels)
+Traceback (most recent call last):
+  File "E:\dlss 5\.claude\worktrees\agent-a96d4a5622d1c6e46\tools\torch_ref.py", line 89, in <module>
+    elif a[:1] == ['torch']: torch_ref(a[1], int(a[2]), int(a[3]), a[4])
+  File "E:\dlss 5\.claude\worktrees\agent-a96d4a5622d1c6e46\tools\torch_ref.py", line 42, in torch_ref
+    import dlssnr.extract as ex; ex.RESOURCE_NAME = os.environ.get('WEIGHTS_RES', ex.RESOURCE_NAME)   # WEIGHTS_CC_SMALL_FP8: 310.9 small model
+ModuleNotFoundError: No module named 'dlssnr'
+tr 960x540 cond=0,1,1,-1,1 int=1 rc 1
+runtime: HIP device 0: AMD Radeon RX 6900 XT (gfx1030), 40 CUs, 16368 MB
+runtime: no D3D12 adapter LUID given - using HIP device 0 (dGPU with the most CUs)
+runtime: build Oct 18 2026 10:34:00 | GPU AMD Radeon RX 6900 XT (gfx1030), 40 CUs (HIP count, WGPs on RDNA), VRAM 16368 MB total / 16226 MB free | HIP runtime 60450101, driver 60450101
+int8_swin: on (swin MLP expand on int8 dot4 where the module has _i8 kernels)
+Traceback (most recent call last):
+  File "E:\dlss 5\.claude\worktrees\agent-a96d4a5622d1c6e46\tools\torch_ref.py", line 89, in <module>
+    elif a[:1] == ['torch']: torch_ref(a[1], int(a[2]), int(a[3]), a[4])
+  File "E:\dlss 5\.claude\worktrees\agent-a96d4a5622d1c6e46\tools\torch_ref.py", line 42, in torch_ref
+    import dlssnr.extract as ex; ex.RESOURCE_NAME = os.environ.get('WEIGHTS_RES', ex.RESOURCE_NAME)   # WEIGHTS_CC_SMALL_FP8: 310.9 small model
+ModuleNotFoundError: No module named 'dlssnr'
+tr 960x540 cond=2,2,2,-1,1 int=1 rc 1
+runtime: HIP device 0: AMD Radeon RX 6900 XT (gfx1030), 40 CUs, 16368 MB
+runtime: no D3D12 adapter LUID given - using HIP device 0 (dGPU with the most CUs)
+runtime: build Oct 18 2026 10:34:00 | GPU AMD Radeon RX 6900 XT (gfx1030), 40 CUs (HIP count, WGPs on RDNA), VRAM 16368 MB total / 16226 MB free | HIP runtime 60450101, driver 60450101
+int8_swin: on (swin MLP expand on int8 dot4 where the module has _i8 kernels)
+Traceback (most recent call last):
+  File "E:\dlss 5\.claude\worktrees\agent-a96d4a5622d1c6e46\tools\torch_ref.py", line 89, in <module>
+    elif a[:1] == ['torch']: torch_ref(a[1], int(a[2]), int(a[3]), a[4])
+  File "E:\dlss 5\.claude\worktrees\agent-a96d4a5622d1c6e46\tools\torch_ref.py", line 42, in torch_ref
+    import dlssnr.extract as ex; ex.RESOURCE_NAME = os.environ.get('WEIGHTS_RES', ex.RESOURCE_NAME)   # WEIGHTS_CC_SMALL_FP8: 310.9 small model
+ModuleNotFoundError: No module named 'dlssnr'
+tr 1920x1080 cond=0,1,1,-1,1 int=1 rc 1
+runtime: HIP device 0: AMD Radeon RX 6900 XT (gfx1030), 40 CUs, 16368 MB
+runtime: no D3D12 adapter LUID given - using HIP device 0 (dGPU with the most CUs)
+runtime: build Oct 18 2026 10:34:00 | GPU AMD Radeon RX 6900 XT (gfx1030), 40 CUs (HIP count, WGPs on RDNA), VRAM 16368 MB total / 16226 MB free | HIP runtime 60450101, driver 60450101
+int8_swin: on (swin MLP expand on int8 dot4 where the module has _i8 kernels)
+Traceback (most recent call last):
+  File "E:\dlss 5\.claude\worktrees\agent-a96d4a5622d1c6e46\tools\torch_ref.py", line 89, in <module>
+    elif a[:1] == ['torch']: torch_ref(a[1], int(a[2]), int(a[3]), a[4])
+  File "E:\dlss 5\.claude\worktrees\agent-a96d4a5622d1c6e46\tools\torch_ref.py", line 42, in torch_ref
+    import dlssnr.extract as ex; ex.RESOURCE_NAME = os.environ.get('WEIGHTS_RES', ex.RESOURCE_NAME)   # WEIGHTS_CC_SMALL_FP8: 310.9 small model
+ModuleNotFoundError: No module named 'dlssnr'
+tr 1920x1080 cond=2,2,2,-1,1 int=1 rc 1
+runtime: HIP device 0: AMD Radeon RX 6900 XT (gfx1030), 40 CUs, 16368 MB
+runtime: no D3D12 adapter LUID given - using HIP device 0 (dGPU with the most CUs)
+runtime: build Oct 18 2026 10:43:13 | GPU AMD Radeon RX 6900 XT (gfx1030), 40 CUs (HIP count, WGPs on RDNA), VRAM 16368 MB total / 16226 MB free | HIP runtime 60450101, driver 60450101
+int8_swin: on (swin MLP expand on int8 dot4 where the module has _i8 kernels)
+Traceback (most recent call last):
+  File "E:\dlss 5\.claude\worktrees\agent-a96d4a5622d1c6e46\tools\torch_ref.py", line 89, in <module>
+    elif a[:1] == ['torch']: torch_ref(a[1], int(a[2]), int(a[3]), a[4])
+  File "E:\dlss 5\.claude\worktrees\agent-a96d4a5622d1c6e46\tools\torch_ref.py", line 42, in torch_ref
+    import dlssnr.extract as ex; ex.RESOURCE_NAME = os.environ.get('WEIGHTS_RES', ex.RESOURCE_NAME)   # WEIGHTS_CC_SMALL_FP8: 310.9 small model
+ModuleNotFoundError: No module named 'dlssnr'
+tr 2560x1440 cond=0,1,1,-1,1 int=1 rc 1
+runtime: HIP device 0: AMD Radeon RX 6900 XT (gfx1030), 40 CUs, 16368 MB
+runtime: no D3D12 adapter LUID given - using HIP device 0 (dGPU with the most CUs)
+runtime: build Oct 18 2026 10:43:13 | GPU AMD Radeon RX 6900 XT (gfx1030), 40 CUs (HIP count, WGPs on RDNA), VRAM 16368 MB total / 16226 MB free | HIP runtime 60450101, driver 60450101
+int8_swin: on (swin MLP expand on int8 dot4 where the module has _i8 kernels)
+block  0/30: 9 tensors, 0.02 MiB
+block  1/30: 8 tensors, 0.02 MiB
+block  2/30: 10 tensors, 0.02 MiB
+block  3/30: 9 tensors, 0.06 MiB
+block  4/30: 10 tensors, 0.07 MiB
+block  5/30: 9 tensors, 0.19 MiB
+block  6/30: 10 tensors, 0.22 MiB
+block  7/30: 9 tensors, 0.66 MiB
+block  8/30: 10 tensors, 0.78 MiB
+block  9/30: 9 tensors, 1.88 MiB
+block 10/30: 11 tensors, 2.38 MiB
+block 11/30: 11 tensors, 12.00 MiB
+block 12/30: 11 tensors, 12.00 MiB
+block 13/30: 11 tensors, 12.00 MiB
+block 14/30: 11 tensors, 12.00 MiB
+block 15/30: 11 tensors, 12.00 MiB
+block 16/30: 11 tensors, 12.00 MiB
+block 17/30: 11 tensors, 12.00 MiB
+block 18/30: 11 tensors, 12.00 MiB
+block 19/30: 2 tensors, 0.50 MiB
+block 20/30: 9 tensors, 1.88 MiB
+block 21/30: 9 tensors, 1.88 MiB
+block 22/30: 11 tensors, 0.78 MiB
+block 23/30: 9 tensors, 0.66 MiB
+block 24/30: 11 tensors, 0.22 MiB
+block 25/30: 9 tensors, 0.19 MiB
+block 26/30: 11 tensors, 0.07 MiB
+block 27/30: 9 tensors, 0.06 MiB
+block 28/30: 10 tensors, 0.02 MiB
+block 29/30: 8 tensors, 0.02 MiB
+block 30/30: 12 tensors, 0.02 MiB
+2560x1440: ours vs PyTorch 42.65 dB (input vs PyTorch 29.83 dB), edit correlation 0.974, mean |edit| ours 0.0208 PyTorch 0.0222
+tr 2560x1440 cond=2,2,2,-1,1 int=1 rc 0

@@ -1,0 +1,354 @@
+== defaults (package presets) v0.4.4 vs v0.4.3
+frame 1: inst out 0.00276 in 0.00276, white jumps 0, visible 0.000%
+frame 2: inst out 0.01255 in 0.00246, white jumps 526983, visible 41.197%
+frame 3: inst out 0.00279 in 0.00256, white jumps 950, visible 0.449%
+frame 10: inst out 0.00254 in 0.00251, white jumps 84, visible 0.017%
+frame 20: inst out 0.00289 in 0.00276, white jumps 278, visible 0.072%
+frame 30: inst out 0.00281 in 0.00278, white jumps 93, visible 0.016%
+frame 40: inst out 0.00255 in 0.00253, white jumps 44, visible 0.008%
+frame 50: inst out 0.00252 in 0.00245, white jumps 76, visible 0.025%
+OUTHASH 01f9d075df310383
+EDIT mean |out - in| (display RGB) 0.01448 over 56 frames
+LISTMAX 19.3 ms (frame 43)
+HF mean |Laplacian| luma: out 0.01577 in 0.01571 (x1.004) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00268 in 0.00261 excess +0.00006 (x1.02) | white jumps 1556.5/frame (0.043% of px), visible flicker 0.075% of px, over 52 frames
+flk2 build Standard 960x540   rc 0
+frame 1: inst out 0.00276 in 0.00276, white jumps 0, visible 0.000%
+frame 2: inst out 0.01255 in 0.00246, white jumps 526983, visible 41.197%
+frame 3: inst out 0.00279 in 0.00256, white jumps 950, visible 0.449%
+frame 10: inst out 0.00254 in 0.00251, white jumps 84, visible 0.017%
+frame 20: inst out 0.00289 in 0.00276, white jumps 278, visible 0.072%
+frame 30: inst out 0.00281 in 0.00278, white jumps 93, visible 0.016%
+frame 40: inst out 0.00255 in 0.00253, white jumps 44, visible 0.008%
+frame 50: inst out 0.00252 in 0.00245, white jumps 76, visible 0.025%
+OUTHASH b5fdf48f9238a383
+EDIT mean |out - in| (display RGB) 0.01448 over 56 frames
+LISTMAX 104.4 ms (frame 36)
+HF mean |Laplacian| luma: out 0.01577 in 0.01571 (x1.004) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00268 in 0.00261 excess +0.00006 (x1.02) | white jumps 1556.5/frame (0.043% of px), visible flicker 0.075% of px, over 52 frames
+flk2 base Standard 960x540   rc 0
+frame 1: inst out 0.00276 in 0.00276, white jumps 0, visible 0.000%
+frame 2: inst out 0.01479 in 0.00246, white jumps 678003, visible 47.324%
+frame 3: inst out 0.00268 in 0.00256, white jumps 274, visible 0.175%
+frame 10: inst out 0.00255 in 0.00251, white jumps 83, visible 0.018%
+frame 20: inst out 0.00297 in 0.00276, white jumps 8018, visible 0.579%
+frame 30: inst out 0.00281 in 0.00278, white jumps 150, visible 0.019%
+frame 40: inst out 0.00254 in 0.00253, white jumps 64, visible 0.013%
+frame 50: inst out 0.00250 in 0.00245, white jumps 108, visible 0.024%
+OUTHASH ba321b7855d06383
+EDIT mean |out - in| (display RGB) 0.01539 over 56 frames
+LISTMAX 33.0 ms (frame 39)
+HF mean |Laplacian| luma: out 0.01577 in 0.01571 (x1.004) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 1920x1080): inst out 0.00266 in 0.00261 excess +0.00005 (x1.02) | white jumps 1827.7/frame (0.051% of px), visible flicker 0.090% of px, over 52 frames
+flk2 build Standard 1920x1080   rc 0
+frame 1: inst out 0.00276 in 0.00276, white jumps 0, visible 0.000%
+frame 2: inst out 0.01479 in 0.00246, white jumps 678004, visible 47.325%
+frame 3: inst out 0.00268 in 0.00256, white jumps 274, visible 0.175%
+frame 10: inst out 0.00255 in 0.00251, white jumps 83, visible 0.018%
+frame 20: inst out 0.00297 in 0.00276, white jumps 8019, visible 0.579%
+frame 30: inst out 0.00281 in 0.00278, white jumps 150, visible 0.019%
+frame 40: inst out 0.00254 in 0.00253, white jumps 65, visible 0.013%
+frame 50: inst out 0.00250 in 0.00245, white jumps 108, visible 0.024%
+OUTHASH fb8d5d2982d3e383
+EDIT mean |out - in| (display RGB) 0.01539 over 56 frames
+LISTMAX 34.5 ms (frame 23)
+HF mean |Laplacian| luma: out 0.01577 in 0.01571 (x1.004) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 1920x1080): inst out 0.00266 in 0.00261 excess +0.00005 (x1.02) | white jumps 1827.7/frame (0.051% of px), visible flicker 0.090% of px, over 52 frames
+flk2 base Standard 1920x1080   rc 0
+frame 1: inst out 0.00276 in 0.00276, white jumps 0, visible 0.000%
+frame 2: inst out 0.05382 in 0.00246, white jumps 2241882, visible 89.405%
+frame 3: inst out 0.00345 in 0.00256, white jumps 13034, visible 4.499%
+frame 10: inst out 0.00268 in 0.00251, white jumps 4752, visible 0.817%
+frame 20: inst out 0.00378 in 0.00276, white jumps 18205, visible 2.148%
+frame 30: inst out 0.00298 in 0.00278, white jumps 7848, visible 0.912%
+frame 40: inst out 0.00266 in 0.00253, white jumps 3278, visible 0.493%
+frame 50: inst out 0.00276 in 0.00245, white jumps 5497, visible 1.071%
+OUTHASH 51a9abea4dc18383
+EDIT mean |out - in| (display RGB) 0.05490 over 56 frames
+LISTMAX 35.6 ms (frame 25)
+HF mean |Laplacian| luma: out 0.01610 in 0.01571 (x1.025) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00295 in 0.00261 excess +0.00034 (x1.13) | white jumps 10780.7/frame (0.298% of px), visible flicker 1.455% of px, over 52 frames
+flk2 build Cinematic 960x540   rc 0
+frame 1: inst out 0.00276 in 0.00276, white jumps 0, visible 0.000%
+frame 2: inst out 0.05382 in 0.00246, white jumps 2241882, visible 89.404%
+frame 3: inst out 0.00345 in 0.00256, white jumps 13034, visible 4.499%
+frame 10: inst out 0.00268 in 0.00251, white jumps 4753, visible 0.817%
+frame 20: inst out 0.00378 in 0.00276, white jumps 18205, visible 2.147%
+frame 30: inst out 0.00298 in 0.00278, white jumps 7849, visible 0.912%
+frame 40: inst out 0.00266 in 0.00253, white jumps 3278, visible 0.493%
+frame 50: inst out 0.00276 in 0.00245, white jumps 5497, visible 1.070%
+OUTHASH 9435a6a9813ae383
+EDIT mean |out - in| (display RGB) 0.05490 over 56 frames
+LISTMAX 26.0 ms (frame 43)
+HF mean |Laplacian| luma: out 0.01610 in 0.01571 (x1.025) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00295 in 0.00261 excess +0.00034 (x1.13) | white jumps 10780.8/frame (0.298% of px), visible flicker 1.455% of px, over 52 frames
+flk2 base Cinematic 960x540   rc 0
+== compose=nv (Community) with edit_temporal: detail=1 must equal v0.4.3; detail=2 must differ
+frame 1: inst out 0.00276 in 0.00276, white jumps 0, visible 0.000%
+frame 2: inst out 0.01255 in 0.00246, white jumps 526983, visible 41.197%
+frame 3: inst out 0.00279 in 0.00256, white jumps 950, visible 0.449%
+frame 10: inst out 0.00254 in 0.00251, white jumps 84, visible 0.017%
+frame 20: inst out 0.00289 in 0.00276, white jumps 278, visible 0.072%
+frame 30: inst out 0.00281 in 0.00278, white jumps 93, visible 0.016%
+frame 40: inst out 0.00255 in 0.00253, white jumps 44, visible 0.008%
+frame 50: inst out 0.00252 in 0.00245, white jumps 76, visible 0.025%
+OUTHASH ad5a39a092fdc383
+EDIT mean |out - in| (display RGB) 0.01448 over 56 frames
+LISTMAX 55.3 ms (frame 34)
+HF mean |Laplacian| luma: out 0.01577 in 0.01571 (x1.004) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00268 in 0.00261 excess +0.00006 (x1.02) | white jumps 1556.5/frame (0.043% of px), visible flicker 0.075% of px, over 52 frames
+flk2 build Community 960x540   rc 0
+frame 1: inst out 0.00276 in 0.00276, white jumps 0, visible 0.000%
+frame 2: inst out 0.01255 in 0.00246, white jumps 526983, visible 41.197%
+frame 3: inst out 0.00279 in 0.00256, white jumps 950, visible 0.449%
+frame 10: inst out 0.00254 in 0.00251, white jumps 84, visible 0.017%
+frame 20: inst out 0.00289 in 0.00276, white jumps 278, visible 0.072%
+frame 30: inst out 0.00281 in 0.00278, white jumps 93, visible 0.016%
+frame 40: inst out 0.00255 in 0.00253, white jumps 44, visible 0.008%
+frame 50: inst out 0.00252 in 0.00245, white jumps 76, visible 0.025%
+OUTHASH 11e2c6f642090383
+EDIT mean |out - in| (display RGB) 0.01448 over 56 frames
+LISTMAX 42.0 ms (frame 40)
+HF mean |Laplacian| luma: out 0.01577 in 0.01571 (x1.004) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00268 in 0.00261 excess +0.00006 (x1.02) | white jumps 1556.5/frame (0.043% of px), visible flicker 0.075% of px, over 52 frames
+flk2 base Community 960x540   rc 0
+frame 1: inst out 0.00276 in 0.00276, white jumps 0, visible 0.000%
+frame 2: inst out 0.01773 in 0.00246, white jumps 817782, visible 54.832%
+frame 3: inst out 0.00536 in 0.00256, white jumps 60775, visible 8.055%
+frame 10: inst out 0.00498 in 0.00251, white jumps 50094, visible 6.548%
+frame 20: inst out 0.00575 in 0.00276, white jumps 81392, visible 9.100%
+frame 30: inst out 0.00575 in 0.00278, white jumps 77458, visible 8.728%
+frame 40: inst out 0.00501 in 0.00253, white jumps 51980, visible 6.642%
+frame 50: inst out 0.00506 in 0.00245, white jumps 64789, visible 8.499%
+OUTHASH 980dc1915dfd8383
+EDIT mean |out - in| (display RGB) 0.01853 over 56 frames
+LISTMAX 15.4 ms (frame 59)
+HF mean |Laplacian| luma: out 0.02971 in 0.01571 (x1.891) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00532 in 0.00261 excess +0.00270 (x2.03) | white jumps 67541.4/frame (1.869% of px), visible flicker 7.832% of px, over 52 frames
+flk2 build Community 960x540 detail=2  rc 0
+frame 1: inst out 0.00276 in 0.00276, white jumps 0, visible 0.000%
+frame 2: inst out 0.01255 in 0.00246, white jumps 526983, visible 41.197%
+frame 3: inst out 0.00279 in 0.00256, white jumps 950, visible 0.449%
+frame 10: inst out 0.00254 in 0.00251, white jumps 84, visible 0.017%
+frame 20: inst out 0.00289 in 0.00276, white jumps 278, visible 0.072%
+frame 30: inst out 0.00281 in 0.00278, white jumps 93, visible 0.016%
+frame 40: inst out 0.00255 in 0.00253, white jumps 44, visible 0.008%
+frame 50: inst out 0.00252 in 0.00245, white jumps 76, visible 0.025%
+OUTHASH 11e2c6f642090383
+EDIT mean |out - in| (display RGB) 0.01448 over 56 frames
+LISTMAX 30.4 ms (frame 30)
+HF mean |Laplacian| luma: out 0.01577 in 0.01571 (x1.004) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00268 in 0.00261 excess +0.00006 (x1.02) | white jumps 1556.5/frame (0.043% of px), visible flicker 0.075% of px, over 52 frames
+flk2 base Community 960x540 detail=2  rc 0
+== dropped nr_split part (runtime NR_TEST_DROP_PART: job 10 / 20 never started)
+frame 1: inst out 0.00276 in 0.00276, white jumps 0, visible 0.000%
+frame 2: inst out 0.01255 in 0.00246, white jumps 526983, visible 41.197%
+frame 3: inst out 0.00279 in 0.00256, white jumps 950, visible 0.449%
+frame 10: inst out 0.00254 in 0.00251, white jumps 84, visible 0.017%
+frame 20: inst out 0.00289 in 0.00276, white jumps 278, visible 0.072%
+frame 30: inst out 0.00278 in 0.00278, white jumps 0, visible 0.000%
+frame 40: inst out 0.00256 in 0.00253, white jumps 58, visible 0.015%
+frame 50: inst out 0.00255 in 0.00245, white jumps 80, visible 0.029%
+OUTHASH 2a0e23c44d322383
+EDIT mean |out - in| (display RGB) 0.01361 over 56 frames
+LISTMAX 232.1 ms (frame 27)
+HF mean |Laplacian| luma: out 0.01579 in 0.01571 (x1.005) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00312 in 0.00261 excess +0.00051 (x1.20) | white jumps 17634.8/frame (0.488% of px), visible flicker 2.031% of px, over 52 frames
+flk2 build Standard 960x540  drop=10 rc 0
+runtime: NR_TEST_DROP_PART: job 10 (seq 28) dropped
+frame 1: inst out 0.00276 in 0.00276, white jumps 0, visible 0.000%
+frame 2: inst out 0.00246 in 0.00246, white jumps 0, visible 0.000%
+frame 3: inst out 0.01274 in 0.00256, white jumps 546562, visible 41.842%
+frame 10: inst out 0.00255 in 0.00251, white jumps 115, visible 0.020%
+frame 20: inst out 0.00282 in 0.00276, white jumps 190, visible 0.077%
+frame 30: inst out 0.00279 in 0.00278, white jumps 160, visible 0.017%
+frame 40: inst out 0.00256 in 0.00253, white jumps 52, visible 0.009%
+frame 50: inst out 0.00245 in 0.00245, white jumps 35, visible 0.006%
+OUTHASH 7ad16fd7f79f4383
+EDIT mean |out - in| (display RGB) 0.01373 over 56 frames
+LISTMAX 222.4 ms (frame 55)
+HF mean |Laplacian| luma: out 0.01575 in 0.01571 (x1.003) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00303 in 0.00261 excess +0.00042 (x1.16) | white jumps 11928.4/frame (0.330% of px), visible flicker 1.646% of px, over 52 frames
+flk2 build Performance 960x540 model_res=960x540 drop=20 rc 0
+runtime: NR_TEST_DROP_PART: job 10 (seq 28) dropped
+== edit_temporal without nr_split / history (0.7 vs 0), NR every frame and nr_every=2 (reuse frames); v0.4.3 for comparison
+frame 1: inst out 0.00287 in 0.00276, white jumps 946, visible 0.156%
+frame 2: inst out 0.00256 in 0.00246, white jumps 497, visible 0.116%
+frame 3: inst out 0.00272 in 0.00256, white jumps 634, visible 0.211%
+frame 10: inst out 0.00263 in 0.00251, white jumps 546, visible 0.098%
+frame 20: inst out 0.00288 in 0.00276, white jumps 915, visible 0.144%
+frame 30: inst out 0.00302 in 0.00278, white jumps 7408, visible 0.658%
+frame 40: inst out 0.00265 in 0.00253, white jumps 632, visible 0.103%
+frame 50: inst out 0.00256 in 0.00245, white jumps 837, visible 0.116%
+OUTHASH 0dc0fff9c5014383
+EDIT mean |out - in| (display RGB) 0.01540 over 56 frames
+LISTMAX 24.2 ms (frame 54)
+HF mean |Laplacian| luma: out 0.01604 in 0.01571 (x1.021) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00275 in 0.00261 excess +0.00014 (x1.05) | white jumps 958.1/frame (0.027% of px), visible flicker 0.161% of px, over 52 frames
+flk2 build Standard 960x540 nr_split=0 history=0 edit_temporal=0.7  rc 0
+runtime: NR_TEST_DROP_PART: job 10 (seq 28) dropped
+frame 1: inst out 0.00327 in 0.00276, white jumps 6367, visible 1.199%
+frame 2: inst out 0.00302 in 0.00246, white jumps 7264, visible 1.424%
+frame 3: inst out 0.00339 in 0.00256, white jumps 5959, visible 2.485%
+frame 10: inst out 0.00307 in 0.00251, white jumps 9228, visible 1.424%
+frame 20: inst out 0.00335 in 0.00276, white jumps 9510, visible 1.666%
+frame 30: inst out 0.00386 in 0.00278, white jumps 61755, visible 3.821%
+frame 40: inst out 0.00309 in 0.00253, white jumps 7945, visible 1.415%
+frame 50: inst out 0.00303 in 0.00245, white jumps 9046, visible 1.555%
+OUTHASH 48b3c29a50d6a383
+EDIT mean |out - in| (display RGB) 0.01555 over 56 frames
+LISTMAX 34.6 ms (frame 16)
+HF mean |Laplacian| luma: out 0.01623 in 0.01571 (x1.033) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00329 in 0.00261 excess +0.00068 (x1.26) | white jumps 12192.3/frame (0.337% of px), visible flicker 1.943% of px, over 52 frames
+flk2 build Standard 960x540 nr_split=0 history=0 edit_temporal=0  rc 124
+runtime: NR_TEST_DROP_PART: job 10 (seq 28) dropped
+frame 1: inst out 0.00327 in 0.00276, white jumps 6366, visible 1.199%
+frame 2: inst out 0.00302 in 0.00246, white jumps 7264, visible 1.424%
+frame 3: inst out 0.00339 in 0.00256, white jumps 5958, visible 2.485%
+frame 10: inst out 0.00307 in 0.00251, white jumps 9227, visible 1.424%
+frame 20: inst out 0.00335 in 0.00276, white jumps 9510, visible 1.666%
+frame 30: inst out 0.00386 in 0.00278, white jumps 61753, visible 3.821%
+frame 40: inst out 0.00309 in 0.00253, white jumps 7945, visible 1.415%
+frame 50: inst out 0.00303 in 0.00245, white jumps 9045, visible 1.555%
+OUTHASH 72ab0eef77290383
+EDIT mean |out - in| (display RGB) 0.01555 over 56 frames
+LISTMAX 104.5 ms (frame 10)
+HF mean |Laplacian| luma: out 0.01623 in 0.01571 (x1.033) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00329 in 0.00261 excess +0.00068 (x1.26) | white jumps 12191.9/frame (0.337% of px), visible flicker 1.942% of px, over 52 frames
+flk2 base Standard 960x540 nr_split=0 history=0 edit_temporal=0.7  rc 0
+frame 1: inst out 0.00327 in 0.00276, white jumps 6367, visible 1.199%
+frame 2: inst out 0.00302 in 0.00246, white jumps 7264, visible 1.424%
+frame 3: inst out 0.00339 in 0.00256, white jumps 5959, visible 2.485%
+frame 10: inst out 0.00307 in 0.00251, white jumps 9228, visible 1.424%
+frame 20: inst out 0.00335 in 0.00276, white jumps 9510, visible 1.666%
+frame 30: inst out 0.00386 in 0.00278, white jumps 61755, visible 3.821%
+frame 40: inst out 0.00309 in 0.00253, white jumps 7945, visible 1.415%
+frame 50: inst out 0.00303 in 0.00245, white jumps 9046, visible 1.555%
+OUTHASH 48b3c29a50d6a383
+EDIT mean |out - in| (display RGB) 0.01555 over 56 frames
+LISTMAX 47.0 ms (frame 17)
+HF mean |Laplacian| luma: out 0.01623 in 0.01571 (x1.033) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00329 in 0.00261 excess +0.00068 (x1.26) | white jumps 12192.3/frame (0.337% of px), visible flicker 1.943% of px, over 52 frames
+flk2 base Standard 960x540 nr_split=0 history=0 edit_temporal=0  rc 124
+frame 1: inst out 0.00301 in 0.00276, white jumps 20321, visible 1.629%
+frame 2: inst out 0.00277 in 0.00246, white jumps 664, visible 1.215%
+frame 3: inst out 0.00278 in 0.00256, white jumps 8798, visible 1.185%
+frame 10: inst out 0.00284 in 0.00251, white jumps 599, visible 1.358%
+frame 20: inst out 0.00309 in 0.00276, white jumps 709, visible 1.374%
+frame 30: inst out 0.00322 in 0.00278, white jumps 2116, visible 1.520%
+frame 40: inst out 0.00283 in 0.00253, white jumps 620, visible 1.234%
+frame 50: inst out 0.00273 in 0.00245, white jumps 982, visible 0.847%
+flk2 build Standard 960x540 nr_split=0 history=0 nr_every=2 edit_temporal=0.7  rc 124
+runtime: NR_TEST_DROP_PART: job 10 (seq 28) dropped
+frame 1: inst out 0.00286 in 0.00276, white jumps 3301, visible 0.337%
+frame 2: inst out 0.00307 in 0.00246, white jumps 10439, visible 1.886%
+frame 3: inst out 0.00263 in 0.00256, white jumps 2046, visible 0.241%
+frame 10: inst out 0.00313 in 0.00251, white jumps 11645, visible 1.970%
+frame 20: inst out 0.00340 in 0.00276, white jumps 12848, visible 2.084%
+frame 30: inst out 0.00393 in 0.00278, white jumps 51770, visible 4.377%
+frame 40: inst out 0.00311 in 0.00253, white jumps 9350, visible 1.707%
+frame 50: inst out 0.00307 in 0.00245, white jumps 11620, visible 2.043%
+flk2 build Standard 960x540 nr_split=0 history=0 nr_every=2 edit_temporal=0  rc 124
+runtime: NR_TEST_DROP_PART: job 10 (seq 28) dropped
+frame 1: inst out 0.00286 in 0.00276, white jumps 3301, visible 0.337%
+frame 2: inst out 0.00307 in 0.00246, white jumps 10437, visible 1.886%
+frame 3: inst out 0.00263 in 0.00256, white jumps 2046, visible 0.241%
+frame 10: inst out 0.00313 in 0.00251, white jumps 11646, visible 1.970%
+frame 20: inst out 0.00340 in 0.00276, white jumps 12849, visible 2.084%
+frame 30: inst out 0.00393 in 0.00278, white jumps 51773, visible 4.377%
+frame 40: inst out 0.00311 in 0.00253, white jumps 9350, visible 1.707%
+frame 50: inst out 0.00307 in 0.00245, white jumps 11620, visible 2.043%
+OUTHASH f64c1e72bdbaa383
+EDIT mean |out - in| (display RGB) 0.01550 over 56 frames
+LISTMAX 15.2 ms (frame 24)
+HF mean |Laplacian| luma: out 0.01623 in 0.01571 (x1.033) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00302 in 0.00261 excess +0.00041 (x1.16) | white jumps 8600.1/frame (0.238% of px), visible flicker 1.321% of px, over 52 frames
+flk2 base Standard 960x540 nr_split=0 history=0 nr_every=2 edit_temporal=0.7  rc 0
+frame 1: inst out 0.00286 in 0.00276, white jumps 3301, visible 0.337%
+frame 2: inst out 0.00307 in 0.00246, white jumps 10439, visible 1.886%
+frame 3: inst out 0.00263 in 0.00256, white jumps 2046, visible 0.241%
+frame 10: inst out 0.00313 in 0.00251, white jumps 11645, visible 1.970%
+frame 20: inst out 0.00340 in 0.00276, white jumps 12848, visible 2.084%
+frame 30: inst out 0.00393 in 0.00278, white jumps 51770, visible 4.377%
+frame 40: inst out 0.00311 in 0.00253, white jumps 9350, visible 1.707%
+frame 50: inst out 0.00307 in 0.00245, white jumps 11620, visible 2.043%
+OUTHASH 54adea6580b0e383
+EDIT mean |out - in| (display RGB) 0.01550 over 56 frames
+LISTMAX 15.0 ms (frame 18)
+HF mean |Laplacian| luma: out 0.01623 in 0.01571 (x1.033) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00302 in 0.00261 excess +0.00041 (x1.16) | white jumps 8600.0/frame (0.238% of px), visible flicker 1.321% of px, over 52 frames
+flk2 base Standard 960x540 nr_split=0 history=0 nr_every=2 edit_temporal=0  rc 0
+== fg_mode=1 compose=nv smoke (fg reuse branch with compose)
+frame 1: inst out 0.01214 in 0.00276, white jumps 465023, visible 40.894%
+frame 2: inst out 0.00306 in 0.00246, white jumps 20612, visible 2.001%
+frame 3: inst out 0.00288 in 0.00256, white jumps 3852, visible 0.718%
+frame 10: inst out 0.00300 in 0.00251, white jumps 2450, visible 1.235%
+frame 20: inst out 0.00306 in 0.00276, white jumps 3338, visible 0.614%
+frame 30: inst out 0.00308 in 0.00278, white jumps 4046, visible 0.735%
+frame 40: inst out 0.00303 in 0.00253, white jumps 12775, visible 1.307%
+frame 50: inst out 0.00276 in 0.00245, white jumps 3242, visible 0.735%
+OUTHASH f226f50d22406383
+EDIT mean |out - in| (display RGB) 0.01059 over 56 frames
+LISTMAX 11.1 ms (frame 49)
+HF mean |Laplacian| luma: out 0.01601 in 0.01571 (x1.019) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00300 in 0.00261 excess +0.00038 (x1.15) | white jumps 4898.9/frame (0.136% of px), visible flicker 0.925% of px, over 52 frames
+flk2 build Standard 960x540 nr_split=0 fg_mode=1 compose=nv edit_temporal=0  rc 0
+runtime: NR_TEST_DROP_PART: job 10 (seq 28) dropped
+frame 1: inst out 0.01214 in 0.00276, white jumps 465023, visible 40.894%
+frame 2: inst out 0.00306 in 0.00246, white jumps 20612, visible 2.001%
+frame 3: inst out 0.00288 in 0.00256, white jumps 3852, visible 0.718%
+frame 10: inst out 0.00300 in 0.00251, white jumps 2450, visible 1.235%
+frame 20: inst out 0.00306 in 0.00276, white jumps 3338, visible 0.614%
+frame 30: inst out 0.00308 in 0.00278, white jumps 4046, visible 0.735%
+frame 40: inst out 0.00303 in 0.00253, white jumps 12775, visible 1.307%
+frame 50: inst out 0.00276 in 0.00245, white jumps 3242, visible 0.735%
+OUTHASH f9a97d308bf34383
+EDIT mean |out - in| (display RGB) 0.01059 over 56 frames
+LISTMAX 10.9 ms (frame 32)
+HF mean |Laplacian| luma: out 0.01601 in 0.01571 (x1.019) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00300 in 0.00261 excess +0.00038 (x1.15) | white jumps 4898.9/frame (0.136% of px), visible flicker 0.925% of px, over 52 frames
+flk2 build Standard 960x540 nr_split=0 fg_mode=1 compose=add edit_temporal=0  rc 0
+runtime: NR_TEST_DROP_PART: job 10 (seq 28) dropped
+== format-converting pass-through (model guard: NR off) R11G11B10 / R9G9B9E5 colour -> RGBA16F output, and same-format
+NR off at create: nvngx_dlssnr.dll (not found) has a different model than this port supports (310.8 / 310.9.16). NR stays off; update the port. (DLL model id 0000000000000000, data E:/nonexistent_nr_data)
+device after create: 0x00000000
+frame 0: evaluate 1, 0 rows differ from the input
+frame 1: evaluate 1, 0 rows differ from the input
+frame 2: evaluate 1, 0 rows differ from the input
+frame 3: evaluate 1, 0 rows differ from the input
+frame 4: evaluate 1, 0 rows differ from the input
+device 0x00000000
+PASSTHROUGH PASS (NR off, native frames)
+passthrough r11 -> f16 rc 0
+NR off at create: nvngx_dlssnr.dll (not found) has a different model than this port supports (310.8 / 310.9.16). NR stays off; update the port. (DLL model id 0000000000000000, data E:/nonexistent_nr_data)
+device after create: 0x00000000
+frame 0: evaluate 1, 0 rows differ from the input
+frame 1: evaluate 1, 0 rows differ from the input
+frame 2: evaluate 1, 0 rows differ from the input
+frame 3: evaluate 1, 0 rows differ from the input
+frame 4: evaluate 1, 0 rows differ from the input
+device 0x00000000
+PASSTHROUGH PASS (NR off, native frames)
+passthrough e5 -> f16 rc 0
+NR off at create: nvngx_dlssnr.dll (not found) has a different model than this port supports (310.8 / 310.9.16). NR stays off; update the port. (DLL model id 0000000000000000, data E:/nonexistent_nr_data)
+device after create: 0x00000000
+frame 0: evaluate 1, 0 rows differ from the input
+frame 1: evaluate 1, 0 rows differ from the input
+frame 2: evaluate 1, 0 rows differ from the input
+frame 3: evaluate 1, 0 rows differ from the input
+frame 4: evaluate 1, 0 rows differ from the input
+device 0x00000000
+PASSTHROUGH PASS (NR off, native frames)
+passthrough f16 -> f16 rc 0
+ERROR: nvngx_dlssnr.dll (not found) has a different model than this port supports (310.8 / 310.9.16). NR stays off; update the port. (DLL model id 0000000000000000, data E:/nonexistent_nr_data)
+model: nvngx_dlssnr.dll (not found), model id none (no WEIGHTS_HT / unreadable) (WEIGHTS_HT, model=auto)
+ERROR: nvngx_dlssnr.dll (not found) has a different model than this port supports (310.8 / 310.9.16). NR stays off; update the port. (DLL model id 0000000000000000, data E:/nonexistent_nr_data)
+== recreate stress (VRAM) + eviction during evaluate
+cycle  0 960x540 loaded in 2005 ms, free VRAM 15511 MB, device 0x00000000
+cycle  1 720x405 loaded in 2078 ms, free VRAM 15511 MB (abandoned, no release), device 0x00000000
+evict race: feature evicted, the evaluate held across it returned 1, list executed, device 0x00000000
+cycle  2 960x540 released while loading, device 0x00000000
+cycle  3 720x405 loaded in 2054 ms, free VRAM 15511 MB, device 0x00000000
+recreate rc 124
+evict 0000017734E6BA40: idle 26953 ms while a new feature loads - runtime and buffers freed, native frames if the host uses it again
+== done

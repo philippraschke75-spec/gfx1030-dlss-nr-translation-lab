@@ -1,0 +1,45 @@
+HIST flicker: mean |O_t - warp(O_t-1)| 0.00195, inputs 0.00000, F = 0.00195 (frames 2..23)
+HIST brightness: mean P(O)-P(I) range 0.00498 .. 0.01570 (drift 0.01072)
+HIST vs no-history NR (same frame), mean |P(O) - P(ref)|: background 0.00954, object 0.00000, uncovered 0.00000 (input vs ref: 0.01711 0.00000 0.00000)
+HIST list ms p50 11.75
+hist 960x540 DX=5   rc 0
+HIST flicker: mean |O_t - warp(O_t-1)| 0.00212, inputs 0.00000, F = 0.00212 (frames 2..23)
+HIST brightness: mean P(O)-P(I) range 0.00498 .. 0.01438 (drift 0.00940)
+HIST vs no-history NR (same frame), mean |P(O) - P(ref)|: background 0.00921, object 0.00000, uncovered 0.00000 (input vs ref: 0.01712 0.00000 0.00000)
+HIST list ms p50 11.96
+hist 960x540 DX=13   rc 0
+HIST flicker: mean |O_t - warp(O_t-1)| 0.00143, inputs 0.00000, F = 0.00143 (frames 2..23)
+HIST brightness: mean P(O)-P(I) range 0.00516 .. 0.01127 (drift 0.00612)
+HIST vs no-history NR (same frame), mean |P(O) - P(ref)|: background 0.00704, object 0.00000, uncovered 0.00000 (input vs ref: 0.01847 0.00000 0.00000)
+HIST list ms p50 34.10
+hist 1920x1080 DX=10   rc 0
+HIST flicker: mean |O_t - warp(O_t-1)| 0.00119, inputs 0.00000, F = 0.00119 (frames 2..23)
+HIST brightness: mean P(O)-P(I) range 0.00405 .. 0.00622 (drift 0.00217)
+HIST vs no-history NR (same frame), mean |P(O) - P(ref)|: background 0.00648, object 0.00000, uncovered 0.00000 (input vs ref: 0.01838 0.00000 0.00000)
+HIST list ms p50 56.78
+hist 2560x1440 DX=13   rc 0
+HIST brightness: mean P(O)-P(I) range 0.00541 .. 0.01458 (drift 0.00917)
+HIST vs no-history NR (same frame), mean |P(O) - P(ref)|: background 0.00971, object 0.00998, uncovered 0.00817 (input vs ref: 0.01677 0.02601 0.01717)
+HIST list ms p50 11.86
+hist 960x540 DX=5 obj  rc 0
+HIST brightness: mean P(O)-P(I) range 0.00541 .. 0.01324 (drift 0.00783)
+HIST vs no-history NR (same frame), mean |P(O) - P(ref)|: background 0.00820, object 0.00936, uncovered 0.01066 (input vs ref: 0.01648 0.02548 0.01570)
+HIST list ms p50 11.82
+hist 960x540 DX=13 obj  rc 0
+HIST brightness: mean P(O)-P(I) range 0.00559 .. 0.01098 (drift 0.00538)
+HIST vs no-history NR (same frame), mean |P(O) - P(ref)|: background 0.00615, object 0.00832, uncovered 0.00952 (input vs ref: 0.01921 0.03056 0.02127)
+HIST list ms p50 33.26
+hist 1920x1080 DX=10 obj  rc 0
+HIST brightness: mean P(O)-P(I) range 0.00226 .. 0.00669 (drift 0.00443)
+HIST vs no-history NR (same frame), mean |P(O) - P(ref)|: background 0.00863, object 0.01136, uncovered 0.01282 (input vs ref: 0.01704 0.02744 0.02282)
+HIST list ms p50 56.92
+hist 2560x1440 DX=13 obj  rc 0
+HIST brightness: mean P(O)-P(I) range 0.00538 .. 0.01027 (drift 0.00489)
+HIST vs no-history NR (same frame), mean |P(O) - P(ref)|: background 0.02601, object 0.03036, uncovered 0.02139 (input vs ref: 0.01704 0.02744 0.02282)
+HIST list ms p50 56.68
+hist 2560x1440 DX=13 obj local_tone=2 local_structure=2 style=2 intensity=2 rc 0
+HIST brightness: mean P(O)-P(I) range 0.01585 .. 0.03013 (drift 0.01429)
+HIST vs no-history NR (same frame), mean |P(O) - P(ref)|: background 0.04276, object 0.03021, uncovered 0.02396 (input vs ref: 0.01677 0.02601 0.01717)
+HIST list ms p50 11.82
+hist 960x540 DX=5 obj local_tone=2 local_structure=2 style=2 intensity=2 rc 0
+hist_all done

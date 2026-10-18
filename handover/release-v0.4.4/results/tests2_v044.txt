@@ -1,0 +1,51 @@
+== v1 export (AMDNR forwarder path): strict + flicker hash equal to v2
+v1: evaluate through dlssnr_call_evaluate, scaling ratio 1.00
+frames 60: 60 evaluated+matched, 0 mismatched, 0 not run | after dropped list: 10/10 ran, worst 19.5 ms | release 10 ms
+PASS
+hash build 960x540 auto V1 rc 0
+OUTHASH be438d1cb9334383
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00270 in 0.00262 excess +0.00009 (x1.03) | white jumps 1439.8/frame (0.040% of px), visible flicker 0.119% of px, over 59 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00268 in 0.00261 excess +0.00006 (x1.02) | white jumps 321.9/frame (0.009% of px), visible flicker 0.064% of px, over 52 frames
+flk build Standard 960x540 nr_split=0 vit_every=1 rc 0
+OUTHASH be438d1cb9334383
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00270 in 0.00262 excess +0.00009 (x1.03) | white jumps 1439.8/frame (0.040% of px), visible flicker 0.119% of px, over 59 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00268 in 0.00261 excess +0.00006 (x1.02) | white jumps 321.9/frame (0.009% of px), visible flicker 0.064% of px, over 52 frames
+flk build Standard 960x540 nr_split=0 vit_every=1 rc 0
+== Standard with history + edit_temporal 0.7 (nr_split=0, vit_every=1): v0.4.4 vs v0.4.3 OUTHASH
+OUTHASH be438d1cb9334383
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00270 in 0.00262 excess +0.00009 (x1.03) | white jumps 1439.8/frame (0.040% of px), visible flicker 0.119% of px, over 59 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00268 in 0.00261 excess +0.00006 (x1.02) | white jumps 321.9/frame (0.009% of px), visible flicker 0.064% of px, over 52 frames
+flk build Standard 960x540 nr_split=0 vit_every=1 rc 0
+OUTHASH be438d1cb9334383
+FLICKER frame 2560x1440 (model 960x540): inst out 0.00270 in 0.00262 excess +0.00009 (x1.03) | white jumps 1439.8/frame (0.040% of px), visible flicker 0.119% of px, over 59 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00268 in 0.00261 excess +0.00006 (x1.02) | white jumps 321.9/frame (0.009% of px), visible flicker 0.064% of px, over 52 frames
+flk base Standard 960x540 nr_split=0 vit_every=1 rc 0
+OUTHASH dbb9a6502c656383
+FLICKER frame 2560x1440 (model 1920x1080): inst out 0.00261 in 0.00262 excess -0.00001 (x1.00) | white jumps 1597.5/frame (0.044% of px), visible flicker 0.122% of px, over 59 frames
+FLICKER steady(k>=8) 2560x1440 (model 1920x1080): inst out 0.00259 in 0.00261 excess -0.00002 (x0.99) | white jumps 413.0/frame (0.011% of px), visible flicker 0.067% of px, over 52 frames
+flk build Standard 1920x1080 nr_split=0 vit_every=1 rc 0
+OUTHASH dbb9a6502c656383
+FLICKER frame 2560x1440 (model 1920x1080): inst out 0.00261 in 0.00262 excess -0.00001 (x1.00) | white jumps 1597.5/frame (0.044% of px), visible flicker 0.122% of px, over 59 frames
+FLICKER steady(k>=8) 2560x1440 (model 1920x1080): inst out 0.00259 in 0.00261 excess -0.00002 (x0.99) | white jumps 413.0/frame (0.011% of px), visible flicker 0.067% of px, over 52 frames
+flk base Standard 1920x1080 nr_split=0 vit_every=1 rc 0
+== self-check hook (NR_SELFCHECK_TEST=1: output corrupted -> NR off, native frames, evaluate still 1)
+frame 1: inst out 0.00347 in 0.00276, white jumps 58911, visible 2.492%
+frame 2: inst out 0.00291 in 0.00246, white jumps 5836, visible 0.677%
+frame 3: inst out 0.00279 in 0.00256, white jumps 613, visible 0.113%
+frame 10: inst out 0.01685 in 0.00251, white jumps 288434, visible 70.189%
+frame 20: inst out 0.00276 in 0.00276, white jumps 0, visible 0.000%
+frame 30: inst out 0.00278 in 0.00278, white jumps 0, visible 0.000%
+frame 40: inst out 0.00253 in 0.00253, white jumps 0, visible 0.000%
+frame 50: inst out 0.00245 in 0.00245, white jumps 0, visible 0.000%
+OUTHASH 21d6e77b45b84383
+EDIT mean |out - in| (display RGB) 0.00174 over 56 frames
+LISTMAX 17.5 ms (frame 4)
+HF mean |Laplacian| luma: out 0.01572 in 0.01571 (x1.000) over 56 frames
+FLICKER steady(k>=8) 2560x1440 (model 960x540): inst out 0.00289 in 0.00261 excess +0.00028 (x1.11) | white jumps 5558.1/frame (0.154% of px), visible flicker 1.352% of px, over 52 frames
+flk2 build Standard 960x540 nr_split=0 vit_every=1  rc 0
+ERROR: nvngx_dlssnr.dll (not found) has a different model than this port supports (310.8 / 310.9.16). NR stays off; update the port. (DLL model id 0000000000000000, data E:/nonexistent_nr_data)
+ERROR: nvngx_dlssnr.dll (not found) has a different model than this port supports (310.8 / 310.9.16). NR stays off; update the port. (DLL model id 0000000000000000, data E:/nonexistent_nr_data)
+ERROR: nr_ext_enqueue failed (-2)
+selfcheck: 74058 px sampled, non-finite 100.00%, black/white out 0.0% (in 0.0%), mean 0.0000, mean |out-in| 0.0000
+selfcheck: NR output looks broken on this GPU - disabling (native frames for this session)
+== tests2 done

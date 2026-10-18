@@ -1,0 +1,36 @@
+EDIT mean |out - in| (display RGB) 0.01700 over 16 frames
+PIPE mean |shown - (live + reference NR edit of the same frame)| 0.00000; reference edit mean |.| 0.01698; over 12 frames (k >= 8)
+FLICKER steady(k>=8) 2560x1440 (model 2560x1440): inst out 0.00373 in 0.00261 excess +0.00112 (x1.43) | white jumps 22844.6/frame (0.632% of px), visible flicker 3.347% of px, over 12 frames
+FLICKER network-alone 2560x1440 (model 2560x1440): inst out 0.00387 in 0.00262 excess +0.00126 (x1.48) | white jumps 34738.8/frame (0.961% of px), visible flicker 4.217% of px, over 19 frames
+pipe clean-default model 2560x1440 sl=0,1,1,-1,1 int=1 nr_split=0 vit_every=1 edit_temporal=0 history=0 rc 0
+EDIT mean |out - in| (display RGB) 0.01963 over 16 frames
+PIPE mean |shown - (live + reference NR edit of the same frame)| 0.00000; reference edit mean |.| 0.01962; over 12 frames (k >= 8)
+FLICKER steady(k>=8) 2560x1440 (model 2560x1440): inst out 0.00381 in 0.00261 excess +0.00120 (x1.46) | white jumps 17622.9/frame (0.488% of px), visible flicker 2.550% of px, over 12 frames
+FLICKER network-alone 2560x1440 (model 2560x1440): inst out 0.00385 in 0.00262 excess +0.00123 (x1.47) | white jumps 15892.8/frame (0.440% of px), visible flicker 2.606% of px, over 19 frames
+pipe clean-sl2 model 2560x1440 sl=2,2,2,-1,1 int=1 nr_split=0 vit_every=1 edit_temporal=0 history=0 rc 0
+EDIT mean |out - in| (display RGB) 0.03313 over 16 frames
+PIPE mean |shown - (live + reference NR edit of the same frame)| 0.00007; reference edit mean |.| 0.03311; over 12 frames (k >= 8)
+FLICKER steady(k>=8) 2560x1440 (model 2560x1440): inst out 0.00522 in 0.00261 excess +0.00261 (x2.00) | white jumps 82734.5/frame (2.289% of px), visible flicker 12.019% of px, over 12 frames
+FLICKER network-alone 2560x1440 (model 2560x1440): inst out 0.00385 in 0.00262 excess +0.00123 (x1.47) | white jumps 15892.8/frame (0.440% of px), visible flicker 2.606% of px, over 19 frames
+pipe clean-sl2-i2 model 2560x1440 sl=2,2,2,-1,1 int=2 nr_split=0 vit_every=1 edit_temporal=0 history=0 rc 0
+EDIT mean |out - in| (display RGB) 0.03314 over 16 frames
+PIPE mean |shown - (live + reference NR edit of the same frame)| 0.01495; reference edit mean |.| 0.03311; over 12 frames (k >= 8)
+FLICKER steady(k>=8) 2560x1440 (model 2560x1440): inst out 0.00368 in 0.00261 excess +0.00107 (x1.41) | white jumps 87752.1/frame (2.428% of px), visible flicker 11.472% of px, over 12 frames
+FLICKER network-alone 2560x1440 (model 2560x1440): inst out 0.00385 in 0.00262 excess +0.00123 (x1.47) | white jumps 15892.8/frame (0.440% of px), visible flicker 2.606% of px, over 19 frames
+pipe hist-sl2-i2 model 2560x1440 sl=2,2,2,-1,1 int=2 nr_split=0 vit_every=1 edit_temporal=0 history=1 rc 0
+EDIT mean |out - in| (display RGB) 0.01813 over 16 frames
+PIPE mean |shown - (live + reference NR edit of the same frame)| 0.00511; reference edit mean |.| 0.01698; over 12 frames (k >= 8)
+FLICKER steady(k>=8) 2560x1440 (model 2560x1440): inst out 0.00223 in 0.00261 excess -0.00038 (x0.85) | white jumps 21196.5/frame (0.586% of px), visible flicker 2.701% of px, over 12 frames
+FLICKER network-alone 2560x1440 (model 2560x1440): inst out 0.00387 in 0.00262 excess +0.00126 (x1.48) | white jumps 34738.8/frame (0.961% of px), visible flicker 4.217% of px, over 19 frames
+pipe hist-default model 2560x1440 sl=0,1,1,-1,1 int=1 nr_split=0 vit_every=1 edit_temporal=0 history=1 rc 0
+EDIT mean |out - in| (display RGB) 0.03121 over 16 frames
+PIPE mean |shown - (live + reference NR edit of the same frame)| 0.00916; reference edit mean |.| 0.03311; over 12 frames (k >= 8)
+FLICKER steady(k>=8) 2560x1440 (model 2560x1440): inst out 0.00314 in 0.00261 excess +0.00053 (x1.20) | white jumps 36731.8/frame (1.016% of px), visible flicker 2.622% of px, over 12 frames
+FLICKER network-alone 2560x1440 (model 2560x1440): inst out 0.00385 in 0.00262 excess +0.00123 (x1.47) | white jumps 15892.8/frame (0.440% of px), visible flicker 2.606% of px, over 19 frames
+pipe standard-sl2-i2 model 2560x1440 sl=2,2,2,-1,1 int=2  rc 0
+EDIT mean |out - in| (display RGB) 0.01698 over 16 frames
+PIPE mean |shown - (live + reference NR edit of the same frame)| 0.00348; reference edit mean |.| 0.01698; over 12 frames (k >= 8)
+FLICKER steady(k>=8) 2560x1440 (model 2560x1440): inst out 0.00269 in 0.00261 excess +0.00008 (x1.03) | white jumps 5828.0/frame (0.161% of px), visible flicker 0.249% of px, over 12 frames
+FLICKER network-alone 2560x1440 (model 2560x1440): inst out 0.00387 in 0.00262 excess +0.00126 (x1.48) | white jumps 34738.8/frame (0.961% of px), visible flicker 4.217% of px, over 19 frames
+pipe standard-default model 2560x1440 sl=0,1,1,-1,1 int=1  rc 0
+pipe_all 2560x1440 done

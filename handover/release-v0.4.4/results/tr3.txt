@@ -1,0 +1,6 @@
+2560x1440: ours vs PyTorch 42.04 dB (input vs PyTorch 29.66 dB), edit correlation 0.972, mean |edit| ours 0.0176 PyTorch 0.0177
+tr 2560x1440 cond=0,1,1,-1,1 int=1 rc 0
+2560x1440: ours vs PyTorch 39.15 dB (input vs PyTorch 24.61 dB), edit correlation 0.984, mean |edit| ours 0.0351 PyTorch 0.0374
+tr 2560x1440 cond=2,2,2,-1,1 int=2 rc 0
+960x540: ours vs PyTorch 39.95 dB (input vs PyTorch 31.63 dB), edit correlation 0.936, mean |edit| ours 0.0161 PyTorch 0.0151
+tr 960x540 cond=0,1,1,-1,1 int=1 rc 0

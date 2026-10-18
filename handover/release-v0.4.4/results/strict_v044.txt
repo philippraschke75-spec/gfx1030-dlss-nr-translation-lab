@@ -1,0 +1,21 @@
+frames 60: 60 evaluated+matched, 0 mismatched, 0 not run | after dropped list: 10/10 ran, worst 19.4 ms | release 9 ms
+PASS
+strict build 960x540 auto rc 0
+model: E:/dlss-runtime/v042/nr_data\..\nvngx_dlssnr.dll version 310.9.16.0 sha256 77796c072880, model id ca6f64f1dd88b965 (WEIGHTS_CC_SMALL_FP8, model=auto)
+create: sync resources ready; async fallback apply mode delta (live frame + NR edit) gain 1.00; compose add detail 1.00
+frames 60: 60 evaluated+matched, 0 mismatched, 0 not run | after dropped list: 10/10 ran, worst 60.2 ms | release 10 ms
+PASS
+strict build 1920x1080 auto rc 0
+model: E:/dlss-runtime/v042/nr_data\..\nvngx_dlssnr.dll version 310.9.16.0 sha256 77796c072880, model id ca6f64f1dd88b965 (WEIGHTS_CC_SMALL_FP8, model=auto)
+create: sync resources ready; async fallback apply mode delta (live frame + NR edit) gain 1.00; compose add detail 1.00
+frames 60: 60 evaluated+matched, 0 mismatched, 0 not run | after dropped list: 10/10 ran, worst 104.9 ms | release 16 ms
+PASS
+strict build 2560x1440 auto rc 0
+model: E:/dlss-runtime/v042/nr_data\..\nvngx_dlssnr.dll version 310.9.16.0 sha256 77796c072880, model id ca6f64f1dd88b965 (WEIGHTS_CC_SMALL_FP8, model=auto)
+create: sync resources ready; async fallback apply mode delta (live frame + NR edit) gain 1.00; compose add detail 1.00
+frames 60: 60 evaluated+matched, 0 mismatched, 0 not run | after dropped list: 10/10 ran, worst 35.7 ms | release 11 ms
+PASS
+strict build 960x540 large rc 0
+model: E:/dlss-runtime/v042/nr_data\..\nvngx_dlssnr.dll version 310.9.16.0 sha256 77796c072880, model id 1ff9997855c80dd5 (WEIGHTS_HT, model=large)
+create: sync resources ready; async fallback apply mode delta (live frame + NR edit) gain 1.00; compose add detail 1.00
+run_tests done

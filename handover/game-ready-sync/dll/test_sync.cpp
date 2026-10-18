@@ -116,6 +116,8 @@ int main(int argc, char** argv) {
     const bool guard = state(f) == 4;   // model guard: unknown nvngx_dlssnr.dll, NR off -> pass-through test below
     if (guard) printf("NR off at create: %s\n", err());
     char e2[512] = ""; void* ref = guard ? nullptr : rcreate(dd, (int)MW, (int)MH, 1, e2, sizeof e2); if (!ref && !guard) { printf("FAIL reference nr_create: %s\n", e2); return 3; }
+    if (ref && getenv("NR_TEST_COND")) { int s = 0, am = 1; float t = 1, st = 1, sk = -1; sscanf(getenv("NR_TEST_COND"), "%d,%f,%f,%f,%d", &s, &t, &st, &sk, &am);   // the reference's conditioning (style,tone,structure,skin,auto_mask), as the ini sliders give the DLL
+        auto sc = (int (*)(void*, int, float, float, float, int))GetProcAddress(rt, "nr_set_conditioning"); if (!sc || sc(ref, s, t, st, sk, am)) { puts("FAIL NR_TEST_COND"); return 3; } }
     if (getenv("NR_TEST_RECREATE")) {   // VRAM leak test: N cycles of create -> load -> evaluate -> release, alternating frame sizes. Every 3rd cycle releases
         // while the runtime is still loading, every 3rd abandons the feature without release (MSFS 2024 host) -> the next create must evict it.
         // Free VRAM (hipMemGetInfo) is sampled once each fully loaded cycle has its feature live; PASS = spread <= 100 MB (+-50) after warm-up.
@@ -465,7 +467,7 @@ int main(int argc, char** argv) {
         fmu = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ); fdu = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ);
         if (!fmv || !fdp || !fmu || !fdu) { puts("FAIL guide resources"); return 1; } fmu->Map(0, nullptr, (void**)&mvp); fdu->Map(0, nullptr, (void**)&dpp);
         std::vector<float> fin((size_t)W * H * 3), fout(fin.size()), pin(fin.size()), pout(fin.size()), mi((size_t)MW * MH * 3), mo(mi.size()), pmi(mi.size()), pmo(mi.size());
-        double hfo = 0, hfi = 0, lmax = 0; int nhf = 0, lmaxK = -1; Fr tot, rtot, sst; int nf = 0, nss = 0; double pulse[2] = {}; int npulse[2] = {}; double eabs = 0; int neabs = 0; uint64_t hsh = 1469598103934665603ull;
+        double hfo = 0, hfi = 0, lmax = 0; int nhf = 0, lmaxK = -1; Fr tot, rtot, sst; int nf = 0, nss = 0; double pulse[2] = {}; int npulse[2] = {}; double eabs = 0, pipeE = 0, pipeR = 0; int neabs = 0, nPipe = 0; uint64_t hsh = 1469598103934665603ull;
         for (int k = 0; k < frames; k++) {
             gen(fin, W, H, k); float a[2], b[2]; shift(k, a); shift(k - 1, b); const uint16_t hv[2] = { f2h((a[0] - b[0]) / W), f2h((a[1] - b[1]) / H) }; const float dv = 0.1f;
             for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { memcpy(mvp + (size_t)y * gpitch + x * 4, hv, 4); memcpy(dpp + (size_t)y * gpitch + x * 4, &dv, 4);
@@ -491,6 +493,18 @@ int main(int argc, char** argv) {
                     s += fabs(4 * L(x, y) - L(x - 1, y) - L(x + 1, y) - L(x, y - 1) - L(x, y + 1)); } return s / ((double)(W - 16) * (H - 16)); };   // high-frequency energy: mean |Laplacian| of display luma
               if (k >= 4) { hfo += hf(fout); hfi += hf(fin); nhf++; }
               if (k == frames - 1 && getenv("NR_TEST_DUMP")) { for (int q = 0; q < 2; q++) { std::string fn = std::string(getenv("NR_TEST_DUMP")) + (q ? "_out.bin" : "_in.bin"); FILE* df = fopen(fn.c_str(), "wb"); if (df) { fwrite(q ? fout.data() : fin.data(), 4, fin.size(), df); fclose(df); } } } }
+            if (doRef && k >= 8) {   // PIPE: the shown frame vs the live frame + the reference NR edit of the SAME frame (bilinear up, add, boost past intensity 1 as boost()):
+                const double I = getenv("NR_TEST_INT") ? atof(getenv("NR_TEST_INT")) : 1.0; double pe = 0, re = 0;   // what the split / reuse / history / edit_temporal path adds on top of the network
+                for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) {
+                    float u = std::min(std::max((x + .5f) * MW / W - .5f, 0.f), MW - 1.001f), v = std::min(std::max((y + .5f) * MH / H - .5f, 0.f), MH - 1.001f); int x0 = (int)u, y0 = (int)v; float fa = u - x0, fb = v - y0;
+                    float o[3], a[3]; const float* fi = &fin[((size_t)y * W + x) * 3];
+                    for (int c = 0; c < 3; c++) { auto d = [&](int xx, int yy) { const size_t i = ((size_t)yy * MW + xx) * 3 + c; return mo[i] - mi[i]; };
+                        a[c] = std::max(fi[c], 0.f); o[c] = std::max(a[c] + (d(x0, y0) * (1 - fa) + d(x0 + 1, y0) * fa) * (1 - fb) + (d(x0, y0 + 1) * (1 - fa) + d(x0 + 1, y0 + 1) * fa) * fb, 0.f); }
+                    if (I > 1) { const double la = .2126 * a[0] + .7152 * a[1] + .0722 * a[2], lo = .2126 * o[0] + .7152 * o[1] + .0722 * o[2], r = std::max((lo + 1 / 512.) / (la + 1 / 512.), 1e-6);
+                        const double s = std::min(std::max(pow(r, I), 0.5), 2.0) / r; float m = 0, lim = std::max(1.f, std::max(o[0], std::max(o[1], o[2]))); float b[3];
+                        for (int c = 0; c < 3; c++) { b[c] = (float)(o[c] * s); m = std::max(m, b[c]); } for (int c = 0; c < 3; c++) o[c] = m > lim ? b[c] * lim / m : b[c]; }
+                    for (int c = 0; c < 3; c++) { const float sh = std::min(std::max(fout[((size_t)y * W + x) * 3 + c], 0.f), 1.f), rf = std::min(std::max(o[c], 0.f), 1.f); pe += fabs(sh - rf); re += fabs(rf - std::min(std::max(fi[c], 0.f), 1.f)); } }
+                pipeE += pe / (3.0 * W * H); pipeR += re / (3.0 * W * H); nPipe++; }
             if (k > 0) { Fr e = measure(fin, fout, pin, pout, W, H, k); tot.o += e.o; tot.i += e.i; tot.j += e.j; tot.v += e.v; tot.n += e.n; nf++;
                 if (k >= 8) { sst.o += e.o; sst.i += e.i; sst.j += e.j; sst.v += e.v; sst.n += e.n; nss++; } Fr er;   // steady state (k >= 8): without the first edit's fade-in
                 if (doRef) { er = measure(mi, mo, pmi, pmo, MW, MH, k); rtot.o += er.o; rtot.i += er.i; rtot.j += er.j; rtot.v += er.v; rtot.n += er.n; }
@@ -502,6 +516,7 @@ int main(int argc, char** argv) {
             std::accumulate(tsv.begin(), tsv.begin() + tsv.size() / 2, 0.0) / (tsv.size() / 2)); }
         printf("EDIT mean |out - in| (display RGB) %.5f over %d frames\n", eabs / std::max(neabs, 1), neabs);
         printf("LISTMAX %.1f ms (frame %d)\n", lmax, lmaxK);
+        if (nPipe) printf("PIPE mean |shown - (live + reference NR edit of the same frame)| %.5f; reference edit mean |.| %.5f; over %d frames (k >= 8)\n", pipeE / nPipe, pipeR / nPipe, nPipe);
         printf("HF mean |Laplacian| luma: out %.5f in %.5f (x%.3f) over %d frames\n", hfo / std::max(nhf, 1), hfi / std::max(nhf, 1), hfi > 0 ? hfo / hfi : 0, nhf);
         report("FLICKER frame", tot, nf, W, H); report("FLICKER steady(k>=8)", sst, nss, W, H); if (doRef) report("FLICKER network-alone", rtot, nf, MW, MH);
         if (f2) release(f2); release(f); return 0;
