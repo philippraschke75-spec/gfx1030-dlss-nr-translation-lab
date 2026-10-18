@@ -1,0 +1,54 @@
+== hist
+ABI 2 refused: LmxxfNrGetApi: ABI 2 (this runtime speaks 1)
+FAIL hist: 12 jobs compared, worst 48.24 dB, 2268817/18662400 values bit-exact (12.1572%), OutputReady at first poll 29/30 (mean wait 0.3 ms) | rdna2-hip model=ca6f64f1dd88b965 net=960x540 passes=1 hist=on split=0 jobs=12 pass=47 skip=none
+== passes2
+ABI 2 refused: LmxxfNrGetApi: ABI 2 (this runtime speaks 1)
+PASS passes2: 10 jobs compared, worst 999.00 dB, 15552000/15552000 values bit-exact (100.0000%), OutputReady at first poll 42/42 (mean wait 0.0 ms) | rdna2-hip model=ca6f64f1dd88b965 net=960x540 passes=2 hist=off split=0 jobs=10 pass=74 skip=none
+== passes3
+ABI 2 refused: LmxxfNrGetApi: ABI 2 (this runtime speaks 1)
+PASS passes3: 10 jobs compared, worst 999.00 dB, 15552000/15552000 values bit-exact (100.0000%), OutputReady at first poll 62/62 (mean wait 0.0 ms) | rdna2-hip model=ca6f64f1dd88b965 net=960x540 passes=3 hist=off split=0 jobs=10 pass=114 skip=none
+== abandon
+ABI 2 refused: LmxxfNrGetApi: ABI 2 (this runtime speaks 1)
+AbandonJob returned after 21.1 ms (job in flight)
+AbandonJob returned after 496.0 ms (job never submitted)
+PASS abandon: 8 jobs compared, worst 999.00 dB, 12441600/12441600 values bit-exact (100.0000%), OutputReady at first poll 28/28 (mean wait 0.0 ms) | rdna2-hip model=ca6f64f1dd88b965 net=960x540 passes=1 hist=off split=0 jobs=11 pass=45 skip=none
+== refuse
+ABI 2 refused: LmxxfNrGetApi: ABI 2 (this runtime speaks 1)
+adapter Microsoft Basic Render Driver (1414:008c): rc 4 Create: Microsoft Basic Render Driver (1414:008c) is not an RDNA2 discrete GPU (RX 6000); allow_any_gpu=1 overrides
+WARP: rc 4 Create: Microsoft Basic Render Driver (1414:008c) is not an RDNA2 discrete GPU (RX 6000); allow_any_gpu=1 overrides
+queue/device mismatch: rc 2 Create: queue belongs to another device
+PASS refuse: 2 non-RDNA2 adapters refused, LUID check: run again with NR_HIP_DEVICE=-1
+== refuse_dll
+ABI 2 refused: LmxxfNrGetApi: ABI 2 (this runtime speaks 1)
+PASS unknown DLL refused (4): Create: C:\Windows\System32\d3d12.dll has no model this runtime has data for in E:\dlss5-v0.4\nr_data (model=auto)
+== refuse LUID
+PASS LUID mismatch refused (4): Create: no HIP device matches the D3D12 adapter (LUID mismatch)
+== resample 1280x720
+PASS resample 1280x720 -> 960x540 network: non-finite 0, mean |out-in| 0.0158, max 0.243, changed 94.1%
+== leak 640x360
+cycle  0: free VRAM 16206 MB, private 222 MB, handles 312 (1260 ms)
+cycle  1: free VRAM 16206 MB, private 224 MB, handles 312 (2141 ms)
+cycle  2: free VRAM 16206 MB, private 236 MB, handles 312 (3034 ms)
+cycle  9: free VRAM 16206 MB, private 229 MB, handles 313 (15534 ms)
+cycle 19: free VRAM 16206 MB, private 227 MB, handles 311 (33397 ms)
+cycle 29: free VRAM 16206 MB, private 225 MB, handles 311 (51279 ms)
+cycle 39: free VRAM 16206 MB, private 227 MB, handles 311 (68922 ms)
+cycle 49: free VRAM 16206 MB, private 229 MB, handles 311 (86710 ms)
+PASS leak: 50 cycles, after cycle 2 -> 49: VRAM +0 MB used, private -7 MB, handles -1
+== exact 1920x1080
+PASS exact: 10 jobs compared, worst 999.00 dB, 62208000/62208000 values bit-exact (100.0000%), OutputReady at first poll 51/51 (mean wait 0.0 ms) | rdna2-hip model=ca6f64f1dd88b965 net=1920x1080 passes=1 hist=off split=0 jobs=11 pass=91 skip=none
+== bench 960 540
+network load 1354 ms
+BENCH 960x540 passes 1: frame (record+submit+GPU copy) -> OutputReady median 6.87 ms, p90 10.35, min 6.64 (110 jobs) | rdna2-hip model=ca6f64f1dd88b965 net=960x540 passes=1 hist=on split=0 jobs=120 pass=43 skip=none
+== bench 1280 720
+network load 1918 ms
+BENCH 1280x720 passes 1: frame (record+submit+GPU copy) -> OutputReady median 12.10 ms, p90 16.78, min 11.12 (110 jobs) | rdna2-hip model=ca6f64f1dd88b965 net=1280x720 passes=1 hist=off split=0 jobs=120 pass=60 skip=none
+== bench 1920 1080
+network load 2729 ms
+BENCH 1920x1080 passes 1: frame (record+submit+GPU copy) -> OutputReady median 23.59 ms, p90 33.66, min 23.08 (110 jobs) | rdna2-hip model=ca6f64f1dd88b965 net=1920x1080 passes=1 hist=on split=0 jobs=120 pass=87 skip=none
+== bench 960 540 passes 2/3
+BENCH 960x540 passes 2: frame (record+submit+GPU copy) -> OutputReady median 13.51 ms, p90 20.75, min 12.57 (110 jobs) | rdna2-hip model=ca6f64f1dd88b965 net=960x540 passes=2 hist=on split=0 jobs=120 pass=73 skip=none
+BENCH 960x540 passes 3: frame (record+submit+GPU copy) -> OutputReady median 19.36 ms, p90 30.02, min 19.12 (110 jobs) | rdna2-hip model=ca6f64f1dd88b965 net=960x540 passes=3 hist=on split=0 jobs=120 pass=110 skip=none
+== done
+== hist (final build, history padding copied from the runtime output)
+PASS hist: 12 jobs compared, worst 56.50 dB (job 2 60.18 dB ... job 12 56.50 dB)
