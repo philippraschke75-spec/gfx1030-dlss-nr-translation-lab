@@ -200,13 +200,20 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
   FILE* f = fopen((c->dir + "/manifest.txt").c_str(), "r"); if (!f) FAIL("no manifest.txt");
   { std::string m; if (!nr_load_overrides(c->dir + "/manifest.txt", c->ovr, m)) { fclose(f); FAIL("%s", m.c_str()); } }
   std::map<std::string, hipModule_t> mods; char line[1024];
-  // int8_swin (opt-in, meta int8_swin=1 or env NR_INT8_SWIN=1/0): a native swin step <sym> whose module also exports <sym>_i8
-  // and <sym>_i8_prep runs <sym>_i8. The prep runs once per weight record (kernarg +0x10) at load and fills a 1 MiB buffer
-  // that goes to kernarg +0xa0 (VarParams.scratch, null for native kernels).
-  bool i8 = kv.count("int8_swin") && atoi(kv["int8_swin"].c_str());
-  { char e[8]; if (GetEnvironmentVariableA("NR_INT8_SWIN", e, sizeof e)) i8 = atoi(e) != 0; }
+  // int8_swin (meta int8_swin or env NR_INT8_SWIN): "<m>" for every swin width or "<m64>,<m128>,<m256>" per width
+  // (k_swin_c64 / c128 / c256[s]). A native swin step <sym> whose module also exports <sym>_i8 and <sym>_i8_prep runs
+  // <sym>_i8 (mask 1) or <sym>_i8_<mask> (else falls back to _i8). Mask bits (rdna2/native/swin_var.hip): 1 MLP expand +
+  // qkv, 2 MLP mid, 4 MLP contract, 8 attention out_proj; 0 = all f16. The prep runs once per weight record (kernarg +0x10)
+  // at load and fills a 1 MiB buffer that goes to kernarg +0xa0 (VarParams.scratch, null for native kernels).
+  int i8w[3] = {0, -1, -1};
+  { std::string v = kv.count("int8_swin") ? kv["int8_swin"] : "0"; char e[64];
+    if (GetEnvironmentVariableA("NR_INT8_SWIN", e, sizeof e)) v = e;
+    sscanf(v.c_str(), "%d,%d,%d", &i8w[0], &i8w[1], &i8w[2]);
+    if (i8w[1] < 0) i8w[1] = i8w[0]; if (i8w[2] < 0) i8w[2] = i8w[1];
+    for (int& m : i8w) m = m > 0 ? (m & 15) | 1 : 0; }   // the other bits build on bit 0's int8 x
+  const bool i8 = i8w[0] || i8w[1] || i8w[2];
   std::map<uint64_t, void*> i8rec;
-  if (i8) rlog("int8_swin: on (swin MLP expand on int8 dot4 where the module has _i8 kernels)");
+  if (i8) rlog("int8_swin: c64 %d, c128 %d, c256 %d (mask bits: 1 expand+qkv, 2 mid, 4 contract, 8 out_proj)", i8w[0], i8w[1], i8w[2]);
   const int pre_i = kv.count("pre_step") ? (int)num("pre_step") : -1, post_i = kv.count("post_step") ? (int)num("post_step") : -1;
   bool i8pp = kv.count("int8_prepost") && atoi(kv["int8_prepost"].c_str());
   { char e[8]; if (GetEnvironmentVariableA("NR_INT8_PREPOST", e, sizeof e)) i8pp = atoi(e) != 0; }   // the DLL sets it from the ini
@@ -233,7 +240,11 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
     }
     st.gx = atoi(t[4].c_str()); st.gy = atoi(t[5].c_str()); st.thr = atoi(t[6].c_str()); st.gz = t.size() == 8 ? atoi(t[7].c_str()) : 1;
     hipFunction_t f8, p8;
-    if (i8 && st.ka.size() >= 0xa8 && hipModuleGetFunction(&f8, mods[t[0]], (t[1] + "_i8").c_str()) == hipSuccess &&
+    const int i8m = t[1].find("swin_c64") != std::string::npos ? i8w[0] : t[1].find("swin_c128") != std::string::npos ? i8w[1] :
+                    t[1].find("swin_c256") != std::string::npos ? i8w[2] : 0;
+    const std::string i8suf = i8m == 1 ? "_i8" : "_i8_" + std::to_string(i8m);
+    if (i8m && st.ka.size() >= 0xa8 && (hipModuleGetFunction(&f8, mods[t[0]], (t[1] + i8suf).c_str()) == hipSuccess ||
+                                       hipModuleGetFunction(&f8, mods[t[0]], (t[1] + "_i8").c_str()) == hipSuccess) &&
         hipModuleGetFunction(&p8, mods[t[0]], (t[1] + "_i8_prep").c_str()) == hipSuccess) {
       uint64_t w; memcpy(&w, st.ka.data() + 0x10, 8);
       void*& b = i8rec[w];
