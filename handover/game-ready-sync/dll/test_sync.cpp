@@ -196,6 +196,7 @@ int main(int argc, char** argv) {
     ID3D12Resource *fmv = nullptr, *fdp = nullptr, *fmu = nullptr, *fdu = nullptr; bool ffirst = true;   // flicker mode: motion/depth textures, their upload buffers (mvp/dpp)
     ID3D12QueryHeap* tsq = nullptr; ID3D12Resource* tsb = nullptr; uint64_t* tsp = nullptr; UINT64 tsf = 1; std::vector<double> tsv;   // NR_TEST_TS: GPU time of the evaluate call per frame (timestamps around it)
     if (getenv("NR_TEST_TS")) { D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 2, 0}; CK(dev->CreateQueryHeap(&qd, IID_PPV_ARGS(&tsq))); tsb = buf(D3D12_HEAP_TYPE_READBACK, 256, D3D12_RESOURCE_STATE_COPY_DEST); tsb->Map(0, nullptr, (void**)&tsp); q->GetTimestampFrequency(&tsf); }   // flicker mode: motion/depth textures, their upload buffers (mvp/dpp)
+    int dInvT = 1;   // depthInv passed with the guides (flicker mode: 1; NR_TEST_SEQ: NR_TEST_DINV, default 0 = standard Z as FO4)
     auto frame = [&](int k, bool exec, double* ms) -> int {   // one game frame; returns evaluate's result, -100 on GPU timeout
         al->Reset(); cl->Reset(al, nullptr);
         if (fmv) { for (int g = 0; g < 2; g++) { ID3D12Resource* t = g ? fdp : fmv; DXGI_FORMAT fm = g ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R16G16_FLOAT;
@@ -205,11 +206,11 @@ int main(int argc, char** argv) {
         bar(color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST); { auto d = ts(color), s = fp(up, pitch, FMT); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
         bar(color, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         if (tsq) cl->EndQuery(tsq, D3D12_QUERY_TYPE_TIMESTAMP, 0);
-        int r = k < 0 ? 1 : eval(cl, f, nullptr, color, fdp, fmv, out, W, H, W, H, W, H, 0, 0, 0, 0, fmv ? 1 : 0, k == 0, 1.f, 0, 1.f, 1.f, -1.f, 1, fmv ? (float)W : 1.f, fmv ? (float)H : 1.f);
+        int r = k < 0 ? 1 : eval(cl, f, nullptr, color, fdp, fmv, out, W, H, W, H, W, H, 0, 0, 0, 0, fmv ? dInvT : 0, k == 0, 1.f, 0, 1.f, 1.f, -1.f, 1, fmv ? (float)W : 1.f, fmv ? (float)H : 1.f);
         if (tsq) { cl->EndQuery(tsq, D3D12_QUERY_TYPE_TIMESTAMP, 1); cl->ResolveQueryData(tsq, D3D12_QUERY_TYPE_TIMESTAMP, 0, 2, tsb, 0); }
         ID3D12Resource* fin_ = out;
         if (f2 && k >= 0) { bar(out, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);   // pass 2: pass 1's output is the input
-            int r2 = eval(cl, f2, nullptr, out, fdp, fmv, out2, W, H, W, H, W, H, 0, 0, 0, 0, fmv ? 1 : 0, k == 0, 1.f, 0, 1.f, 1.f, -1.f, 1, fmv ? (float)W : 1.f, fmv ? (float)H : 1.f);
+            int r2 = eval(cl, f2, nullptr, out, fdp, fmv, out2, W, H, W, H, W, H, 0, 0, 0, 0, fmv ? dInvT : 0, k == 0, 1.f, 0, 1.f, 1.f, -1.f, 1, fmv ? (float)W : 1.f, fmv ? (float)H : 1.f);
             bar(out, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); if (r2 != 1) r = r2; fin_ = out2; }
         bar(fin_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE); { auto d = fp(rb, opitch, OFMT), s = ts(fin_); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
         bar(fin_, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); cl->Close();
@@ -432,6 +433,60 @@ int main(int argc, char** argv) {
         release(f); return 0;
     }
     if (fl) {   // NR_TEST_FW/FH: temporal flicker test at any frame size (frame W x H, network MW x MH). See HARNESS.md (handover/temporal-2026-10-11).
+        if (const char* seq = getenv("NR_TEST_SEQ")) {   // replay a dump_frame sequence (frame_dump.h: dump_{colour,motion,depth}_fN_WxH_*.f32 at the frame size W x H, NR_TEST_FW/FH)
+            // NR_TEST_SEQN frames in it (default 8), NR_TEST_WARM static copies of f0 first (default 12), then f1.. with the game's vectors and depth (NR_TEST_DINV, default 0).
+            // Per frame: the shown edit (out - in) box-downsampled to the model size vs the reference NR edit of the SAME frame (nr_run on the box-downsampled frame, clamped
+            // [0,1] as the DLL). ALIGN: per quadrant, the shift (model px) where the shown edit correlates best with the reference edit; it must be 0,0 (a stretched or
+            // offset edit, e.g. padded vs valid size, moves the peak by up to ~5% of the position). NR_TEST_SEQOUT=prefix: f32 RGB output per frame (prefix_fN.bin).
+            const int sn = getenv("NR_TEST_SEQN") ? atoi(getenv("NR_TEST_SEQN")) : 8, warm = getenv("NR_TEST_WARM") ? atoi(getenv("NR_TEST_WARM")) : 12; dInvT = getenv("NR_TEST_DINV") ? atoi(getenv("NR_TEST_DINV")) : 0;
+            fmv = tex(D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON, DXGI_FORMAT_R16G16_FLOAT); fdp = tex(D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON, DXGI_FORMAT_R32_FLOAT);
+            fmu = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ); fdu = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ);
+            if (!fmv || !fdp || !fmu || !fdu) { puts("FAIL guide resources"); return 1; } fmu->Map(0, nullptr, (void**)&mvp); fdu->Map(0, nullptr, (void**)&dpp);
+            auto rd = [&](const char* n, int fr, int ch, std::vector<float>& v) { char fn[1024]; snprintf(fn, sizeof fn, "%s\\dump_%s_f%d_%ux%u_%dch.f32", seq, n, fr, W, H, ch);
+                v.assign((size_t)W * H * ch, 0.f); FILE* fp = fopen(fn, "rb"); const bool ok = fp && fread(v.data(), 4, v.size(), fp) == v.size(); if (fp) fclose(fp); return ok; };
+            auto down = [&](auto px, std::vector<float>& o) {   // box: each frame pixel into the model pixel its centre falls in (frame -> model, RGB)
+                o.assign((size_t)MW * MH * 3, 0.f); std::vector<int> cnt((size_t)MW * MH, 0);
+                for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { const size_t m = (size_t)(y * MH / H) * MW + x * MW / W; cnt[m]++; for (int c = 0; c < 3; c++) o[m * 3 + c] += px(x, y, c); }
+                for (size_t m = 0; m < cnt.size(); m++) for (int c = 0; c < 3; c++) o[m * 3 + c] /= std::max(cnt[m], 1); };
+            std::vector<float> col, mot, dep, fo((size_t)W * H * 3), ci, co, em((size_t)MW * MH * 3), es((size_t)MW * MH * 3); int bad = 0; double ms = 0, hole0 = 0, holeMax = 0;
+            for (int k = 0; k < warm + sn - 1; k++) {
+                const int fr = k < warm ? 0 : k - warm + 1;
+                if (!rd("colour", fr, 4, col) || !rd("depth", fr, 1, dep)) { printf("FAIL cannot read %s frame %d\n", seq, fr); return 1; }
+                if (fr == 0 || !rd("motion", fr, 2, mot)) mot.assign((size_t)W * H * 2, 0.f);
+                for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { const size_t i = (size_t)y * W + x; uint16_t h4[4] = { f2h(col[i * 4]), f2h(col[i * 4 + 1]), f2h(col[i * 4 + 2]), f2h(1.f) };
+                    memcpy(upp + (size_t)y * pitch + x * 8, h4, 8); const uint16_t hv[2] = { f2h(mot[i * 2]), f2h(mot[i * 2 + 1]) }; memcpy(mvp + (size_t)y * gpitch + x * 4, hv, 4); memcpy(dpp + (size_t)y * gpitch + x * 4, &dep[i], 4); }
+                const int r = frame(k, true, &ms); if (r != 1) { printf("FAIL frame %d: evaluate returned %d\n", k, r); return 7; }
+                for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { uint16_t o[4]; memcpy(o, rbp + (size_t)y * opitch + x * 8, 8); for (int c = 0; c < 3; c++) { const double v = h2f(o[c]); fo[((size_t)y * W + x) * 3 + c] = v == v && v < 1e8 ? (float)v : 0.f; } }
+                if (getenv("NR_TEST_SEQOUT")) { char fn[1024]; snprintf(fn, sizeof fn, "%s_f%d.bin", getenv("NR_TEST_SEQOUT"), k); FILE* df = fopen(fn, "wb"); if (df) { fwrite(fo.data(), 4, fo.size(), df); fclose(df); } }
+                if (k < warm - 1) continue;   // measured: the last static frame and every moving one
+                auto cl01 = [](float v) { return v == v ? std::min(std::max(v, 0.f), 1.f) : 0.f; };
+                down([&](UINT x, UINT y, int c) { return cl01(col[((size_t)y * W + x) * 4 + c]); }, ci);
+                down([&](UINT x, UINT y, int c) { const size_t i = (size_t)y * W + x; return fo[i * 3 + c] - std::max(col[i * 4 + c] == col[i * 4 + c] ? col[i * 4 + c] : 0.f, 0.f); }, es);   // shown edit (compose add: out = frame + edit)
+                for (size_t i = 0; i < (size_t)MW * MH; i++) { for (int c = 0; c < 3; c++) in[i * 4 + c] = f2h(ci[i * 3 + c]); in[i * 4 + 3] = f2h(1.f); }
+                float gms; if (rrun(ref, in.data(), refo.data(), &gms)) { puts("FAIL reference nr_run"); return 6; }
+                for (size_t i = 0; i < (size_t)MW * MH; i++) for (int c = 0; c < 3; c++) { const uint16_t v = refo[i * 4 + c]; em[i * 3 + c] = ((v & 0x7C00) == 0x7C00 ? 0.f : (float)h2f(v)) - (float)h2f(in[i * 4 + c]); }
+                double pe = 0, re = 0; for (size_t i = 0; i < em.size(); i++) { pe += fabs(es[i] - em[i]); re += fabs(em[i]); }
+                size_t nh = 0, ns = 0;   // HOLE: on flat frame areas (3x3 luma range < 0.03, where a halo shows: sky, walls) the reference edits the px (|luma| > 0.02) but the shown edit has < 30% of it
+                auto Y = [&](int x, int y) { const float* q = &ci[((size_t)y * MW + x) * 3]; return .2126f * q[0] + .7152f * q[1] + .0722f * q[2]; };
+                for (UINT y = 1; y + 1 < MH; y++) for (UINT x = 1; x + 1 < MW; x++) { const size_t i = (size_t)y * MW + x; const float* u = &em[i * 3]; const float* v = &es[i * 3];
+                    float lo = 9, hi = -9; for (int j = 0; j < 9; j++) { const float t = Y(x + j % 3 - 1, y + j / 3 - 1); lo = std::min(lo, t); hi = std::max(hi, t); } if (hi - lo >= 0.03f) continue;
+                    const float lr = .2126f * u[0] + .7152f * u[1] + .0722f * u[2], ls = .2126f * v[0] + .7152f * v[1] + .0722f * v[2]; if (fabsf(lr) > 0.02f) { ns++; nh += ls * lr < 0.3f * lr * lr; } }
+                const double hole = 100.0 * nh / std::max<size_t>(ns, 1); if (k == warm - 1) hole0 = hole; else holeMax = std::max(holeMax, hole);
+                const int R = std::max(4, (int)(MW / 80)); std::string sh; bool fr_bad = false;   // search +-R model px (>= 5% of a quadrant's centre position)
+                for (int qd = 0; qd < 4; qd++) {
+                    const int x0 = qd & 1 ? MW / 2 : R + 8, x1 = qd & 1 ? MW - R - 8 : MW / 2, y0 = qd & 2 ? MH / 2 : R + 8, y1 = qd & 2 ? MH - R - 8 : MH / 2;
+                    auto L = [&](const std::vector<float>& v, int x, int y) { const float* p = &v[((size_t)y * MW + x) * 3]; return .2126f * p[0] + .7152f * p[1] + .0722f * p[2]; };
+                    double best = -2, r0 = 0; int bx = 0, by = 0;
+                    for (int dy = -R; dy <= R; dy++) for (int dx = -R; dx <= R; dx++) { double sab = 0, saa = 0, sbb = 0;
+                        for (int y = y0; y < y1; y += 2) for (int x = x0; x < x1; x += 2) { const double a = L(es, x, y), b = L(em, x + dx, y + dy); sab += a * b; saa += a * a; sbb += b * b; }
+                        const double rr = sab / sqrt(std::max(saa * sbb, 1e-30)); if (!dx && !dy) r0 = rr; if (rr > best + 1e-9) { best = rr; bx = dx; by = dy; } }
+                    char b[96]; snprintf(b, sizeof b, " q%d %+d,%+d (r %.3f, at 0,0 %.3f)", qd, bx, by, best, r0); sh += b; fr_bad |= (bx || by) && best > r0 + 0.01; }
+                bad += fr_bad;
+                printf("SEQ k %d (f%d): shown edit vs reference edit of the same frame: mean |diff| %.5f, reference |edit| %.5f, HOLE %.2f%% | ALIGN%s%s\n", k, fr, pe / em.size(), re / em.size(), hole, sh.c_str(), fr_bad ? " MISALIGNED" : ""); }
+            const double holeLim = getenv("NR_TEST_HOLEMAX") ? atof(getenv("NR_TEST_HOLEMAX")) : 8.0; const bool hb = holeMax > holeLim;   // HOLE: at most 8 % of the edited flat px may lose the edit (FO4 dump at 720p: v0.4.5 nr_split=3 12.4 %, disocc_fill 6.6 %, nr_split=0 5.8 %)
+            printf("HOLE static %.2f%%, worst moving %.2f%% (limit %.1f) %s\n", hole0, holeMax, holeLim, hb ? "FAIL (edit missing in disoccluded bands: halos)" : "ok");
+            release(f); puts(bad ? "ALIGN FAIL (the shown edit is offset from the reference edit)" : hb ? "SEQ FAIL" : "SEQ PASS"); return bad || hb ? 9 : 0;
+        }
         // Sequence (a game-like camera): the source texture (argv[1], NR_TEST_SW x NR_TEST_SH, default the model size) bilinear-resampled to the
         // frame with a pan of NR_TEST_VX/VY frame px per frame (default 0.37, 0.13), TAA-like sub-pixel jitter (Halton 2,3, amplitude NR_TEST_JIT px,
         // default 0.25), per-pixel per-frame noise (relative sigma NR_TEST_NOISE, default 0.01) and optional bright specks (NR_TEST_SPECK value, 0 = none).

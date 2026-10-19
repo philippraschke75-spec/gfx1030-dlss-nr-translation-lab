@@ -73,6 +73,7 @@ def torch_ref(dll, W, H, ours_npy):
                 return res + (BLEND * torch.sigmoid(a)).clamp(0, 1) * (hp - res)
             pre_post.PreBlock.features, pre_post.PostBlock.forward = features, post_forward
             ref = run()
+    if os.environ.get('REF_OUT'): np.save(os.environ['REF_OUT'], ref)   # the reference image (H x W x 3) for side-by-side checks
     o = np.clip(np.load(ours_npy), 0, 1)
     if I > 1:   # dlssnr_nr.cpp boost(): luminance ratio ^ intensity (0.5..2x), peak channel brought back to max(1, peak of b) by one scalar
         wl = np.array([0.2126, 0.7152, 0.0722], np.float32); r = np.maximum(((o @ wl) + 1 / 512) / ((ci @ wl) + 1 / 512), 1e-6)[..., None]

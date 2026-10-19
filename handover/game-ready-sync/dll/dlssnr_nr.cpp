@@ -51,7 +51,7 @@ static int g_compose = 0; static float g_detail = 1.f;   // compose= add (0: the
 static float g_pass2Gain = 0.5f; static std::atomic<int> g_live{0}; static UINT g_hdrP0 = 0; static ID3D12Resource* g_hl = nullptr; static ID3D12Device* g_hlDev = nullptr; static ID3D12Resource* g_eRb = nullptr; static uint8_t* g_eRbp = nullptr; /* g_hl / g_eRb (HDR latch + its log readback) belong to g_hlDev */ static float g_hdrKey = 0.18f, g_hdrAdapt = 0.05f, g_hdrBias = 1.f, g_hdrExp = 0.f;   // OptiScaler "2 passes": a later pass (a second feature on pass 1's output) adds its edit at gain * pass2_gain
 static float g_mvK = 1.f; static unsigned g_dumpFrame = 0, g_dumpFrames = 1; static std::vector<DumpItem> g_dumpItems; static std::mutex g_dumpMu;   // dump_frame=N: frame_dump.h
 static float g_eT = 0.f, g_eL = 0.f; static int g_eFl = 0, g_dbg = 0; static float g_tS = 0.f, g_cS = 1.f, g_pw = 1.f;   // transfer_strength / color_strength / paper_white: RenoDX "Control-compatible color transfer" (kSyncHlsl rtx)   // edit_temporal (blend of the shown edit with the previous one, warped), edit_limit (cap vs local contrast), edit_warp bicubic (flag bit 2)
-static int g_hGate = 0, g_hCR = 1, g_hSeed = 1, g_hZp = 0;   /* history_pad reflect (NVIDIA) | zero (v0.4.3) */   // history_gate (colour gate, 0 = NVIDIA), history_filter catmull (NVIDIA) | bilinear, history_seed frame (NVIDIA) | 0
+static int g_fill = 1; static int g_hGate = 0, g_hCR = 1, g_hSeed = 1, g_hZp = 0;   /* history_pad reflect (NVIDIA) | zero (v0.4.3) */   // history_gate (colour gate, 0 = NVIDIA), history_filter catmull (NVIDIA) | bilinear, history_seed frame (NVIDIA) | 0
 static int g_split = 0, g_splitK[2] = {0, 0}; static int g_hist = 0; static float g_hLo = 0.08f, g_hHi = 0.25f;   // history=1: temporal history (previous NR output warped by the game's MVs) into the pre-block's +0x40, see handover/temporal-2026-10-11/DLL.md   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
 
 static void logf(const char* fmt, ...) {
@@ -100,6 +100,7 @@ static void loadSettings() {
     GetPrivateProfileStringA("nr", "mv_gate_hi", "0.25", b, sizeof b, narrow(ini).c_str()); g_mvHi = (float)atof(b);
     g_hist = (int)GetPrivateProfileIntA("nr", "history", 0, narrow(ini).c_str()); g_hist = g_hist < 0 ? 0 : g_hist > 2 ? 2 : g_hist;   // 1 = history into pre- and post-block, 2 = post-block lerp only (runtime hist_valid)
     g_hGate = (int)GetPrivateProfileIntA("nr", "history_gate", 0, narrow(ini).c_str());
+    g_fill = (int)GetPrivateProfileIntA("nr", "disocc_fill", 1, narrow(ini).c_str()) != 0;   // 1: fill the gated-out (disoccluded) part of a kept edit from its neighbours (halo fix); 0 = v0.4.5
     { char m[16]; GetPrivateProfileStringA("nr", "history_filter", "catmull", m, sizeof m, narrow(ini).c_str()); g_hCR = _stricmp(m, "bilinear") != 0; }
     { char m[16]; GetPrivateProfileStringA("nr", "history_seed", "frame", m, sizeof m, narrow(ini).c_str()); g_hSeed = _stricmp(m, "0") != 0; }
     { char m[16]; GetPrivateProfileStringA("nr", "history_pad", "reflect", m, sizeof m, narrow(ini).c_str()); g_hZp = _stricmp(m, "zero") == 0; }
@@ -354,25 +355,36 @@ static const char* kSyncHlsl =
 "    r += w[i].x * w[j].y * float3(f16tof32(u.x & 0xFFFF), f16tof32(u.x >> 16), f16tof32(u.y & 0xFFFF)); }\n"
 "  return r; }\n"
 "float3 jobE(float2 p) { return (tFl & 4) ? stCR(p, 256) : stAt(p, 256).rgb; }\n"
+// disocclusion fill (disocc_fill=1, tFl bit 256): where the colour / depth gate rejects the kept edit at its source p (the live pixel shows background the
+// edit's frame had covered: a thin object or an edge moved over it), v0.4.5 showed no edit there -> the raw frame in a band as wide as the motion since the
+// edit's frame: the bright "halo" beside cables / poles / roof edges under nr_split (and mv reuse). Fill: the gate-weighted mean of the kept edit on a ring of
+// 8 taps around p (radius 2, 4, 8, 16 model px x W/1280; the first ring with a match). No match (new content): no edit, as before. w0 > 0.99: unchanged.
+// Same bit: the gates compare the live colour over the model texel footprint (colAt, as imp made the network input) with the kept input, not one frame
+// pixel: a thin dark line (cable) is far darker in the frame than in the model input, so the point gate rejected the edit on every thin structure.
+"float gw(float3 l, float dn, float4 o) { float3 a = abs(l - o.rgb); float w = 1.0 - smoothstep(mLo, mHi, max(a.r, max(a.g, a.b)));\n"
+"  if (dFl & 1) w *= 1.0 - smoothstep(0.05, 0.2, abs(dn - o.a) / max(max(dn, o.a), 1e-6)); return w; }\n"
+"float3 fillE(float2 p, float3 l, float dn, float w0, float3 e0) {\n"
+"  if ((tFl & 256) == 0 || w0 > 0.99) return e0; float3 s = 0; float sw = 0, k = max(1.0, W / 1280.0);\n"
+"  for (int r = 0; r < 4 && sw < 0.5; r++) { s = 0; sw = 0; for (int i = 0; i < 8; i++) { float2 q = p + float2(cos(i * 0.7853982), sin(i * 0.7853982)) * (k * (2 << r));\n"
+"    if (any(q < 0.0) || any(q > float2(W, H))) continue; float w = gw(l, dn, stAt(q, 256 + W * H * 8)); s += w * stAt(q, 256).rgb; sw += w; } }\n"
+"  return e0 + (sw > 0.0 ? (1.0 - w0) * s / sw : 0.0); }\n"
 "float4 ld4(uint k, int2 q) { q = clamp(q, 0, int2(W - 1, H - 1)); uint2 u = st.Load2(256 + k * W * H * 8 + (q.y * W + q.x) * 8); return float4(f16tof32(u.x & 0xFFFF), f16tof32(u.x >> 16), f16tof32(u.y & 0xFFFF), f16tof32(u.y >> 16)); }\n"
 "[numthreads(8,8,1)] void tea(uint3 id : SV_DispatchThreadID) {\n"
 "  if (id.x >= W || id.y >= H) return; uint FW = FWH & 0xFFFF, FH = FWH >> 16; float2 uv = (id.xy + 0.5) / float2(W, H), pf = uv * float2(FW, FH); float3 e = 0, l, aM;\n"   // aM: the model input the edit belongs to (detail=)
-"  if (split != 0) { l = L(col[min((uint2)pf, uint2(FW - 1, FH - 1))]); aM = l; uint age = frame - st.Load(8);\n"
+"  if (split != 0) { l = L(col[min((uint2)pf, uint2(FW - 1, FH - 1))]); aM = l; uint age = frame - st.Load(8); float3 lg = (tFl & 256) ? colAt(pf).rgb : l;\n"
 "    if ((int)(st.Load(4) - minSeq) >= 0 && age != 0 && ((split & 8) != 0 || age == (split >> 4))) {\n"   // as exp's split branch, at this texel centre
 "      if (mvOn) { uint2 mn = uint2(mWH & 0xFFFF, mWH >> 16); pf += mot[uint2(mBase & 0xFFFF, mBase >> 16) + min((uint2)(uv * mn), mn - 1)].xy * float2(mvSx, mvSy); }\n"
 "      if (split & 2) pf += accAt(pf / float2(FW, FH), frame - 1) * float2(FW, FH);\n"
 "      if (split & 4) pf += slotAt(pf / float2(FW, FH), 5) * float2(FW, FH);\n"
-"      if (all(pf == pf) && all(pf >= 0.0) && all(pf < float2(FW, FH))) { float2 p = pf * float2(W, H) / float2(FW, FH); float4 o = stAt(p, 256 + W * H * 8); float3 a = abs(l - o.rgb);\n"
-"        float wt = 1.0 - smoothstep(mLo, mHi, max(a.r, max(a.g, a.b)));\n"
-"        if (dFl & 1) { float dn = depAt(uv); wt *= 1.0 - smoothstep(0.05, 0.2, abs(dn - o.a) / max(max(dn, o.a), 1e-6)); }\n"
-"        e = wt * jobE(p); aM = o.rgb; } } }\n"
-"  else if (st.Load(0) == 0) { l = L(col[min((uint2)pf, uint2(FW - 1, FH - 1))]); aM = l; uint age = frame - st.Load(8);\n"   // reuse frame (HIP busy / nr_every): the last captured edit, as exp's reuse branches take it
+"      if (all(pf == pf) && all(pf >= 0.0) && all(pf < float2(FW, FH))) { float2 p = pf * float2(W, H) / float2(FW, FH); float4 o = stAt(p, 256 + W * H * 8); float dn = depAt(uv), wt = gw(lg, dn, o);\n"
+"        e = fillE(p, lg, dn, wt, wt * jobE(p)); aM = o.rgb; } } }\n"
+"  else if (st.Load(0) == 0) { l = L(col[min((uint2)pf, uint2(FW - 1, FH - 1))]); aM = l; uint age = frame - st.Load(8); float3 lg = (tFl & 256) ? colAt(pf).rgb : l;\n"   // reuse frame (HIP busy / nr_every): the last captured edit, as exp's reuse branches take it
 "    if (minSeq != 0 && (int)(st.Load(4) - minSeq) >= 0 && age <= maxAge) {\n"
 "      if (tFl & 16) { uint2 mn = uint2(mWH & 0xFFFF, mWH >> 16); pf += mot[uint2(mBase & 0xFFFF, mBase >> 16) + min((uint2)(uv * mn), mn - 1)].xy * float2(mvSx, mvSy); }\n"   // ponytail: one frame of vectors, as mv reuse (exact for age 1)
-"      if (all(pf == pf) && all(pf >= 0.0) && all(pf < float2(FW, FH))) { float2 p = pf * float2(W, H) / float2(FW, FH); float4 o = stAt(p, 256 + W * H * 8); float3 a = abs(l - o.rgb); float g = max(a.r, max(a.g, a.b));\n"
+"      if (all(pf == pf) && all(pf >= 0.0) && all(pf < float2(FW, FH))) { float2 p = pf * float2(W, H) / float2(FW, FH); float4 o = stAt(p, 256 + W * H * 8); float3 a = abs(lg - o.rgb); float g = max(a.r, max(a.g, a.b));\n"
 "        float wt = (tFl & 16) ? 1.0 - smoothstep(mLo, mHi, g) : gate ? 1.0 - smoothstep(gLo, gHi, g) : 1.0;\n"
 "        if ((tFl & 16) && (dFl & 1)) { float dn = depAt(uv); wt *= 1.0 - smoothstep(0.05, 0.2, abs(dn - o.a) / max(max(dn, o.a), 1e-6)); }\n"
-"        e = wt * jobE(p) * ((tFl & 16) ? 1.0 : 1.0 - (float)age / (maxAge + 1)); aM = o.rgb; } } }\n"   // unwarped (fg branch): fades with age
+"        e = (tFl & 16) ? fillE(p, lg, depAt(uv), wt, wt * jobE(p)) : wt * jobE(p) * (1.0 - (float)age / (maxAge + 1)); aM = o.rgb; } } }\n"   // unwarped (fg branch): fades with age
 "  else { float4 i = bil(id.xy + 0.5, 0); l = i.rgb; aM = l; e = sn(sty(bil(id.xy + 0.5, outOff)) - i).rgb; }\n"   // full NR frame: out - in
 "  uint o = (id.y * W + id.x) * 8; st.Store2(256 + 6 * W * H * 8 + o, uint2(pk(e.r, e.g), pk(e.b, dot(l, float3(0.2126, 0.7152, 0.0722)))));\n"
 "  st.Store2(256 + 9 * W * H * 8 + o, uint2(pk(aM.r, aM.g), pk(aM.b, 0))); }\n"
@@ -406,10 +418,9 @@ static const char* kSyncHlsl =
 "    if (split & 2) pf += accAt(pf / float2(FW, FH), frame - 1) * float2(FW, FH);\n"
 "    if (split & 4) pf += slotAt(pf / float2(FW, FH), 5) * float2(FW, FH);\n"
 "    if (!all(pf == pf) || any(pf < 0.0) || any(pf >= float2(FW, FH))) { return c; }\n"   // from off screen: live frame
-"    float2 p = pf * float2(W, H) / float2(FW, FH); float3 e = stAt(p, 256).rgb; float4 o = stAt(p, 256 + W * H * 8); float3 a = abs(L(c) - o.rgb);\n"
-"    float wt = 1.0 - smoothstep(mLo, mHi, max(a.r, max(a.g, a.b)));\n"   // colour gate as mv reuse
-"    if (dFl & 1) { float dn = depAt(uv); wt *= 1.0 - smoothstep(0.05, 0.2, abs(dn - o.a) / max(max(dn, o.a), 1e-6)); }\n"
-"    { ta = o.rgb; td = gain * wt * e; tk = 1; return float4(cmp(c, cm ? ced(L(c), o.rgb, o.rgb + wt * e, gain) : gain * wt * e), c.a); } }\n"
+"    float2 p = pf * float2(W, H) / float2(FW, FH); float4 o = stAt(p, 256 + W * H * 8); float3 lg = (tFl & 256) ? colAt(id + 0.5).rgb : L(c); float dn = depAt(uv), wt = gw(lg, dn, o);\n"   // colour + depth gate as mv reuse
+"    float3 we = fillE(p, lg, dn, wt, wt * stAt(p, 256).rgb);\n"
+"    { ta = o.rgb; td = gain * we; tk = 1; return float4(cmp(c, cm ? ced(L(c), o.rgb, o.rgb + we, gain) : gain * we), c.a); } }\n"
 "  if (st.Load(0) == 0) {\n"
 "    if (tFl & 1) { td = gain * tE(id); tk = 2; return float4(cmp(c, tSe(id, c)), c.a); }\n"   // reuse frame with edit stabilisation: tea took the reused edit, teb blended it
 "    uint age = frame - st.Load(8);\n"   // fg: frames since the edit's own frame; older than maxAge -> live frame only
@@ -417,10 +428,9 @@ static const char* kSyncHlsl =
 "      uint2 mn = uint2(mWH & 0xFFFF, mWH >> 16); float2 uv = (id + 0.5) / float2(FW, FH);\n"
 "      float2 pf = id + 0.5 + mot[uint2(mBase & 0xFFFF, mBase >> 16) + min((uint2)(uv * mn), mn - 1)].xy * float2(mvSx, mvSy);\n"
 "      if (any(pf < 0.0) || any(pf >= float2(FW, FH))) { return c; }\n"   // came from off screen: live frame
-"      float2 p = pf * float2(W, H) / float2(FW, FH); float3 e = stAt(p, 256).rgb; float4 o = stAt(p, 256 + W * H * 8); float3 a = abs(L(c) - o.rgb);\n"
-"      float wt = 1.0 - smoothstep(mLo, mHi, max(a.r, max(a.g, a.b)));\n"   // colour gate: live vs the edit's own input at the source
-"      if (dFl & 1) { float dn = depAt(uv); wt *= 1.0 - smoothstep(0.05, 0.2, abs(dn - o.a) / max(max(dn, o.a), 1e-6)); }\n"   // depth gate (relative); ponytail: fixed thresholds, add ini keys if a game needs them
-"      { ta = o.rgb; td = gain * wt * e; tk = 1; return float4(cmp(c, cm ? ced(L(c), o.rgb, o.rgb + wt * e, gain) : gain * wt * e), c.a); } }\n"
+"      float2 p = pf * float2(W, H) / float2(FW, FH); float4 o = stAt(p, 256 + W * H * 8); float3 lg = (tFl & 256) ? colAt(id + 0.5).rgb : L(c); float dn = depAt(uv), wt = gw(lg, dn, o);\n"   // colour gate (live vs the edit's own input at the source) x depth gate (relative); ponytail: fixed thresholds, add ini keys if a game needs them
+"      float3 we = fillE(p, lg, dn, wt, wt * stAt(p, 256).rgb);\n"
+"      { ta = o.rgb; td = gain * we; tk = 1; return float4(cmp(c, cm ? ced(L(c), o.rgb, o.rgb + we, gain) : gain * we), c.a); } }\n"
 "    if (minSeq != 0 && (int)(st.Load(4) - minSeq) >= 0 && age <= maxAge) { float2 p0 = (id + 0.5) * float2(W, H) / float2(FW, FH);\n"   // fg: live frame + last NR edit
 "      float2 p = clamp(p0 - 0.5, 0.0, float2(W - 1, H - 1)); uint2 a = (uint2)p; uint2 b = min(a + 1, uint2(W - 1, H - 1)); float2 t = p - a; float3 e[4]; uint2 ix[4] = { a, uint2(b.x, a.y), uint2(a.x, b.y), b };\n"
 "      for (int i = 0; i < 4; i++) { uint2 q = st.Load2(256 + (ix[i].y * W + ix[i].x) * 8); e[i] = float3(f16tof32(q.x & 0xFFFF), f16tof32(q.x >> 16), f16tof32(q.y & 0xFFFF));\n"
@@ -1059,7 +1069,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             const bool teOn = s->tea && s->teb && (sp || w != F->W || h != F->H); memcpy(&cb[41], &g_eT, 4); memcpy(&cb[42], &g_eL, 4);   // edit stabilisation: split or resampled full-NR path
             memcpy(&cb[44], &g_tS, 4); memcpy(&cb[45], &g_cS, 4); memcpy(&cb[46], &g_pw, 4);
             cb[43] = teOn ? 1u | (UINT)g_eFl | (s->teFrm + 1 == s->frm && reset != 1 ? 8u : 0u) | (mvBound ? 16u : 0u) : 0u; cb[47] = sp ? s->jobSeq : 0u; cb[48] = (UINT)g_dbg;
-            if (g_hCR) cb[43] |= 64u; if (g_hZp) cb[43] |= 128u;   // history_filter=catmull, history_pad=zero (hwp); bits 1/4/8/16 are edit stabilisation
+            if (g_hCR) cb[43] |= 64u; if (g_hZp) cb[43] |= 128u; if (g_fill) cb[43] |= 256u;   // history_filter=catmull, history_pad=zero (hwp); bits 1/4/8/16 are edit stabilisation
             if (!g_hGate) { const float big[2] = {1e30f, 2e30f}; memcpy(&cb[28], big, 8); }   // history_gate=0 (NVIDIA): no colour gate
             { const float sy = F->appliedCond[0], sT = F->appliedCond[1]; cb[49] = sy == 1.f || sy == 2.f ? (UINT)sy : 0u; memcpy(&cb[50], &sT, 4); }   // style grade (sty) with the conditioning the runtime got
             ID3D12DescriptorHeap* hp[] = { s->heap }; cmd->SetDescriptorHeaps(1, hp); cmd->SetComputeRootSignature(s->rs);
