@@ -100,7 +100,7 @@ static void loadSettings() {
     GetPrivateProfileStringA("nr", "mv_gate_hi", "0.25", b, sizeof b, narrow(ini).c_str()); g_mvHi = (float)atof(b);
     g_hist = (int)GetPrivateProfileIntA("nr", "history", 0, narrow(ini).c_str()); g_hist = g_hist < 0 ? 0 : g_hist > 2 ? 2 : g_hist;   // 1 = history into pre- and post-block, 2 = post-block lerp only (runtime hist_valid)
     g_hGate = (int)GetPrivateProfileIntA("nr", "history_gate", 0, narrow(ini).c_str());
-    g_fill = (int)GetPrivateProfileIntA("nr", "disocc_fill", 1, narrow(ini).c_str()) != 0;   // 1: fill the gated-out (disoccluded) part of a kept edit from its neighbours (halo fix); 0 = v0.4.5
+    g_fill = (int)GetPrivateProfileIntA("nr", "halo_fix", 1, narrow(ini).c_str()) != 0;   // halo_fix=1 (nr_split / mv reuse halos and ghost copies): disocclusion fill + footprint gate, job-frame depth, aged split history post-lerp only; 0 = v0.4.5
     { char m[16]; GetPrivateProfileStringA("nr", "history_filter", "catmull", m, sizeof m, narrow(ini).c_str()); g_hCR = _stricmp(m, "bilinear") != 0; }
     { char m[16]; GetPrivateProfileStringA("nr", "history_seed", "frame", m, sizeof m, narrow(ini).c_str()); g_hSeed = _stricmp(m, "0") != 0; }
     { char m[16]; GetPrivateProfileStringA("nr", "history_pad", "reflect", m, sizeof m, narrow(ini).c_str()); g_hZp = _stricmp(m, "zero") == 0; }
@@ -318,12 +318,17 @@ static const char* kSyncHlsl =
 "    uint2 a = (uint2)q; uint2 b = min(a + 1, uint2(FW - 1, FH - 1)); float2 t = q - a;\n"
 "    r += lerp(lerp(ld(col[a]), ld(col[uint2(b.x, a.y)]), t.x), lerp(ld(col[uint2(a.x, b.y)]), ld(col[b]), t.x), t.y); }\n"
 "  return r * 0.25; }\n"
+"float depAt(float2 uv);\n"
+// tFl bit 512 (nr_split): imp keeps this (the job's) frame depth in st slot 10; cap / hst stamp the finished job's input / P with it. They run N-1 frames
+// later, and the depth bound then is that later frame's: the disocclusion gates of the split edit and of the history compared against depth
+// N-1 frames newer than the content (a cable that moved away left sky depth under its old image -> its stale edit / history passed: ghost copies).
+"float jobDep(uint2 q) { return (tFl & 512) ? asfloat(st.Load(256 + 10 * W * H * 8 + (q.y * W + q.x) * 4)) : depAt((q + 0.5) / float2(W, H)); }\n"
 "[numthreads(8,8,1)] void imp(uint3 id : SV_DispatchThreadID) {\n"
 "  if (id.x >= W || id.y >= H) return; uint FW = FWH & 0xFFFF, FH = FWH >> 16;\n"
 "  float4 c = (FW == W && FH == H) ? ld(col[id.xy]) : colAt((id.xy + 0.5) * float2(FW, FH) / float2(W, H));\n"   // frame == model size: clamped as the resampled path (raw > 1 input made block artifacts)
 "  if ((hdrM & 3) == 1 || (hdrM & 3) == 2) { float3 r = sn(col[min((uint2)((id.xy + 0.5) * float2(FW, FH) / float2(W, H)), uint2(FW - 1, FH - 1))]).rgb; if ((hdrM & 3) == 2 && max(r.r, max(r.g, r.b)) > 1.0) st.InterlockedAdd(20, 1);\n"
 "    if (((id.x | id.y) & 7) == 0) { st.InterlockedAdd(24, (uint)(int)round(clamp(log2(max(dot(r, float3(0.2126, 0.7152, 0.0722)), 1e-6)), -12.0, 12.0) * 256.0)); st.InterlockedAdd(28, 1); } }\n"   // auto: scene-linear HDR evidence (an LDR frame has a few % of specks above 1, HDR much more)
-"  io.Store2((id.y * W + id.x) * 8, uint2(pk(c.r, c.g), pk(c.b, c.a))); }\n"
+"  io.Store2((id.y * W + id.x) * 8, uint2(pk(c.r, c.g), pk(c.b, c.a))); if (tFl & 512) st.Store(256 + 10 * W * H * 8 + (id.y * W + id.x) * 4, asuint(depAt((id.xy + 0.5) / float2(W, H)))); }\n"
 "[numthreads(1,1,1)] void lat() { if ((hdrM & 3) == 2) { if (st.Load(20) >= (hdrM >> 2)) st.Store(16, 1u); st.Store(20, 0u); hl.Store(0, st.Load(16)); }\n"
 "  uint n = st.Load(28); float e = asfloat(hl.Load(4)); if (n) { float t = clamp(hkb * exp2(-(float)(int)st.Load(24) / (256.0 * n)), 1.0 / 1024.0, 16.0); e = e > 0.0 ? exp2(lerp(log2(e), log2(t), hA)) : t; }\n"
 "  st.Store(24, 0u); st.Store(28, 0u); hl.Store(4, asuint(e)); }\n"   // hdr_mode auto: latch HDR at the start of a frame (sticky for the feature)
@@ -342,7 +347,7 @@ static const char* kSyncHlsl =
 "[numthreads(8,8,1)] void cap(uint3 id : SV_DispatchThreadID) {\n"   // fg: keep the NR edit (out - in, model size) of a finished frame at st+256
 "  if (id.x >= W || id.y >= H || st.Load(0) == 0) return; uint o = (id.y * W + id.x) * 8;\n"
 "  float4 i = bil(id.xy + 0.5, 0), d = sn(sty(bil(id.xy + 0.5, outOff)) - i); st.Store2(256 + o, uint2(pk(d.r, d.g), pk(d.b, 0)));\n"
-"  st.Store2(256 + W * H * 8 + o, uint2(pk(i.r, i.g), pk(i.b, depAt((id.xy + 0.5) / float2(W, H)))));\n"   // + the model input the edit belongs to (motion gate) and its depth
+"  st.Store2(256 + W * H * 8 + o, uint2(pk(i.r, i.g), pk(i.b, jobDep(id.xy))));\n"   // + the model input the edit belongs to (motion gate) and its depth
 "  if (id.x == 0 && id.y == 0) { st.Store(4, seq); st.Store(8, frame); } }\n"
 "float2 accAt(float2 q, uint f); float2 slotAt(float2 q, uint k);\n"
 // ---- edit stabilisation (edit_temporal / edit_limit / edit_warp, tFl bit0 on). tea: the edit exp would show, at model texel centres
@@ -355,7 +360,7 @@ static const char* kSyncHlsl =
 "    r += w[i].x * w[j].y * float3(f16tof32(u.x & 0xFFFF), f16tof32(u.x >> 16), f16tof32(u.y & 0xFFFF)); }\n"
 "  return r; }\n"
 "float3 jobE(float2 p) { return (tFl & 4) ? stCR(p, 256) : stAt(p, 256).rgb; }\n"
-// disocclusion fill (disocc_fill=1, tFl bit 256): where the colour / depth gate rejects the kept edit at its source p (the live pixel shows background the
+// disocclusion fill (halo_fix=1, tFl bit 256): where the colour / depth gate rejects the kept edit at its source p (the live pixel shows background the
 // edit's frame had covered: a thin object or an edge moved over it), v0.4.5 showed no edit there -> the raw frame in a band as wide as the motion since the
 // edit's frame: the bright "halo" beside cables / poles / roof edges under nr_split (and mv reuse). Fill: the gate-weighted mean of the kept edit on a ring of
 // 8 taps around p (radius 2, 4, 8, 16 model px x W/1280; the first ring with a match). No match (new content): no edit, as before. w0 > 0.99: unchanged.
@@ -462,7 +467,7 @@ static const char* kSyncHlsl =
 "  if (id.x == 0 && id.y == 0) st.Store(12, ok ? frame : 0u);\n"   // frame whose output is kept (0 = none)
 "  if (ok == 0) return; uint2 r = io.Load2(outOff + (id.y * W + id.x) * 8);\n"
 "  float3 p = Pf(float3(san(f16tof32(r.x & 0xFFFF)), san(f16tof32(r.x >> 16)), san(f16tof32(r.y & 0xFFFF))));\n"
-"  st.Store2(256 + 2 * W * H * 8 + (id.y * W + id.x) * 8, uint2(pk(p.r, p.g), pk(p.b, depAt((id.xy + 0.5) / float2(W, H))))); }\n"
+"  st.Store2(256 + 2 * W * H * 8 + (id.y * W + id.x) * 8, uint2(pk(p.r, p.g), pk(p.b, jobDep(id.xy)))); }\n"
 "float2 slotAt(float2 q, uint k) {\n"   // nearest fetch of a model-size uv offset field in st slot k (3, 4: acc ping-pong by frame parity, 5: split anchor)
 "  uint2 p = (uint2)clamp(q * float2(W, H), 0.0, float2(W - 1, H - 1)); return asfloat(st.Load2(256 + k * W * H * 8 + (p.y * W + p.x) * 8)); }\n"
 "float2 accAt(float2 q, uint f) { return slotAt(q, 3 + (f & 1)); }\n"   // frame f's accumulated uv offset to the last NR frame
@@ -697,7 +702,7 @@ static Sync* makeSync(Feature* F) {
     const UINT64 n = (UINT64)F->W * F->H * 8, a = (n + 65535) & ~65535ull;
     s->outOff = a; s->flagOff = 2 * a; s->ioSize = 2 * a + 65536; s->sigSize = 65536;
     if (g_hist) { const UINT64 hb = ((UINT64)((F->W + 64 + 127) & ~127u) * ((F->H + 64 + 127) & ~127u) * 12 + 65535) & ~65535ull; s->histOff = s->ioSize; s->histOut = s->ioSize + hb; s->ioSize += 2 * hb; }   // + history slot (PAD_W x PAD_H RGB32F; PAD can exceed the 128-aligned size (1280x720 -> 1344x768): +64 margin, checked by nr_ext_history)
-    s->io = sharedBuffer(d, s->ioSize, D3D12_HEAP_FLAG_SHARED, &s->ioAlloc); s->sig = sharedBuffer(d, s->sigSize, D3D12_HEAP_FLAG_SHARED, &s->sigAlloc); s->st = sharedBuffer(d, 256 + (g_eT > 0.f || g_eL > 0.f ? 10 : g_split ? 6 : g_hist ? 5 : 2) * n, D3D12_HEAP_FLAG_NONE, nullptr);   // status words | fg edit | its model input (half4, model size each) | ... | edit stabilisation: 6 tea, 7/8 teb, 9 model input of the edit
+    s->io = sharedBuffer(d, s->ioSize, D3D12_HEAP_FLAG_SHARED, &s->ioAlloc); s->sig = sharedBuffer(d, s->sigSize, D3D12_HEAP_FLAG_SHARED, &s->sigAlloc); s->st = sharedBuffer(d, 256 + (g_split ? 11 : g_eT > 0.f || g_eL > 0.f ? 10 : g_hist ? 5 : 2) * n, D3D12_HEAP_FLAG_NONE, nullptr);   // status words | fg edit | its model input (half4, model size each) | ... | edit stabilisation: 6 tea, 7/8 teb, 9 model input of the edit
     if (!s->io || !s->sig || !s->st) { logf("sync: cannot create shared buffers"); freeSync(s); return nullptr; }
     if (FAILED(d->CreateSharedHandle(s->io, nullptr, GENERIC_ALL, nullptr, &s->hIo)) || FAILED(d->CreateSharedHandle(s->sig, nullptr, GENERIC_ALL, nullptr, &s->hSig))) { logf("sync: CreateSharedHandle failed"); freeSync(s); return nullptr; }
     D3D12_DESCRIPTOR_RANGE rg[2] = {}; rg[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; rg[0].NumDescriptors = 3; rg[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; rg[1].NumDescriptors = 1; rg[1].OffsetInDescriptorsFromTableStart = 3;   // colour, motion, depth | output
@@ -1019,7 +1024,9 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             const unsigned seq = s->seq + 1; ++s->frm; const unsigned accF0 = s->accFrm, accT0 = s->accTo; const unsigned age = s->frm - s->lastNrFrm; const unsigned chain = reset != 1 && (age == 1 || (age <= 8 && s->accFrm + 1 == s->frm)) ? age : 0, histOk = s->histOn ? chain : 0;   // frames since the last NR output; > 1 needs an unbroken offset chain (acc) over the in-between frames
             const bool reuseOn = true;   // cap the edit on every NR frame: busy frames (and spin timeouts) reuse it   // cap the edit on NR frames, reuse it on the others
             const bool skip = g_nrEvery > 1 && reset != 1 && s->sinceNr + 1 < (unsigned)g_nrEvery && (int)(s->seq - s->minSeq) >= 0;   // nr_every: reuse frame (an edit since the last reset exists)
-            auto enq = [&] { return sp ? p_extEnqueue3(F->ctx, seq, g_maxInflight, s->part == 0 && histOk ? g_hist : 0, (int)s->part + 1) : skip ? 1 : (s->histOn ? p_extEnqueue2(F->ctx, seq, g_maxInflight, histOk ? g_hist : 0) : p_extEnqueue(F->ctx, seq, g_maxInflight)); };   // HIP: wait flag_in >= seq, run, flag_out = seq (queued now, runs when the list below executes)
+            // nr_split + halo_fix: history older than one frame goes to the post-block lerp only (hist_valid 2). In the pre-block input lanes the
+            // N-frame-old warped history made the network draw ghost copies of thin moving objects (FO4 dump: 540p HOLE 14 % -> 1.2 %).
+            auto enq = [&] { return sp ? p_extEnqueue3(F->ctx, seq, g_maxInflight, s->part == 0 && histOk ? (g_fill && g_hist == 1 && histOk > 1 ? 2 : g_hist) : 0, (int)s->part + 1) : skip ? 1 : (s->histOn ? p_extEnqueue2(F->ctx, seq, g_maxInflight, histOk ? g_hist : 0) : p_extEnqueue(F->ctx, seq, g_maxInflight)); };   // HIP: wait flag_in >= seq, run, flag_out = seq (queued now, runs when the list below executes)
             int q = enq();
             // busy_mode=wait: HIP slots free up when the ext thread finishes a job of an EARLIER, already submitted list (or drops it after its own 500 ms
             // flag_in bound), never through the list we are recording -> a bounded CPU wait cannot deadlock. It throttles the game to the network rate.
@@ -1069,7 +1076,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             const bool teOn = s->tea && s->teb && (sp || w != F->W || h != F->H); memcpy(&cb[41], &g_eT, 4); memcpy(&cb[42], &g_eL, 4);   // edit stabilisation: split or resampled full-NR path
             memcpy(&cb[44], &g_tS, 4); memcpy(&cb[45], &g_cS, 4); memcpy(&cb[46], &g_pw, 4);
             cb[43] = teOn ? 1u | (UINT)g_eFl | (s->teFrm + 1 == s->frm && reset != 1 ? 8u : 0u) | (mvBound ? 16u : 0u) : 0u; cb[47] = sp ? s->jobSeq : 0u; cb[48] = (UINT)g_dbg;
-            if (g_hCR) cb[43] |= 64u; if (g_hZp) cb[43] |= 128u; if (g_fill) cb[43] |= 256u;   // history_filter=catmull, history_pad=zero (hwp); bits 1/4/8/16 are edit stabilisation
+            if (g_hCR) cb[43] |= 64u; if (g_hZp) cb[43] |= 128u; if (g_fill) cb[43] |= 256u; if (g_fill && sp) cb[43] |= 512u;   // history_filter=catmull, history_pad=zero (hwp); bits 1/4/8/16 are edit stabilisation
             if (!g_hGate) { const float big[2] = {1e30f, 2e30f}; memcpy(&cb[28], big, 8); }   // history_gate=0 (NVIDIA): no colour gate
             { const float sy = F->appliedCond[0], sT = F->appliedCond[1]; cb[49] = sy == 1.f || sy == 2.f ? (UINT)sy : 0u; memcpy(&cb[50], &sT, 4); }   // style grade (sty) with the conditioning the runtime got
             ID3D12DescriptorHeap* hp[] = { s->heap }; cmd->SetDescriptorHeaps(1, hp); cmd->SetComputeRootSignature(s->rs);

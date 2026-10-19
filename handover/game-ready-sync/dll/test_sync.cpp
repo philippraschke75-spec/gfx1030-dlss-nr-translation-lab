@@ -457,7 +457,7 @@ int main(int argc, char** argv) {
                     memcpy(upp + (size_t)y * pitch + x * 8, h4, 8); const uint16_t hv[2] = { f2h(mot[i * 2]), f2h(mot[i * 2 + 1]) }; memcpy(mvp + (size_t)y * gpitch + x * 4, hv, 4); memcpy(dpp + (size_t)y * gpitch + x * 4, &dep[i], 4); }
                 const int r = frame(k, true, &ms); if (r != 1) { printf("FAIL frame %d: evaluate returned %d\n", k, r); return 7; }
                 for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { uint16_t o[4]; memcpy(o, rbp + (size_t)y * opitch + x * 8, 8); for (int c = 0; c < 3; c++) { const double v = h2f(o[c]); fo[((size_t)y * W + x) * 3 + c] = v == v && v < 1e8 ? (float)v : 0.f; } }
-                if (getenv("NR_TEST_SEQOUT")) { char fn[1024]; snprintf(fn, sizeof fn, "%s_f%d.bin", getenv("NR_TEST_SEQOUT"), k); FILE* df = fopen(fn, "wb"); if (df) { fwrite(fo.data(), 4, fo.size(), df); fclose(df); } }
+                if (getenv("NR_TEST_SEQOUT") && *getenv("NR_TEST_SEQOUT")) { char fn[1024]; snprintf(fn, sizeof fn, "%s_f%d.bin", getenv("NR_TEST_SEQOUT"), k); FILE* df = fopen(fn, "wb"); if (df) { fwrite(fo.data(), 4, fo.size(), df); fclose(df); } }
                 if (k < warm - 1) continue;   // measured: the last static frame and every moving one
                 auto cl01 = [](float v) { return v == v ? std::min(std::max(v, 0.f), 1.f) : 0.f; };
                 down([&](UINT x, UINT y, int c) { return cl01(col[((size_t)y * W + x) * 4 + c]); }, ci);
