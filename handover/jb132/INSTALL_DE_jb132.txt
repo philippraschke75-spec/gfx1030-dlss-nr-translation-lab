@@ -1,0 +1,33 @@
+DLSS 5 (RDNA2-Port v0.4.5) mit janblades OptiScaler F5 v0.1.32 - Installation
+==========================================================================
+
+Was ist drin?
+- OptiScaler.dll, OptiScaler.ini, OptiScaler\, setup_windows.bat ... = janblades OptiScaler F5 v0.1.32 (unveraendert, GPL-3)
+  -> neues NR-Menue: Optical F5Low, Status & Presets, NR Options/Input/Output, Passes & Colour, Compare & Debug.
+- nvngx.dll_dlssnr.dll + nr_runtime.dll + nr_data\ + nr_port.ini + presets\ = UNSER Netz (RDNA2/HIP).
+  Im Menue steht dann "Model backend: vendor-neutral port" (das zeigt OptiScaler fuer jede Port-DLL an;
+  unser Log heisst dlssnr_nr.log, janblades eigener Port schreibt nr_port.log).
+- Optional\nvngx.dll_dlssnr.dll.janblade-ngx-forwarder = janblades Original-Forwarder (nur fuer NVIDIA-Karten).
+
+NICHT dabei: nvngx_dlssnr.dll (NVIDIA-Modell). Am besten 310.9.16 (neues kleines Modell, schneller).
+
+Installation
+1. Spiel und Launcher schliessen. Ordner mit der Spiel-.exe oeffnen. Vorhandene dxgi.dll / OptiScaler.ini sichern.
+2. ALLE Dateien aus diesem Ordner dorthin kopieren.
+3. nvngx_dlssnr.dll (310.9.16) in denselben Ordner legen.
+4. setup_windows.bat ausfuehren (meist "dxgi.dll" waehlen).
+5. Spiel starten, im Spiel DLSS/FSR/XeSS einschalten, Taste Einfg (Insert) -> Neural Rendering.
+
+Bedienung
+- Look-Presets (Native, Natural, Cinematic, Detail only, Faces, Painterly, Soft canvas, Structure),
+  Intensity, Style, Local structure/tone, Skin structure, Auto skin mask: wirken auf unser Netz.
+- Passes 1/2/3: jeder Pass ist ein eigener Netz-Durchlauf (2 Passes = doppelte Kosten). Pass-Preset A = altes
+  grosses Modell, B = neues kleines Modell (nur 310.9), Default = klein.
+- Pre-SR / Post-SR und WorkingScale: bestimmen die Bildgroesse. Unser Netz waehlt dazu die naechste
+  Netz-Aufloesung bis 1280x720 (nr_port.ini model_res=auto). Fest einstellen: model_res=1280x720 oder 960x540.
+- NICHT ueber das Menue steuerbar (nur nr_port.ini): history, edit_temporal, nr_split, vit_every, hdr_*,
+  compose/detail, transfer_strength, intensity_rule. Der Menuepunkt "Reuse bottleneck"/VitEvery wirkt nur auf
+  NVIDIA - bei uns heisst das vit_every in nr_port.ini.
+
+Deinstallation: Uninstall_DLSS5.bat bzw. die von setup_windows.bat erzeugte Deinstallation, dann Backup zurueck.
+Probleme: dlssnr_nr.log und OptiScaler.log mitschicken.

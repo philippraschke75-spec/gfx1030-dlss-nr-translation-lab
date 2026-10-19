@@ -1,0 +1,15 @@
+jb132 (2026-10-19): v0.4.5-rc runtime as the NR backend of janblade OptiScaler F5 v0.1.32. Package: E:\dlss-runtime\build_jb132.
+
+Hook: v0.1.32 loads nvngx.dll_dlssnr.dll beside OptiScaler.dll (or the exe) and calls the same exports as v0.1.16
+(dlssnr_call_create / dlssnr_call_evaluate_v2 / dlssnr_call_release, identical signatures). dlssnr_backend_id present
+=> "Model backend: vendor-neutral port" (same label for janblade's closed port and ours). No OptiScaler rebuild needed.
+
+Bench, RX 6900 XT, nvngx_dlssnr.dll 310.9.16 small model (CC_SMALL), same harness nrbench.cpp (D3D12 timestamps around
+evaluate_v2; ours waits for port state 5 + 10 warm-up frames; our list spins until the HIP job is done):
+  1280x720  janblade port (Optional zip, nr_port.ini as shipped: vit_every=2, dml=1): median 19.42 / mean 21.02 ms
+  1280x720  ours vit_every=2: median 10.76 / mean 12.75 ms     ours vit_every=1: median 15.53 / mean 15.55 ms
+  1600x900  janblade 30.28 ms;  960x540 janblade 11.24 ms
+  nr_bench (runtime only, ours): 720p ve1 14.31, ve2 11.04; 540p ve1 9.23; 1080p ve1 28.47 ms
+
+test_sync: strict 1280x720 small model 60/60 matched PASS. 2 passes, frame 1600x900, package ini (model_res=auto -> 720):
+runs, flicker x0.93 of input.

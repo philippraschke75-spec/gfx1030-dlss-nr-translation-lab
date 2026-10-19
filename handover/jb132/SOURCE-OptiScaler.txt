@@ -1,0 +1,5 @@
+OptiScaler.dll, OptiScaler.ini, OptiScaler\, setup_windows.bat, setup_linux.sh, docs\, Licenses\, redist\ and
+Optional\nvngx.dll_dlssnr.dll.janblade-ngx-forwarder are janblade's OptiScaler F5 v0.1.32 release, unmodified
+(GPL-3, see LICENSE). Source: https://github.com/janblade/OptiScaler-F5-DLSSNR-Multipass/tree/v0.1.32
+Only OptiScaler.ini was changed: Dx11Upscaler=ffx_12, FGOutput=nofg, LogToFile=true, LogLevel=2, [DlssNr] Enabled=true.
+nvngx.dll_dlssnr.dll, nr_runtime.dll, nr_data\, nr_port.ini, presets\ = our RDNA2 port v0.4.5 (branch jb132).
