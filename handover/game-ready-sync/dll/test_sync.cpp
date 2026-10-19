@@ -483,8 +483,8 @@ int main(int argc, char** argv) {
                     char b[96]; snprintf(b, sizeof b, " q%d %+d,%+d (r %.3f, at 0,0 %.3f)", qd, bx, by, best, r0); sh += b; fr_bad |= (bx || by) && best > r0 + 0.01; }
                 bad += fr_bad;
                 printf("SEQ k %d (f%d): shown edit vs reference edit of the same frame: mean |diff| %.5f, reference |edit| %.5f, HOLE %.2f%% | ALIGN%s%s\n", k, fr, pe / em.size(), re / em.size(), hole, sh.c_str(), fr_bad ? " MISALIGNED" : ""); }
-            const double holeLim = getenv("NR_TEST_HOLEMAX") ? atof(getenv("NR_TEST_HOLEMAX")) : 8.0; const bool hb = holeMax > holeLim;   // HOLE: at most 8 % of the edited flat px may lose the edit (FO4 dump at 720p: v0.4.5 nr_split=3 12.4 %, disocc_fill 6.6 %, nr_split=0 5.8 %)
-            printf("HOLE static %.2f%%, worst moving %.2f%% (limit %.1f) %s\n", hole0, holeMax, holeLim, hb ? "FAIL (edit missing in disoccluded bands: halos)" : "ok");
+            const double holeLim = getenv("NR_TEST_HOLEMAX") ? atof(getenv("NR_TEST_HOLEMAX")) : 6.0; const bool hb = holeMax > hole0 + holeLim;   // HOLE: moving frames may lose the edit on at most 6 points more of the edited flat px than the static frame (FO4 dump, v0.4.3/4 nr_split presets: +6.5..+18.6 without halo_fix, <= +2.3 with it; the static share is history weakening the edit, not a halo)
+            printf("HOLE static %.2f%%, worst moving %.2f%% (limit static + %.1f) %s\n", hole0, holeMax, holeLim, hb ? "FAIL (edit missing in disoccluded bands: halos)" : "ok");
             release(f); puts(bad ? "ALIGN FAIL (the shown edit is offset from the reference edit)" : hb ? "SEQ FAIL" : "SEQ PASS"); return bad || hb ? 9 : 0;
         }
         // Sequence (a game-like camera): the source texture (argv[1], NR_TEST_SW x NR_TEST_SH, default the model size) bilinear-resampled to the
