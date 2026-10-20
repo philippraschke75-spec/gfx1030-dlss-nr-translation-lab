@@ -165,6 +165,7 @@ def native_candidates(op, A, C, grid):
     if op == 'var':
         out = []
         if C == 32: out.append(('native_swin32.co', 'k_swin_c32', grid, 64, None))
+        if C == 64: out.append(('native_swin64n.co', 'k_swin_c64', grid, 64, None))   # lane = token (swin_c64n.hip)
         if C >= 256: out.append(('native_swinvar.co', 'k_swin_c%ds' % C, (gx, gy, 2), 256, None))
         out.append(('native_swinvar.co', 'k_swin_c%d' % C, grid, 256, None if C % 32 == 0 else 'needs C % 32 == 0'))
         return out

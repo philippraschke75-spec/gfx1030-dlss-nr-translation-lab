@@ -4,7 +4,7 @@
 # never committed); pre is built below only if pre_tables.h is present, post is not built here.
 R="/c/Program Files/AMD/ROCm/6.4"; cd "$(dirname "$0")"; O="${1:-.}"
 F="-x hip --offload-arch=gfx1030 -O3 -ffp-contract=off -mcumode --cuda-device-only -Wno-ignored-attributes -std=c++17 -I../plan"
-for m in "swinvar swin_var" "c512 c512" "vit vit_swz" "decup decup" "swin32 swin_c32" "mirror mirror"; do
+for m in "swinvar swin_var" "c512 c512" "vit vit_swz" "decup decup" "swin32 swin_c32" "swin64n swin_c64n" "mirror mirror"; do
   set -- $m
   "$R/bin/clang++.exe" $F -I"$R/include" -c -o "$O/native_$1.co" "$2.hip" || exit 1
 done
