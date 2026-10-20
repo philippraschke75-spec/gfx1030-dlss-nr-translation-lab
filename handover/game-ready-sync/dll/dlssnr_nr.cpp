@@ -52,7 +52,7 @@ static float g_pass2Gain = 0.5f; static UINT g_hdrP0 = 0; static ID3D12Resource*
 static float g_mvK = 1.f; static unsigned g_dumpFrame = 0, g_dumpFrames = 1; static std::vector<DumpItem> g_dumpItems; static std::mutex g_dumpMu;   // dump_frame=N: frame_dump.h
 static float g_eT = 0.f, g_eL = 0.f; static int g_eFl = 0, g_dbg = 0; static float g_tS = 0.f, g_cS = 1.f, g_pw = 1.f;   // transfer_strength / color_strength / paper_white: RenoDX "Control-compatible color transfer" (kSyncHlsl rtx)   // edit_temporal (blend of the shown edit with the previous one, warped), edit_limit (cap vs local contrast), edit_warp bicubic (flag bit 2)
 static int g_fill = 1; static int g_hGate = 0, g_hCR = 1, g_hSeed = 1, g_hZp = 0;   /* history_pad reflect (NVIDIA) | zero (v0.4.3) */   // history_gate (colour gate, 0 = NVIDIA), history_filter catmull (NVIDIA) | bilinear, history_seed frame (NVIDIA) | 0
-static int g_split = 0, g_splitK[2] = {0, 0}; static int g_hist = 0; static float g_hLo = 0.08f, g_hHi = 0.25f;   // history=1: temporal history (previous NR output warped by the game's MVs) into the pre-block's +0x40, see handover/temporal-2026-10-11/DLL.md   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
+static int g_split = 0, g_fade = 0, g_splitK[2] = {0, 0}; static int g_hist = 0; static float g_hLo = 0.08f, g_hHi = 0.25f;   // history=1: temporal history (previous NR output warped by the game's MVs) into the pre-block's +0x40, see handover/temporal-2026-10-11/DLL.md   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
 
 static void logf(const char* fmt, ...) {
     EnterCriticalSection(&g_cs);
@@ -123,6 +123,7 @@ static void loadSettings() {
     g_dumpFrames =(std::min)((std::max)((unsigned)GetPrivateProfileIntA("nr", "dump_frames", 1, narrow(ini).c_str()), 1u), 8u);   // consecutive frames from dump_frame on (2: check the vectors, frame f0 warped by f1's motion vs f1)
     g_split = (int)GetPrivateProfileIntA("nr", "nr_split", 0, narrow(ini).c_str()); g_split = g_split <= 0 ? 0 : g_split == 1 ? 2 : (std::min)(g_split, 8);   // N >= 2: the network in N parts over N frames (1 = 2, as before), output = last finished NR, warped
     if (g_split) g_nrEvery = g_split;
+    g_fade = g_split ? (std::min)((std::max)((int)GetPrivateProfileIntA("nr", "split_fade", 3, narrow(ini).c_str()), 0), 8) : 0;   // nr_split: a new job's edit fades in over N shown frames (teb: history weight (N-k)/(N-k+1) on frame k after it landed = linear k/N); 0 = off (bit-exact)
     GetPrivateProfileStringA("nr", "nr_split_k", "0", b, sizeof b, narrow(ini).c_str()); g_splitK[0] = g_splitK[1] = 0; sscanf_s(b, "%d,%d", &g_splitK[0], &g_splitK[1]);   // first dispatch of part 2 (full[,skipping] frames); 0 = measure
     { char m[16]; GetPrivateProfileStringA("nr", "busy_mode", "wait", m, sizeof m, narrow(ini).c_str()); g_busy = !_stricmp(m, "reuse"); }
     g_busyWaitMs = (int)GetPrivateProfileIntA("nr", "busy_wait_ms", 100, narrow(ini).c_str()); g_busyWaitMs = g_busyWaitMs < 0 ? 0 : g_busyWaitMs > 1000 ? 1000 : g_busyWaitMs;
@@ -216,7 +217,7 @@ static const char* kSyncHlsl =
 "GC RWByteAddressBuffer st : register(u2);\n"
 "cbuffer C : register(b0) { uint W; uint H; uint seq; uint maxIt; uint outOff; uint flagOff; float gain; uint FWH; uint minSeq; float gLo; float gHi; uint gate; uint frame; uint maxAge;\n"
 "  uint mvOn; float mvSx; float mvSy; uint mWH; uint mBase; uint dWH; uint dBase; uint dFl; float mLo; float mHi;\n"
-"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; float hk; float hx; float hkb; float hA; float amp; uint cm; float dt; float eT; float eL; uint tFl; float tS; float cS; float pw; uint jobSeq; uint dbg; uint sy; float sT; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
+"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; float hk; float hx; float hkb; float hA; float amp; uint cm; float dt; float eT; float eL; uint tFl; float tS; float cS; float pw; uint jobSeq; uint dbg; uint sy; float sT; float fW; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
 "Texture2D<float4> mot : register(t1);\n"
 "Texture2D<float> dep : register(t2);\n"   // minSeq != 0: fg mode, reuse the edit captured from a frame >= minSeq;   // W,H model; FWH = frame W | H << 16
 "RWByteAddressBuffer ob : register(u3);\n"
@@ -401,11 +402,11 @@ static const char* kSyncHlsl =
 "  for (int j = 0; j < 9; j++) { float4 v = ld4(6, int2(id.xy) + int2(j % 3 - 1, j / 3 - 1)); mn = min(mn, v.rgb); mx = max(mx, v.rgb); lo = min(lo, v.a); hi = max(hi, v.a); }\n"
 "  if (eL > 0.0) { float cap = eL * (hi - lo + 0.02); e = clamp(e, -cap, cap); mn = clamp(mn, -cap, cap); mx = clamp(mx, -cap, cap); }\n"
 "  float dn = depAt(uv);\n"
-"  if (eT > 0.0 && (tFl & 8) != 0 && (tFl & 16) != 0) {\n"   // bit3: the CPU ran teb on the frame before (no reset since); bit4: motion vectors bound
+"  if ((eT > 0.0 || fW > 0.0) && (tFl & 8) != 0 && (tFl & 16) != 0) {\n"   // bit3: the CPU ran teb on the frame before (no reset since); bit4: motion vectors bound
 "    uint2 m2 = uint2(mWH & 0xFFFF, mWH >> 16); float2 pf = uv * float2(FW, FH) + mot[uint2(mBase & 0xFFFF, mBase >> 16) + min((uint2)(uv * m2), m2 - 1)].xy * float2(mvSx, mvSy);\n"
-"    if (all(pf == pf) && all(pf >= 0.0) && all(pf < float2(FW, FH))) { float2 ph = pf * float2(W, H) / float2(FW, FH); uint so = 256 + (7 + ((frame - 1) & 1)) * W * H * 8; float4 h = stAt(ph, so); if (tFl & 4) h.rgb = stCR(ph, so); float w = eT;\n"
+"    if (all(pf == pf) && all(pf >= 0.0) && all(pf < float2(FW, FH))) { float2 ph = pf * float2(W, H) / float2(FW, FH); uint so = 256 + (7 + ((frame - 1) & 1)) * W * H * 8; float4 h = stAt(ph, so); if (tFl & 4) h.rgb = stCR(ph, so); float w = fW > 0.0 ? fW : eT;\n"
 "      if (dFl & 1) w *= 1.0 - smoothstep(0.05, 0.2, abs(dn - h.a) / max(max(dn, h.a), 1e-6));\n"   // disocclusion: current edit only
-"      e = lerp(e, clamp(h.rgb, mn, mx), w); } }\n"
+"      e = lerp(e, fW > 0.0 ? h.rgb : clamp(h.rgb, mn, mx), w); } }\n"
 "  st.Store2(256 + (7 + (frame & 1)) * W * H * 8 + (id.y * W + id.x) * 8, uint2(pk(e.r, e.g), pk(e.b, dn))); }\n"
 "float3 tE(uint2 q) { uint FW = FWH & 0xFFFF, FH = FWH >> 16; float2 p = (q + 0.5) * float2(W, H) / float2(FW, FH); uint so = 256 + (7 + (frame & 1)) * W * H * 8; return (tFl & 4) ? stCR(p, so) : stAt(p, so).rgb; }\n"
 "float3 tSe(uint2 q, float4 c) { float3 y = L(c), t = tE(q); if (cm == 0) return gain * t; float3 d = ced(y, y, y + t, gain);\n"   // the stabilised edit to show (compose= as for any edit)
@@ -507,7 +508,7 @@ static const char* kSyncHlsl =
 "  io.Store3(o, asuint(res)); }\n"
 "[numthreads(8,8,1)] void hwp(uint3 id : SV_DispatchThreadID) { hwpB(id, 1); }\n"   // previous frame was NR (bit-exact to the one-frame history)
 "[numthreads(8,8,1)] void hwp2(uint3 id : SV_DispatchThreadID) { hwpB(id, histOk); }\n";   // older NR output (nr_every > 1): histOk = its age in frames
-static const int kSyncRing = 16, kCb = 51;                                     // descriptor pairs (colour SRV, output UAV) in flight
+static const int kSyncRing = 16, kCb = 52;                                     // descriptor pairs (colour SRV, output UAV) in flight
 
 // ---------------------------------------------------------------- feature
 enum { S_LOADING = 0, S_IDLE = 1, S_WAIT_COPY = 2, S_RUNNING = 3, S_FAILED = 4, S_SYNC = 5 };
@@ -519,7 +520,7 @@ struct Sync {                                       // D3D12 side of the sync pa
     ID3D12PipelineState *hwp = nullptr, *hst = nullptr, *acc = nullptr, *hwp2 = nullptr, *lat = nullptr; UINT64 histOff = 0, histOut = 0; float impScale = 0;   // k_import of the data dir: 0 = mode 0 (raw), else its +0x2c scale (mode != 0 tonemaps)
     unsigned waitFails = 0; unsigned padW = 0, padH = 0, lastNrFrm = 0xFFFFFFF0u, accFrm = 0xFFFFFFF0u; bool histOn = false;   // history=1   // fg: frame counter, frame of each in-flight seq (edit age)
     ID3D12PipelineState* anc = nullptr; unsigned np = 0, ancFrm = 0xFFFFFFF0u, ancTo = 0xFFFFFFF0u, ageSum = 0, ageCnt = 0, ageMax = 0, loose = 0;   // nr_split N: parts per job; anchor (st slot 5) = offsets from frame ancFrm to ancTo; edit age stats
-    ID3D12PipelineState *tea = nullptr, *teb = nullptr; unsigned teFrm = 0xFFFFFFF0u; bool warnedTe = false;   // edit stabilisation passes, frame teb last ran
+    ID3D12PipelineState *tea = nullptr, *teb = nullptr; unsigned teFrm = 0xFFFFFFF0u, fadeK = 0; bool warnedTe = false;   // edit stabilisation passes, frame teb last ran
     bool split = false, mvLogged = false; unsigned part = 0, jobFrm = 0, doneFrm = 0xFFFFFFF0u, accTo = 0xFFFFFFF0u, jobSeq = 0;   // nr_split: next part (0 = start a job), frame of the job in flight / last finished one, NR frame the acc chain points to, seq of the job's part 1
     UINT64 obCap = 0; std::vector<std::pair<ID3D12Resource*, unsigned>> obOld;   // R9G9B9E5 staging: capacity (grow only); replaced buffers + frame, released max_inflight + 2 frames later
 };
@@ -733,11 +734,11 @@ static Sync* makeSync(Feature* F) {
     if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sb, &er)) || FAILED(d->CreateRootSignature(0, sb->GetBufferPointer(), sb->GetBufferSize(), IID_PPV_ARGS(&s->rs)))) { logf("sync: root signature failed"); freeSync(s); return nullptr; }
     sb->Release();
     ID3D12PipelineState** pso[13] = {&s->imp, &s->spin, &s->exp, &s->cap, &s->expPk, &s->lat, &s->hwp, &s->hst, &s->acc, &s->hwp2, &s->anc, &s->tea, &s->teb}; const char* ep[13] = {"imp", "spin", "exp", "cap", "exp", "lat", "hwp", "hst", "acc", "hwp2", "anc", "tea", "teb"};
-    for (int i = 0; i < (g_eT > 0.f || g_eL > 0.f ? 13 : g_split ? 11 : g_hist ? 10 : 6); i++) {
+    for (int i = 0; i < (g_eT > 0.f || g_eL > 0.f || g_fade ? 13 : g_split ? 11 : g_hist ? 10 : 6); i++) {
         ID3DBlob* cs = nullptr; er = nullptr; const char* mac[8] = {}; int nm = 0;   // D3D_SHADER_MACRO[], null-terminated
         if (i == 4) { mac[nm++] = "PACKED"; mac[nm++] = "1"; }                     // expPk
         if (!g_ldrIn) { mac[nm++] = "HDR_IN"; mac[nm++] = "1"; }
-        if ((g_eT > 0.f || g_eL > 0.f) && (i == 2 || i == 4 || i >= 11)) { mac[nm++] = "NC"; mac[nm++] = "1"; }   // exp, expPk, tea, teb
+        if ((g_eT > 0.f || g_eL > 0.f || g_fade) && (i == 2 || i == 4 || i >= 11)) { mac[nm++] = "NC"; mac[nm++] = "1"; }   // exp, expPk, tea, teb
         // Bytecode cache: the source and macros never change in a process, and exp/expPk take seconds to compile, so a host that
         // recreates the feature (resolution change, MSFS) compiles once. ponytail: never freed (a few hundred KB).
         static std::mutex cMu; static std::map<std::string, ID3DBlob*> cache;
@@ -1041,7 +1042,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             Sync* s = F->sy; ID3D12GraphicsCommandList2* c2 = nullptr;
             if (FAILED(cmd->QueryInterface(IID_PPV_ARGS(&c2)))) { if (!s->busy++) logf("sync: host list has no WriteBufferImmediate (ID3D12GraphicsCommandList2) - native frame"); return passThrough(cmd, color, out, w, h); }
             c2->Release();                                          // the host holds the list; we only need the interface for this call
-            if (reset == 1) { s->minSeq = s->seq + 1; s->part = 0; }  // fg/split: no edit from before a camera cut is reused; split: a half-done job is abandoned
+            if (reset == 1) { s->minSeq = s->seq + 1; s->part = 0; s->fadeK = 0; }  // fg/split: no edit from before a camera cut is reused; split: a half-done job is abandoned
             const bool sp = s->split;
             const unsigned seq = s->seq + 1; ++s->frm; const unsigned accF0 = s->accFrm, accT0 = s->accTo; const unsigned age = s->frm - s->lastNrFrm; const unsigned chain = reset != 1 && (age == 1 || (age <= 8 && s->accFrm + 1 == s->frm)) ? age : 0, histOk = s->histOn ? chain : 0;   // frames since the last NR output; > 1 needs an unbroken offset chain (acc) over the in-between frames
             const bool reuseOn = true;   // cap the edit on every NR frame: busy frames (and spin timeouts) reuse it   // cap the edit on NR frames, reuse it on the others
@@ -1133,7 +1134,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
                     accP();
                     if (q == 0) { release(); pass(s->spin, 1, 1);
                                   if (++s->part == s->np) { cb[12] = s->jobFrm;   // last part done -> keep its P / edit, stamped with the job's own frame
-                                      if (s->histOn) pass(s->hst, gx, gy); pass(s->cap, gx, gy); cb[12] = s->frm; s->doneFrm = s->jobFrm; s->part = 0; } }
+                                      if (s->histOn) pass(s->hst, gx, gy); pass(s->cap, gx, gy); cb[12] = s->frm; s->doneFrm = s->jobFrm; s->part = 0; s->fadeK = 0; } }
                 }
                 // offsets from this frame to the shown edit's frame T: vectors to frame-1, then acc of frame-1 (-> accT0) and/or the anchor (ancFrm -> ancTo)
                 const unsigned da = s->frm - s->doneFrm, T = s->doneFrm; const bool accOk = accF0 + 1 == s->frm, ancOk = s->np > 2 && s->ancTo == T;
@@ -1141,6 +1142,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
                 cb[32] = 1 | fl | ((da < 0x8000000u ? da : 0u) << 4);
                 if (T != 0xFFFFFFF0u && da < 64) { s->ageSum += da; s->ageCnt++; s->ageMax = (std::max)(s->ageMax, da); s->loose += fl == 8; }
                 if (s->ageCnt == 200) { logf("nr_split: edit age mean %.2f max %u frames, %u of 200 frames vectors-only", s->ageSum / 200.0, s->ageMax, s->loose); s->ageSum = s->ageCnt = s->ageMax = s->loose = 0; }
+                { const unsigned k = ++s->fadeK; const float fw = k < (unsigned)g_fade ? (float)(g_fade - k) / (g_fade - k + 1) : 0.f; memcpy(&cb[51], &fw, 4); }   // split_fade: frame k (1 = the job landed) shows k/N of the new edit
                 if (teOn) { pass(s->tea, gx, gy); pass(s->teb, gx, gy); s->teFrm = s->frm; }
                 cmd->SetComputeRoot32BitConstants(3, kCb, cb, 0);
             } else {

@@ -593,7 +593,7 @@ int main(int argc, char** argv) {
         fmu = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ); fdu = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gpitch * H, D3D12_RESOURCE_STATE_GENERIC_READ);
         if (!fmv || !fdp || !fmu || !fdu) { puts("FAIL guide resources"); return 1; } fmu->Map(0, nullptr, (void**)&mvp); fdu->Map(0, nullptr, (void**)&dpp);
         std::vector<float> fin((size_t)W * H * 3), fout(fin.size()), pin(fin.size()), pout(fin.size()), mi((size_t)MW * MH * 3), mo(mi.size()), pmi(mi.size()), pmo(mi.size());
-        double hfo = 0, hfi = 0, lmax = 0; int nhf = 0, lmaxK = -1; Fr tot, rtot, sst; int nf = 0, nss = 0; double pulse[2] = {}; int npulse[2] = {}; double eabs = 0, pipeE = 0, pipeR = 0; int neabs = 0, nPipe = 0; uint64_t hsh = 1469598103934665603ull;
+        double hfo = 0, hfi = 0, lmax = 0; int nhf = 0, lmaxK = -1; Fr tot, rtot, sst; int nf = 0, nss = 0; double pulse[2] = {}; int npulse[2] = {}; double eabs = 0, pipeE = 0, pipeR = 0; int neabs = 0, nPipe = 0; std::vector<std::pair<double, double>> ech; uint64_t hsh = 1469598103934665603ull;
         for (int k = 0; k < frames; k++) {
             gen(fin, W, H, k); float a[2], b[2]; shift(k, a); shift(k - 1, b); const uint16_t hv[2] = { f2h((a[0] - b[0]) / W), f2h((a[1] - b[1]) / H) }; const float dv = 0.1f;
             for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { memcpy(mvp + (size_t)y * gpitch + x * 4, hv, 4); memcpy(dpp + (size_t)y * gpitch + x * 4, &dv, 4);
@@ -632,12 +632,24 @@ int main(int argc, char** argv) {
                         for (int c = 0; c < 3; c++) { b[c] = (float)(o[c] * s); m = std::max(m, b[c]); } for (int c = 0; c < 3; c++) o[c] = m > lim ? b[c] * lim / m : b[c]; }
                     for (int c = 0; c < 3; c++) { const float sh = std::min(std::max(fout[((size_t)y * W + x) * 3 + c], 0.f), 1.f), rf = std::min(std::max(o[c], 0.f), 1.f); pe += fabs(sh - rf); re += fabs(rf - std::min(std::max(fi[c], 0.f), 1.f)); } }
                 pipeE += pe / (3.0 * W * H); pipeR += re / (3.0 * W * H); nPipe++; }
+            if (k >= 8) {   // ECHG: the shown edit (display out - in) against the previous frame's shown edit warped by the exact motion; the top third of the frames = where a new split job lands
+                float a[2], b[2]; shift(k, a); shift(k - 1, b); const float dx = a[0] - b[0], dy = a[1] - b[1]; const int m = 8 + (int)ceilf(std::max(fabsf(dx), fabsf(dy)));
+                auto ed = [&](const std::vector<float>& o, const std::vector<float>& i, size_t j) { return std::min(std::max(o[j], 0.f), 1.f) - std::min(std::max(i[j], 0.f), 1.f); };
+                double dc = 0, em = 0; size_t nn = 0;
+                for (int y = m; y < (int)H - m; y += 2) for (int x = m; x < (int)W - m; x += 2) { const float u = x + dx, v = y + dy; const int x0 = (int)floorf(u), y0 = (int)floorf(v); const float fa = u - x0, fb = v - y0;
+                    for (int c = 0; c < 3; c++) { auto g = [&](int xx, int yy) { const size_t j = ((size_t)yy * W + xx) * 3 + c; return ed(pout, pin, j); };
+                        const float w = (g(x0, y0) * (1 - fa) + g(x0 + 1, y0) * fa) * (1 - fb) + (g(x0, y0 + 1) * (1 - fa) + g(x0 + 1, y0 + 1) * fa) * fb, e = ed(fout, fin, ((size_t)y * W + x) * 3 + c);
+                        dc += fabs(e - w); em += fabs(e); } nn += 3; }
+                ech.push_back({dc / nn, em / nn}); if (getenv("NR_TEST_PERFRAME")) printf("ECHGF %d %.5f %.5f\n", k, dc / nn, em / nn); }
             if (k > 0) { Fr e = measure(fin, fout, pin, pout, W, H, k); tot.o += e.o; tot.i += e.i; tot.j += e.j; tot.v += e.v; tot.n += e.n; nf++;
                 if (k >= 8) { sst.o += e.o; sst.i += e.i; sst.j += e.j; sst.v += e.v; sst.n += e.n; nss++; } Fr er;   // steady state (k >= 8): without the first edit's fade-in
                 if (doRef) { er = measure(mi, mo, pmi, pmo, MW, MH, k); rtot.o += er.o; rtot.i += er.i; rtot.j += er.j; rtot.v += er.v; rtot.n += er.n; }
                 if (k < 4 || k % 10 == 0 || getenv("NR_TEST_PERFRAME")) printf("frame %d: inst out %.5f in %.5f, white jumps %zu, visible %.3f%%%s\n", k, e.o, e.i, e.j, 100.0 * e.v / std::max<size_t>(e.n, 1), doRef ? (std::string(" | network alone: inst out ") + std::to_string(er.o) + " in " + std::to_string(er.i) + ", jumps " + std::to_string(er.j)).c_str() : ""); }
             std::swap(fin, pin); std::swap(fout, pout); std::swap(mi, pmi); std::swap(mo, pmo); }
         printf("OUTHASH %016llx\n", (unsigned long long)hsh);
+        if (!ech.empty()) { double sc = 0, se = 0, tc = 0; std::vector<double> r; for (auto& p : ech) { sc += p.first; se += p.second; r.push_back(p.first / std::max(p.second, 1e-9)); }
+          std::sort(r.rbegin(), r.rend()); const size_t nt = std::max<size_t>(r.size() / 3, 1); for (size_t i = 0; i < nt; i++) tc += r[i];
+          printf("ECHG shown-edit change vs warped previous (k >= 8): mean %.5f of |edit| %.5f (%.1f%%), top third of frames %.1f%%, max %.1f%%\n", sc / ech.size(), se / ech.size(), 100.0 * sc / std::max(se, 1e-9), 100.0 * tc / nt, 100.0 * r[0]); }
         printf("PULSE mean luma edit odd %+.5f even %+.5f |diff| %.5f\n", pulse[1] / std::max(npulse[1], 1), pulse[0] / std::max(npulse[0], 1), fabs(pulse[1] / std::max(npulse[1], 1) - pulse[0] / std::max(npulse[0], 1)));
         if (!tsv.empty()) { std::sort(tsv.begin(), tsv.end()); printf("TS evaluate GPU ms (frames >= 8): p10 %.3f median %.3f mean-of-lowest-half %.3f\n", tsv[tsv.size() / 10], tsv[tsv.size() / 2],
             std::accumulate(tsv.begin(), tsv.begin() + tsv.size() / 2, 0.0) / (tsv.size() / 2)); }
