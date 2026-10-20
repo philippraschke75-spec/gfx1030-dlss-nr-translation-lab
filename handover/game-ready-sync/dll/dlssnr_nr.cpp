@@ -52,7 +52,7 @@ static float g_pass2Gain = 0.5f; static UINT g_hdrP0 = 0; static ID3D12Resource*
 static float g_mvK = 1.f; static unsigned g_dumpFrame = 0, g_dumpFrames = 1; static std::vector<DumpItem> g_dumpItems; static std::mutex g_dumpMu;   // dump_frame=N: frame_dump.h
 static float g_eT = 0.f, g_eL = 0.f; static int g_eFl = 0, g_dbg = 0; static float g_tS = 0.f, g_cS = 1.f, g_pw = 1.f;   // transfer_strength / color_strength / paper_white: RenoDX "Control-compatible color transfer" (kSyncHlsl rtx)   // edit_temporal (blend of the shown edit with the previous one, warped), edit_limit (cap vs local contrast), edit_warp bicubic (flag bit 2)
 static int g_fill = 1; static int g_hGate = 0, g_hCR = 1, g_hSeed = 1, g_hZp = 0;   /* history_pad reflect (NVIDIA) | zero (v0.4.3) */   // history_gate (colour gate, 0 = NVIDIA), history_filter catmull (NVIDIA) | bilinear, history_seed frame (NVIDIA) | 0
-static int g_split = 0, g_fade = 0, g_splitK[2] = {0, 0}; static int g_hist = 0; static float g_hLo = 0.08f, g_hHi = 0.25f;   // history=1: temporal history (previous NR output warped by the game's MVs) into the pre-block's +0x40, see handover/temporal-2026-10-11/DLL.md   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
+static int g_fallback = 1, g_split = 0, g_fade = 0, g_splitK[2] = {0, 0}; static int g_hist = 0; static float g_hLo = 0.08f, g_hHi = 0.25f;   // history=1: temporal history (previous NR output warped by the game's MVs) into the pre-block's +0x40, see handover/temporal-2026-10-11/DLL.md   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
 
 static void logf(const char* fmt, ...) {
     EnterCriticalSection(&g_cs);
@@ -101,6 +101,7 @@ static void loadSettings() {
     GetPrivateProfileStringA("nr", "mv_gate_hi", "0.25", b, sizeof b, narrow(ini).c_str()); g_mvHi = (float)atof(b);
     g_hist = (int)GetPrivateProfileIntA("nr", "history", 0, narrow(ini).c_str()); g_hist = g_hist < 0 ? 0 : g_hist > 2 ? 2 : g_hist;   // 1 = history into pre- and post-block, 2 = post-block lerp only (runtime hist_valid)
     g_hGate = (int)GetPrivateProfileIntA("nr", "history_gate", 0, narrow(ini).c_str());
+    g_fallback = (int)GetPrivateProfileIntA("nr", "split_fallback", 1, narrow(ini).c_str()) != 0;   // halo_fix fill with no match: the wide-ring mean edit (light, no detail) instead of none; 0 = v0.5 behaviour
     g_fill = (int)GetPrivateProfileIntA("nr", "halo_fix", 1, narrow(ini).c_str()) != 0;   // halo_fix=1 (nr_split / mv reuse halos and ghost copies): disocclusion fill + footprint gate, job-frame depth, aged split history post-lerp only; 0 = v0.4.5
     { char m[16]; GetPrivateProfileStringA("nr", "history_filter", "catmull", m, sizeof m, narrow(ini).c_str()); g_hCR = _stricmp(m, "bilinear") != 0; }
     { char m[16]; GetPrivateProfileStringA("nr", "history_seed", "frame", m, sizeof m, narrow(ini).c_str()); g_hSeed = _stricmp(m, "0") != 0; }
@@ -377,9 +378,11 @@ static const char* kSyncHlsl =
 "  if (dFl & 1) w *= 1.0 - smoothstep(0.05, 0.2, abs(dn - o.a) / max(max(dn, o.a), 1e-6)); return w; }\n"
 "float3 fillE(float2 p, float3 l, float dn, float w0, float3 e0) {\n"
 "  if ((tFl & 256) == 0 || w0 > 0.99) return e0; float3 s = 0; float sw = 0, k = max(1.0, W / 1280.0);\n"
-"  for (int r = 0; r < 4 && sw < 0.5; r++) { s = 0; sw = 0; for (int i = 0; i < 8; i++) { float2 q = p + float2(cos(i * 0.7853982), sin(i * 0.7853982)) * (k * (2 << r));\n"
-"    if (any(q < 0.0) || any(q > float2(W, H))) continue; float w = gw(l, dn, stAt(q, 256 + W * H * 8)); s += w * stAt(q, 256).rgb; sw += w; } }\n"
-"  return e0 + (sw > 0.0 ? (1.0 - w0) * s / sw : 0.0); }\n"
+"  float3 u = 0; float un = 0;\n"
+"  for (int r = 0; r < 4 && sw < 0.5; r++) { s = 0; sw = 0; u = 0; un = 0; for (int i = 0; i < 8; i++) { float2 q = p + float2(cos(i * 0.7853982), sin(i * 0.7853982)) * (k * (2 << r));\n"
+"    if (any(q < 0.0) || any(q > float2(W, H))) continue; float3 eq = stAt(q, 256).rgb; float w = gw(l, dn, stAt(q, 256 + W * H * 8)); s += w * eq; sw += w; u += eq; un += 1.0; } }\n"
+"  if (sw > 0.0) return e0 + (1.0 - w0) * s / sw;\n"
+"  return e0 + ((tFl & 1024) && un > 0.0 ? (1.0 - w0) * u / un : 0.0); }\n"   // split_fallback (tFl bit 10): no match on any ring (a moving character, new content): the plain mean of the kept edit on the widest ring (its light and tone, no detail) instead of no edit, so the region does not flip between NR and the raw frame
 "float4 ld4(uint k, int2 q) { q = clamp(q, 0, int2(W - 1, H - 1)); uint2 u = st.Load2(256 + k * W * H * 8 + (q.y * W + q.x) * 8); return float4(f16tof32(u.x & 0xFFFF), f16tof32(u.x >> 16), f16tof32(u.y & 0xFFFF), f16tof32(u.y >> 16)); }\n"
 "[numthreads(8,8,1)] void tea(uint3 id : SV_DispatchThreadID) {\n"
 "  if (id.x >= W || id.y >= H) return; uint FW = FWH & 0xFFFF, FH = FWH >> 16; float2 uv = (id.xy + 0.5) / float2(W, H), pf = uv * float2(FW, FH); float3 e = 0, l, aM;\n"   // aM: the model input the edit belongs to (detail=)
@@ -1112,7 +1115,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             const bool teOn = s->tea && s->teb && (sp || w != F->W || h != F->H); memcpy(&cb[41], &g_eT, 4); memcpy(&cb[42], &g_eL, 4);   // edit stabilisation: split or resampled full-NR path
             memcpy(&cb[44], &g_tS, 4); memcpy(&cb[45], &g_cS, 4); memcpy(&cb[46], &g_pw, 4);
             cb[43] = teOn ? 1u | (UINT)g_eFl | (s->teFrm + 1 == s->frm && reset != 1 ? 8u : 0u) | (mvBound ? 16u : 0u) : 0u; cb[47] = sp ? s->jobSeq : 0u; cb[48] = (UINT)g_dbg; cb[52] = gMv ? (UINT)s->mvOff : 0u; cb[53] = s->mvG;   // vit_motion_gate cells (no vectors this frame: no tag, the runtime reuses plainly)
-            if (g_hCR) cb[43] |= 64u; if (g_hZp) cb[43] |= 128u; if (g_fill) cb[43] |= 256u; if (g_fill && sp) cb[43] |= 512u;   // history_filter=catmull, history_pad=zero (hwp); bits 1/4/8/16 are edit stabilisation
+            if (g_hCR) cb[43] |= 64u; if (g_hZp) cb[43] |= 128u; if (g_fill) cb[43] |= 256u; if (g_fill && sp) cb[43] |= 512u; if (g_fill && g_fallback) cb[43] |= 1024u;   // history_filter=catmull, history_pad=zero (hwp); bits 1/4/8/16 are edit stabilisation
             if (!g_hGate) { const float big[2] = {1e30f, 2e30f}; memcpy(&cb[28], big, 8); }   // history_gate=0 (NVIDIA): no colour gate
             { const float sy = F->appliedCond[0], sT = F->appliedCond[1]; cb[49] = sy == 1.f || sy == 2.f ? (UINT)sy : 0u; memcpy(&cb[50], &sT, 4); }   // style grade (sty) with the conditioning the runtime got
             ID3D12DescriptorHeap* hp[] = { s->heap }; cmd->SetDescriptorHeaps(1, hp); cmd->SetComputeRootSignature(s->rs);
