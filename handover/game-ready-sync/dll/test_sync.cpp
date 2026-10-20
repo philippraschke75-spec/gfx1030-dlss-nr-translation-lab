@@ -513,7 +513,7 @@ int main(int argc, char** argv) {
                 o.assign((size_t)MW * MH * 3, 0.f); std::vector<int> cnt((size_t)MW * MH, 0);
                 for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { const size_t m = (size_t)(y * MH / H) * MW + x * MW / W; cnt[m]++; for (int c = 0; c < 3; c++) o[m * 3 + c] += px(x, y, c); }
                 for (size_t m = 0; m < cnt.size(); m++) for (int c = 0; c < 3; c++) o[m * 3 + c] /= std::max(cnt[m], 1); };
-            std::vector<float> col, mot, dep, fo((size_t)W * H * 3), ci, co, em((size_t)MW * MH * 3), es((size_t)MW * MH * 3); int bad = 0; double ms = 0, hole0 = 0, holeMax = 0;
+            std::vector<float> esP, col, mot, dep, fo((size_t)W * H * 3), ci, co, em((size_t)MW * MH * 3), es((size_t)MW * MH * 3); int bad = 0; double ms = 0, hole0 = 0, holeMax = 0;
             for (int k = 0; k < warm + sn - 1; k++) {
                 const int fr = k < warm ? 0 : k - warm + 1;
                 if (!rd("colour", fr, 4, col) || !rd("depth", fr, 1, dep)) { printf("FAIL cannot read %s frame %d\n", seq, fr); return 1; }
@@ -547,7 +547,13 @@ int main(int argc, char** argv) {
                         const double rr = sab / sqrt(std::max(saa * sbb, 1e-30)); if (!dx && !dy) r0 = rr; if (rr > best + 1e-9) { best = rr; bx = dx; by = dy; } }
                     char b[96]; snprintf(b, sizeof b, " q%d %+d,%+d (r %.3f, at 0,0 %.3f)", qd, bx, by, best, r0); sh += b; fr_bad |= (bx || by) && best > r0 + 0.01; }
                 bad += fr_bad;
-                printf("SEQ k %d (f%d): shown edit vs reference edit of the same frame: mean |diff| %.5f, reference |edit| %.5f, HOLE %.2f%% | ALIGN%s%s\n", k, fr, pe / em.size(), re / em.size(), hole, sh.c_str(), fr_bad ? " MISALIGNED" : ""); }
+                double cg = 0, cm = 0;   // ECHG: shown edit vs the previous frame's shown edit warped by the game's vectors (model px, bilinear), relative to |shown edit|
+                if (!esP.empty()) for (UINT y = 2; y + 2 < MH; y++) for (UINT x = 2; x + 2 < MW; x++) { const size_t fi = (size_t)((y + .5f) * H / MH) * W + (size_t)((x + .5f) * W / MW);
+                    const float u = std::min(std::max(x + mot[fi * 2] * MW, 0.f), MW - 1.001f), v = std::min(std::max(y + mot[fi * 2 + 1] * MH, 0.f), MH - 1.001f); const int x0 = (int)u, y0 = (int)v; const float fa = u - x0, fb = v - y0;
+                    for (int c = 0; c < 3; c++) { auto g = [&](int xx, int yy) { return esP[((size_t)yy * MW + xx) * 3 + c]; };
+                        const float w = (g(x0, y0) * (1 - fa) + g(x0 + 1, y0) * fa) * (1 - fb) + (g(x0, y0 + 1) * (1 - fa) + g(x0 + 1, y0 + 1) * fa) * fb, e = es[((size_t)y * MW + x) * 3 + c]; cg += fabs(e - w); cm += fabs(e); } }
+                esP = es;
+                printf("SEQ k %d (f%d): shown edit vs reference edit of the same frame: mean |diff| %.5f, reference |edit| %.5f, HOLE %.2f%%, ECHG %.1f%% | ALIGN%s%s\n", k, fr, pe / em.size(), re / em.size(), hole, 100.0 * cg / std::max(cm, 1e-9), sh.c_str(), fr_bad ? " MISALIGNED" : ""); }
             const double holeLim = getenv("NR_TEST_HOLEMAX") ? atof(getenv("NR_TEST_HOLEMAX")) : 6.0; const bool hb = holeMax > hole0 + holeLim;   // HOLE: moving frames may lose the edit on at most 6 points more of the edited flat px than the static frame (FO4 dump, v0.4.3/4 nr_split presets: +6.5..+18.6 without halo_fix, <= +2.3 with it; the static share is history weakening the edit, not a halo)
             printf("HOLE static %.2f%%, worst moving %.2f%% (limit static + %.1f) %s\n", hole0, holeMax, holeLim, hb ? "FAIL (edit missing in disoccluded bands: halos)" : "ok");
             release(f); puts(bad ? "ALIGN FAIL (the shown edit is offset from the reference edit)" : hb ? "SEQ FAIL" : "SEQ PASS"); return bad || hb ? 9 : 0;
