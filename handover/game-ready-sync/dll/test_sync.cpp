@@ -331,7 +331,7 @@ int main(int argc, char** argv) {
             if (tlq) cl->EndQuery(tlq, D3D12_QUERY_TYPE_TIMESTAMP, 3 * (k % NQ) + 1);
             unsigned x1, x2, ru0, ru1; stats(f, &x1, &x2, &ru0);
             eval(cl, f, nullptr, color, dpt, mvt, out, W, H, W, H, W, H, 0, 0, 0, 0, 1, k == 0, 1.f, 0, 1.f, 1.f, -1.f, 1, (float)W, (float)H);
-            stats(f, &x1, &x2, &ru1); greu[k] = ru1 != ru0;
+            stats(f, &x1, &x2, &ru1); greu[k] = ru1 != ru0 || (getenv("NR_TEST_GHOSTALL") && k >= 10);   // NR_TEST_GHOSTALL: every frame after warm-up (pipeline frames show older edits without counting as reused)
             if (tlq) { cl->EndQuery(tlq, D3D12_QUERY_TYPE_TIMESTAMP, 3 * (k % NQ) + 2); cl->ResolveQueryData(tlq, D3D12_QUERY_TYPE_TIMESTAMP, 3 * (k % NQ), 3, tlb, 24ull * (k % NQ)); }
             if (ghost) { bar(out, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE); { auto d = fp(gr[k % NQ], opitch, OFMT), s = ts(out); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
                          bar(out, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
