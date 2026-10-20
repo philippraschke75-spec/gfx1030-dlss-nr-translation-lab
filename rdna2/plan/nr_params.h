@@ -213,3 +213,17 @@ struct ExportParams {
   float gain;             // 0x3c 1.0
 };
 static_assert(sizeof(ExportParams) == 0x40, "ExportParams");
+
+// Hybrid resolution (build_plan.py --hybrid F): bilinear resample of a planar e4m3 activation [planes][h][w][16 B]
+// (the pre-block's half output / the first encoder block's input, and the last decoder block's output) between the
+// pre/post field and a main net run at 1/F of it. Source position of destination pixel x: (x + 0.5) * sx - 0.5, clamped.
+struct ResampleParams {
+  const uint8_t* src;     // 0x00 [planes][sh][sw][16]
+  uint8_t* dst;           // 0x08 [planes][dh][dw][16]
+  int32_t sh, sw;         // 0x10
+  int32_t dh, dw;         // 0x18
+  int32_t planes;         // 0x20 C / 16
+  float sx, sy;           // 0x24 source pixels per destination pixel
+  int32_t _pad2c;
+};
+static_assert(sizeof(ResampleParams) == 0x30, "ResampleParams");

@@ -2,6 +2,7 @@
 
     py -I tools/build_plan.py <nvngx_dlssnr.dll> <WxH>[,<WxH>...] <out nr_data dir> [--kernels DIR] [--no-flex]
     --res WEIGHTS_CC_SMALL_FP8 picks the 310.9 small model (default WEIGHTS_HT = the 310.8 model, also in 310.9)
+    --hybrid F[@L]: pre/post (and U-net levels < L) at WxH, levels >= L at (W/F)x(H/F), k_resample in between (see plan())
     py -I tools/build_plan.py --selftest [nvngx_dlssnr.dll]      (synthetic shrunk models, no GPU, no output)
 
 Inputs: the WEIGHTS_HT records of the DLL (names + sizes; the bytes only for blend_scale and the weights.map hash),
@@ -154,7 +155,7 @@ def tsym(op, A, C=None):   # the translated (host ABI) symbol of an op
             'attn': '_Z11k_qkv_attn210AttnParams', 'convpl': '_Z16k_conv_res_views12ConvPlParams', 'head': '_Z12k_final_head10HeadParams',
             'repack': '_Z8k_repack12RepackParams', 'expand': '_Z9k_expand212ExpandParams', 'contract': '_Z11k_contract212ConvParams1d',
             'qkv': '_Z6k_qkv29QkvParams', 'attn1d': '_Z12k_attention212AttnParams1d', 'decup': '_Z14k_dec_upsample11DecUpParams',
-            'export': '_Z8k_export12ExportParams', 'mirror': 'k_mirror_pad'}[op]   # mirror: native only
+            'export': '_Z8k_export12ExportParams', 'mirror': 'k_mirror_pad', 'resample': 'k_resample'}[op]   # mirror, resample: native only
 
 
 def native_candidates(op, A, C, grid):
@@ -170,6 +171,7 @@ def native_candidates(op, A, C, grid):
         out.append(('native_swinvar.co', 'k_swin_c%d' % C, grid, 256, None if C % 32 == 0 else 'needs C % 32 == 0'))
         return out
     nat = {'mirror': ('native_mirror.co', 'k_mirror_pad', grid, 256, None),
+           'resample': ('native_resample.co', 'k_resample', grid, 256, None),
            'pre': ('native_pre_native.co', 'k_pre_native', grid, 64, None if A['c0'] == 32 else 'hardwired C0 = 32'),
            'post': ('native_post_native.co', 'k_post_native', grid, 64, None if A['c0'] == 32 and A['post_ok'] else
                     'hardwired C0 = 32 and the 310.8 block%d record layout (k_post_native_prep reads it at load)' % A['post']),
@@ -239,10 +241,17 @@ def geometry(W, H, levels):
 
 
 # ------------------------------------------------------------------ plan
-def plan(A, W, H, kdir, structs):
+def plan(A, W, H, kdir, structs, hyb=None):
+    """hyb = (F, L): hybrid resolution. pre/post and the U-net levels < L run on the W x H field, levels L.. (n = the C_mid
+    bottleneck, ViT included) on the field of round(W/F) x round(H/F); k_resample (bilinear, planar e4m3) bridges the level-L
+    input (pre half output / pool of level L-1) and the level-L decoder output. L = 0: the whole main net.
+    Not the trained layout (NVIDIA runs every level at exactly half of the one above): a speed/look trade."""
     n = A['n']
     PH, PW, ext = geometry(W, H, n + 2)
-    hw = lambda k: ext[k]                                          # level k extent (n = C_mid stage, n + 1 = ViT)
+    F_, L = hyb or (1, n + 2)
+    WM, HM = round(W / F_), round(H / F_)
+    mext = geometry(WM, HM, n + 2)[2]
+    hw = lambda k: (mext if k >= L else ext)[k]                    # level k extent (n = C_mid stage, n + 1 = ViT)
     act = lambda C, h, w: C * -(-h // 4) * -(-w // 4) * 16 * 2      # 4x4-tile activation, 2 B/element (headroom)
     bufs, top = [], 0
 
@@ -252,7 +261,9 @@ def plan(A, W, H, kdir, structs):
     src = buf('src RGBA16F', W * H * 8)
     rgb = buf('rgb RGB32F', PH * PW * 12)
     full = buf('pre out full', act(A['c0'], PH, PW))
-    half = buf('pre out half', act(2 * A['c0'], *hw(0)))
+    half = buf('pre out half', act(2 * A['c0'], *ext[0]))
+    CL = A['c_mid'] >> (n - L) if hyb else 0                         # channels at the level-L input / decoder output
+    if hyb: hin, hout = buf('hybrid in', act(CL, *mext[L])), buf('hybrid out', act(CL, *ext[L]))
     enc_b = [[buf('enc%d %s' % (k, s), act(C, *hw(k))) for s in ('ping', 'pong', 'pool')] for k, (C, _) in enumerate(A['enc'])]
     H5, W5 = hw(n); PH6, PW6 = (H5 + 1) // 2, (W5 + 1) // 2   # pooled extent convpl writes; the ViT extent rounds it up to 4
     H6, W6 = hw(n + 1)                                             # (the extra tokens are zero and take part in the attention)
@@ -287,6 +298,7 @@ def plan(A, W, H, kdir, structs):
         S('mirror', 'MirrorParams', dict(rgb=rgb, h=H, w_=W, pad_h=PH, pad_w=PW), (-(-PW // 256), PH))
     S('pre', 'PreParams', dict(rgb=rgb, out_full=full, w=wl(0, 0), h=PH, w_=PW, in_scale=0.0625, tone=1.0, structure=1.0, out_half=half, a=1.0, b=1.0, **io), (PW // 8, PH // 8))   # NVIDIA's default conditioning (tone 1; auto mask: 1, skin 1, structure 1); runtime: nr_set_conditioning
     scratch = [None]
+    rs = lambda a, b, sa, sb, f: S('resample', 'ResampleParams', dict(src=a, dst=b, sh=sa[0], sw=sa[1], dh=sb[0], dw=sb[1], planes=CL // 16, sx=f[0], sy=f[1]), (-(-sb[1] // 256), sb[0], CL // 16))
 
     def swin(C, k_hw, blocks, inp, pp, pool, dec, prev=None):
         h, w = k_hw; out = []
@@ -302,6 +314,7 @@ def plan(A, W, H, kdir, structs):
         return out
     stage_in, skips = half, []
     for k, (C, blocks) in enumerate(A['enc']):
+        if hyb and k == L: rs(stage_in, hin, ext[L], mext[L], (W / WM, H / HM)); stage_in = hin
         outs = swin(C, hw(k), blocks, stage_in, enc_b[k][:2], enc_b[k][2], False)
         skips.append(outs[-2] if len(outs) > 1 else stage_in)   # the decoder skip is the second-to-last block's output (host order)
         stage_in = enc_b[k][2]
@@ -319,6 +332,7 @@ def plan(A, W, H, kdir, structs):
                 S('convpl', 'ConvPlParams', dict(a=work[3], res2=work[2], out=work[0], w=wl(b, 3), h=H5, w_=W5, pooled=pooled, ph=PH6, pw=PW6), (-(-NM // 16384), 1))
             else:
                 S('conv2', 'Conv2Params', dict(x=work[3], res=work[2], out=work[0], out2=decin if (not enc and b == blocks[-1]) else None, w=wl(b, 3), H=H5, W=W5, T=T5), g4)
+    if hyb and L == n: rs(stage_in, hin, ext[L], mext[L], (W / WM, H / HM)); stage_in = hin
     bn_lo = len(steps)
     mid(A['c1'], m1, stage_in, True)
     S('head', 'HeadParams', dict(pooled=pooled, out=headb, w=wl(A['c1'][-1], 4)), (T6, 1))
@@ -340,8 +354,11 @@ def plan(A, W, H, kdir, structs):
     mid(A['c2'], m2, None, False)
     bn_hi = len(steps)
     stage_in = decin
+    up = lambda: rs(stage_in, hout, mext[L], ext[L], (WM / W, HM / H)) or hout
+    if hyb and L == n: stage_in = up()
     for k, (C, blocks) in enumerate(A['dec']):
         stage_in = swin(C, hw(n - 1 - k), blocks, skips[n - 1 - k], dec_b[k][:2], dec_b[k][2], True, prev=stage_in)[-1]
+        if hyb and n - 1 - k == L: stage_in = up()
     blend = A['blend']
     S('post', 'PostParams', dict(x=stage_in, skip=full, out=netout, w=wl(A['post'], 0), h=PH, w_=PW, scale=0.03125, _r34=1, rgb=rgb, blend=blend, **(dict(dst=dst, dst_h=H, dst_w=W, src=src) if fuse else {})), (PW // 8, PH // 8))   # full padded frame: the margin feeds the next frame's history (cropping it changes history output)
     if not fuse: S('export', 'ExportParams', dict(res=netout, res_stride=PW, h=H, w_=W, dst_pitch=W * 8, dst=dst, mode=0, rgb=rgb, gain=1.0), (-(-W // 256), H))
@@ -367,7 +384,7 @@ def plan(A, W, H, kdir, structs):
         if ov: ovr[ov[0]] = '%s|%s|%s|=|=|=|%d|%d|0<-0:%d' % (ov[0], ov[1], ov[2], ov[3], ov[4], ov[4]); mods.add(ov[1])
     meta = dict(width=W, height=H, base=BASE, arena_size=arena, off_src=src, src_size=W * H * 8, off_dst=dst, dst_size=W * H * 8, skip=0,
                 vit_lo=vit_lo, vit_hi=vit_hi, bn_lo=bn_lo, bn_hi=bn_hi, pre_step=next(i for i, t in enumerate(steps) if t[0] == 'pre'), post_step=next(i for i, t in enumerate(steps) if t[0] == 'post'), pad_w=PW, pad_h=PH, n_steps=len(steps), off_vitres=vitres, off_headb=headb,
-                placements=[list(b) for b in bufs])
+                placements=[list(b) for b in bufs], **({'hybrid': '%dx%d@%d' % (WM, HM, L)} if hyb else {}))
     return dict(lines=lines, kernargs=bytes(blob), overrides=list(ovr.values()), meta=meta, wofs=wofs, modules=mods)
 
 
@@ -437,7 +454,7 @@ def fnv(b):
     return h
 
 
-def build(dll, sizes, out, kdir, use_flex):
+def build(dll, sizes, out, kdir, use_flex, hyb=None):
     structs = parse_header()
     recs, mm, fh = dll_records(dll)
     A = derive({k: v[1] for k, v in recs.items()})
@@ -451,7 +468,7 @@ def build(dll, sizes, out, kdir, use_flex):
         [(c, len(s)) for c, s in A['enc']], A['c_mid'], len(A['c1']), A['heads'], A['c_vit'], A['hid'], len(A['vit']), A['post'], A['blend'],
         '' if A['post_ok'] else ' | post record layout differs from 310.8: k_post_native not used'))
     for W, H in sizes:
-        P = plan(A, W, H, kdir, structs)
+        P = plan(A, W, H, kdir, structs, hyb)
         write_dir(P, Path(out) / ('%dx%d' % (W, H)), kdir, mm, recs)
         print('%dx%d: %d dispatches, arena %.1f MB, %d overrides -> %s' % (W, H, len(P['lines']), P['meta']['arena_size'] / 1e6, len(P['overrides']), Path(out) / ('%dx%d' % (W, H))))
 
@@ -511,9 +528,10 @@ if __name__ == '__main__':
         if a and a[0] == '--selftest':
             sys.exit(0 if selftest(a[1] if len(a) > 1 else r'C:/Program Files (x86)/Steam/steamapps/common/Fallout 4/nvngx_dlssnr.dll') else 1)
         if '--res' in a: RES = a[a.index('--res') + 1]
+        hyb = (lambda v: (float(v[0]), int(v[1]) if len(v) > 1 else 0))(a[a.index('--hybrid') + 1].split('@')) if '--hybrid' in a else None
         kdir = Path(a[a.index('--kernels') + 1]) if '--kernels' in a else DEFAULT_KERNELS
-        pos = [x for i, x in enumerate(a) if not x.startswith('--') and (i == 0 or a[i - 1] not in ('--kernels', '--res'))]
+        pos = [x for i, x in enumerate(a) if not x.startswith('--') and (i == 0 or a[i - 1] not in ('--kernels', '--res', '--hybrid'))]
         if len(pos) != 3: sys.exit(__doc__)
-        build(pos[0], [tuple(int(v) for v in s.split('x')) for s in pos[1].split(',')], pos[2], kdir, '--no-flex' not in a)
+        build(pos[0], [tuple(int(v) for v in s.split('x')) for s in pos[1].split(',')], pos[2], kdir, '--no-flex' not in a, hyb)
     except PlanError as e:
         sys.exit('build_plan: ' + str(e))
