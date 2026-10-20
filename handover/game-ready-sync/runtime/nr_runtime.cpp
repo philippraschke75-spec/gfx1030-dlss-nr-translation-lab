@@ -308,15 +308,17 @@ NR_API nr_ctx* nr_create(const char* data_dir, int width, int height, int vit_ev
     if (c->vit_lo < 0 || c->vit_hi >= (int)c->names.size() || c->names[c->vit_lo].find("ffwd2") == std::string::npos || c->names[c->vit_hi].find("swin") == std::string::npos)
       FAIL("bottleneck reuse: unexpected dispatch layout around %d..%d", c->vit_lo, c->vit_hi);
     }
-    // the reused tensor = the decoder's input: the last c512 conv's planes copy (Conv2Params out2 +0x20, H +0x30, W +0x34; W padded to the
-    // attention window, H not: px size = pad_h / H). The motion gate samples one vector per px of it.
-    const Step& lb = c->steps[c->vit_hi - 1]; uint64_t o2 = 0; int32_t hw[2] = {}; const unsigned ph = (unsigned)num("pad_h");
-    if (!lb.ov && c->names[c->vit_hi - 1] == "k_conv2_n" && lb.ka.size() >= 0x38) { memcpy(&o2, lb.ka.data() + 0x20, 8); memcpy(hw, lb.ka.data() + 0x30, 8); }
-    if (o2 && hw[0] > 0 && hw[1] > 0 && ph && ph % hw[0] == 0) {
-      c->H5 = hw[0]; c->W5 = hw[1]; c->bs = (int)(ph / hw[0]);
+    // the reused tensor = the decoder's input: the last c512 conv's planes copy (Conv2Params out2 +0x20, H +0x30, W +0x34; one of H / W
+    // padded to the attention window). The motion gate samples one vector per px of it.
+    const Step& lb = c->steps[c->vit_hi - 1]; uint64_t o2 = 0; int32_t hw[2] = {}; const unsigned ph = (unsigned)num("pad_h"), pw = (unsigned)num("pad_w");
+    const auto& lk = lb.ov ? lb.src : lb.ka;   // native override: its original kernarg
+    if (c->names[c->vit_hi - 1] == "k_conv2_n" && lk.size() >= 0x38) { memcpy(&o2, lk.data() + 0x20, 8); memcpy(hw, lk.data() + 0x30, 8); }
+    const int bs = hw[0] > 0 && hw[1] > 0 ? (int)lround((std::max)((double)ph / hw[0], (double)pw / hw[1])) : 0;   // px size: the bottleneck pads H (1440p: 48 rows for 1472) or W to its window, so the larger ratio is the unpadded one
+    if (o2 && bs > 0) {
+      c->H5 = hw[0]; c->W5 = hw[1]; c->bs = bs;
       c->nx = (std::min)(c->W5, (width - c->bs / 2 + c->bs - 1) / c->bs); c->ny = (std::min)(c->H5, (height - c->bs / 2 + c->bs - 1) / c->bs);   // px whose centre is inside the image
       HK(hipHostMalloc((void**)&c->mvh, 16 + (size_t)c->H5 * c->W5 * 8));
-    } else rlog("bottleneck reuse: no motion gate for this data dir (step %d %s)", c->vit_hi - 1, c->names[c->vit_hi - 1].c_str());
+    } else rlog("bottleneck reuse: no motion gate for this data dir (step %d %s, ov %d, ka %zu, out2 %llx, H %d W %d, pad_h %u)", c->vit_hi - 1, c->names[c->vit_hi - 1].c_str(), (int)lb.ov, lb.ka.size(), (unsigned long long)o2, hw[0], hw[1], ph);
   }
   if (c->pw) HK(hipMalloc(&c->hist, (size_t)c->pw * c->ph * 12));   // ~8 MB; filled after every frame so the first hist_valid frame already has history
   HK(hipEventCreate(&c->e0)); HK(hipEventCreate(&c->e1));
