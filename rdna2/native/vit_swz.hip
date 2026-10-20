@@ -169,7 +169,7 @@ template <int K>
 __device__ __forceinline__ void vit_contract(const ContractParams& P, uint2* lds) {
   const int tile0 = blockIdx.x * 4, n0 = blockIdx.y * 64, T = gridDim.x * 4;
   float acc[TM][TO];
-  gemm<K, 2>(P.x, tile0, T, [&](int vt) { return wpiece_std<K, 64>(P.w, n0, vt); }, acc, lds);
+  gemm<K, 1>(P.x, tile0, T, [&](int vt) { return wpiece_std<K, 64>(P.w, n0, vt); }, acc, lds);
   const _Float16* gain = (const _Float16*)(P.w + 1024 * K);
   epi(n0, acc, [&](int m, int r, const float* a) {
     const int tile = tile0 + (m >> 4);
@@ -183,7 +183,7 @@ __device__ __forceinline__ void vit_contract(const ContractParams& P, uint2* lds
   });
 }
 extern "C" __global__ void __launch_bounds__(NT) k_vit_contract_n(ContractParams P) {
-  __shared__ uint2 lds[2 * BUFW<2>];
+  __shared__ uint2 lds[2 * BUFW<1>];   // 32 KB: two workgroups per CU (hybrid plans have only 80 contract groups for 40 CUs)
   if (blockIdx.y >= 16) return;
   if (P.K == 4096) vit_contract<4096>(P, lds);
   else if (P.K == 1024) vit_contract<1024>(P, lds);
