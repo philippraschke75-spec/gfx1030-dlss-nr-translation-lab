@@ -437,7 +437,11 @@ NR_API int nr_ext_open(nr_ctx* c, void* io, unsigned long long io_alloc, unsigne
   if (!import_buf(io, io_alloc, io_size, &c->em_io, &c->io) || !import_buf(sig, sig_alloc, sig_size, &c->em_sig, &c->sig)) {
     snprintf(err, errlen, "hipImportExternalMemory (D3D12Resource) failed"); nr_ext_close(c, 0); return 4; }
   c->out_off = out_off; c->flag_off = flag_off; c->io_size = io_size;
-  if (hipStreamCreateWithFlags(&c->s, hipStreamNonBlocking) != hipSuccess || hipStreamCreateWithFlags(&c->ps, hipStreamNonBlocking) != hipSuccess ||
+  // NR_HIP_PRIO=high|low (DLL ini hip_priority): the network stream's priority against the game's D3D12 queues; absent = normal (as before)
+  int lo = 0, hi = 0; char pe[16] = ""; const char* pr = GetEnvironmentVariableA("NR_HIP_PRIO", pe, sizeof pe) ? pe : nullptr; hipDeviceGetStreamPriorityRange(&lo, &hi);   // Win32 env: the DLL sets it at runtime
+  const int prio = pr && !_stricmp(pr, "high") ? hi : pr && !_stricmp(pr, "low") ? lo : 0;
+  if (pr) rlog("runtime: network stream priority %s (%d, range %d..%d)", pr, prio, lo, hi);
+  if ((prio ? hipStreamCreateWithPriority(&c->s, hipStreamNonBlocking, prio) : hipStreamCreateWithFlags(&c->s, hipStreamNonBlocking)) != hipSuccess || hipStreamCreateWithFlags(&c->ps, hipStreamNonBlocking) != hipSuccess ||
       hipHostMalloc((void**)&c->hf, 4) != hipSuccess) { snprintf(err, errlen, "hipStreamCreate failed"); nr_ext_close(c, 0); return 5; }
   c->th = std::thread(ext_thread, c);
   return 0;
@@ -484,6 +488,7 @@ static void ext_thread(nr_ctx* c) {
       Sleep(0);
     }
 #endif
+    LARGE_INTEGER t_in; QueryPerformanceCounter(&t_in);
     // Test hook NR_TEST_DROP_PART=n: treat the n-th job start (part 0/1) as never executed (its flag_in wait timed out)
     static const int drop = getenv("NR_TEST_DROP_PART") ? atoi(getenv("NR_TEST_DROP_PART")) : 0; static int starts = 0;
     if (part <= 1 && ++starts == drop) { ready = false; rlog("runtime: NR_TEST_DROP_PART: job %d (seq %u) dropped", starts, seq); }
@@ -507,6 +512,8 @@ static void ext_thread(nr_ctx* c) {
              hipMemcpyAsync(c->io + c->out_off, c->d + PAD + c->off_dst, c->dst_size, hipMemcpyDeviceToDevice, s) == hipSuccess;
       ok = ok && hipStreamWriteValue32(s, c->io + c->flag_off, seq, 0) == hipSuccess;
       hipStreamSynchronize(s); if (last) c->frame++;
+      static const bool tl = getenv("NR_TIMELINE") != nullptr;   // test harness timeline (QPC ms, same clock as test_sync's now()): flag_in seen -> job done
+      if (tl) { LARGE_INTEGER f, n; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&n); fprintf(stderr, "TLH %u %d %.3f %.3f\n", seq, part, (double)t_in.QuadPart * 1000.0 / f.QuadPart, (double)n.QuadPart * 1000.0 / f.QuadPart); }
       if (ok && last && ++c->checked == 10) self_check(c);
       if (!ok) fprintf(stderr, "nr_ext: frame %u launch failed\n", seq);
     }

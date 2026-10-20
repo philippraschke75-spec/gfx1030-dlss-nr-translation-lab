@@ -52,7 +52,7 @@ static float g_pass2Gain = 0.5f; static std::atomic<int> g_live{0}; static UINT 
 static float g_mvK = 1.f; static unsigned g_dumpFrame = 0, g_dumpFrames = 1; static std::vector<DumpItem> g_dumpItems; static std::mutex g_dumpMu;   // dump_frame=N: frame_dump.h
 static float g_eT = 0.f, g_eL = 0.f; static int g_eFl = 0, g_dbg = 0; static float g_tS = 0.f, g_cS = 1.f, g_pw = 1.f;   // transfer_strength / color_strength / paper_white: RenoDX "Control-compatible color transfer" (kSyncHlsl rtx)   // edit_temporal (blend of the shown edit with the previous one, warped), edit_limit (cap vs local contrast), edit_warp bicubic (flag bit 2)
 static int g_fill = 1; static int g_hGate = 0, g_hCR = 1, g_hSeed = 1, g_hZp = 0;   /* history_pad reflect (NVIDIA) | zero (v0.4.3) */   // history_gate (colour gate, 0 = NVIDIA), history_filter catmull (NVIDIA) | bilinear, history_seed frame (NVIDIA) | 0
-static int g_split = 0, g_splitK[2] = {0, 0}; static int g_hist = 0; static float g_hLo = 0.08f, g_hHi = 0.25f;   // history=1: temporal history (previous NR output warped by the game's MVs) into the pre-block's +0x40, see handover/temporal-2026-10-11/DLL.md   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
+static int g_pipe = 0, g_pipeAge = 6, g_pipeTarget = 3; static float g_pipeSlice = 0.f; static int g_split = 0, g_splitK[2] = {0, 0}; static int g_hist = 0; static float g_hLo = 0.08f, g_hHi = 0.25f;   // history=1: temporal history (previous NR output warped by the game's MVs) into the pre-block's +0x40, see handover/temporal-2026-10-11/DLL.md   // mv_reuse/nr_every: NR every Nth frame, in between the last edit warped by the game's motion vectors   // sync=1: same-frame NR through D3D12<->HIP shared memory (see DESIGN.md); falls back to the async path when unavailable
 
 static void logf(const char* fmt, ...) {
     EnterCriticalSection(&g_cs);
@@ -124,6 +124,12 @@ static void loadSettings() {
     g_split = (int)GetPrivateProfileIntA("nr", "nr_split", 0, narrow(ini).c_str()); g_split = g_split <= 0 ? 0 : g_split == 1 ? 2 : (std::min)(g_split, 8);   // N >= 2: the network in N parts over N frames (1 = 2, as before), output = last finished NR, warped
     if (g_split) g_nrEvery = g_split;
     GetPrivateProfileStringA("nr", "nr_split_k", "0", b, sizeof b, narrow(ini).c_str()); g_splitK[0] = g_splitK[1] = 0; sscanf_s(b, "%d,%d", &g_splitK[0], &g_splitK[1]);   // first dispatch of part 2 (full[,skipping] frames); 0 = measure
+    g_pipe = (int)GetPrivateProfileIntA("nr", "pipeline", 0, narrow(ini).c_str()) != 0;   // pipeline=1: the network runs beside the game (never waited for); every frame shows the newest finished edit, warped (as nr_split)
+    g_pipeAge = (int)GetPrivateProfileIntA("nr", "pipeline_max_age", 6, narrow(ini).c_str()); g_pipeAge = g_pipeAge < 0 ? 0 : g_pipeAge > 60 ? 60 : g_pipeAge;   // a job older than this many frames is waited for (bounded): HIP starves under a full game load; 0 = never
+    GetPrivateProfileStringA("nr", "pipeline_slice_ms", "0", b, sizeof b, narrow(ini).c_str()); g_pipeSlice = (float)atof(b); g_pipeSlice = g_pipeSlice > 0.f ? (std::min)(g_pipeSlice, 50.f) : 0.f;   // per frame, the game's queue waits up to this long for the job (HIP gets the GPU only when that queue idles); 0 = one poll
+    g_pipeTarget = (int)GetPrivateProfileIntA("nr", "pipeline_age", 3, narrow(ini).c_str()); g_pipeTarget = g_pipeTarget < 0 ? 0 : g_pipeTarget > 30 ? 30 : g_pipeTarget;   // target frames from a job's launch until the CPU sees it done: the slice grows while jobs take longer, shrinks (to 0) while faster; 0 = fixed slice
+    if (g_pipe) { g_split = 0; g_nrEvery = 1; }
+    { char m[16]; GetPrivateProfileStringA("nr", "hip_priority", "", m, sizeof m, narrow(ini).c_str()); if (m[0]) SetEnvironmentVariableA("NR_HIP_PRIO", m); }   // high | low: the network stream's priority (nr_runtime reads it at nr_ext_open); absent = normal
     { char m[16]; GetPrivateProfileStringA("nr", "busy_mode", "wait", m, sizeof m, narrow(ini).c_str()); g_busy = !_stricmp(m, "reuse"); }
     g_busyWaitMs = (int)GetPrivateProfileIntA("nr", "busy_wait_ms", 100, narrow(ini).c_str()); g_busyWaitMs = g_busyWaitMs < 0 ? 0 : g_busyWaitMs > 1000 ? 1000 : g_busyWaitMs;
     g_maxInflight = (int)GetPrivateProfileIntA("nr", "max_inflight", g_fg ? 1 : 3, narrow(ini).c_str()); g_maxInflight = g_maxInflight < 1 ? 1 : g_maxInflight > 8 ? 8 : g_maxInflight;
@@ -216,7 +222,7 @@ static const char* kSyncHlsl =
 "GC RWByteAddressBuffer st : register(u2);\n"
 "cbuffer C : register(b0) { uint W; uint H; uint seq; uint maxIt; uint outOff; uint flagOff; float gain; uint FWH; uint minSeq; float gLo; float gHi; uint gate; uint frame; uint maxAge;\n"
 "  uint mvOn; float mvSx; float mvSy; uint mWH; uint mBase; uint dWH; uint dBase; uint dFl; float mLo; float mHi;\n"
-"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; float hk; float hx; float hkb; float hA; float amp; uint cm; float dt; float eT; float eL; uint tFl; float tS; float cS; float pw; uint jobSeq; uint dbg; uint sy; float sT; };\n"   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
+"  uint histOff; uint hPWH; uint histOk; uint hMv; float hLo; float hHi; float tmap; uint histOut; uint split; uint hdrM; float hk; float hx; float hkb; float hA; float amp; uint cm; float dt; float eT; float eL; uint tFl; float tS; float cS; float pw; uint jobSeq; uint dbg; uint sy; float sT; uint spA; };\n"   // spA (pipeline): a second split word for the shown edit, used when the GPU's edit age matches its age (bits 4+)   // history: io offset of the PAD_W x PAD_H RGB32F slot, padded size, CPU says the previous frame was NR, motion usable, colour gate   // mv reuse: motion (t1) / depth (t2) size and subrect base (x | y << 16); dFl bit0 depth present, bit1 depth inverted
 "Texture2D<float4> mot : register(t1);\n"
 "Texture2D<float> dep : register(t2);\n"   // minSeq != 0: fg mode, reuse the edit captured from a frame >= minSeq;   // W,H model; FWH = frame W | H << 16
 "RWByteAddressBuffer ob : register(u3);\n"
@@ -376,11 +382,11 @@ static const char* kSyncHlsl =
 "float4 ld4(uint k, int2 q) { q = clamp(q, 0, int2(W - 1, H - 1)); uint2 u = st.Load2(256 + k * W * H * 8 + (q.y * W + q.x) * 8); return float4(f16tof32(u.x & 0xFFFF), f16tof32(u.x >> 16), f16tof32(u.y & 0xFFFF), f16tof32(u.y >> 16)); }\n"
 "[numthreads(8,8,1)] void tea(uint3 id : SV_DispatchThreadID) {\n"
 "  if (id.x >= W || id.y >= H) return; uint FW = FWH & 0xFFFF, FH = FWH >> 16; float2 uv = (id.xy + 0.5) / float2(W, H), pf = uv * float2(FW, FH); float3 e = 0, l, aM;\n"   // aM: the model input the edit belongs to (detail=)
-"  if (split != 0) { l = L(col[min((uint2)pf, uint2(FW - 1, FH - 1))]); aM = l; uint age = frame - st.Load(8); float3 lg = (tFl & 256) ? colAt(pf).rgb : l;\n"
-"    if ((int)(st.Load(4) - minSeq) >= 0 && age != 0 && ((split & 8) != 0 || age == (split >> 4))) {\n"   // as exp's split branch, at this texel centre
+"  if (split != 0) { l = L(col[min((uint2)pf, uint2(FW - 1, FH - 1))]); aM = l; uint age = frame - st.Load(8); float3 lg = (tFl & 256) ? colAt(pf).rgb : l; uint sx = spA != 0 && age == (spA >> 4) ? spA : split;\n"
+"    if ((int)(st.Load(4) - minSeq) >= 0 && age != 0 && ((sx & 8) != 0 || age == (sx >> 4))) {\n"   // as exp's split branch, at this texel centre
 "      if (mvOn) { uint2 mn = uint2(mWH & 0xFFFF, mWH >> 16); pf += mot[uint2(mBase & 0xFFFF, mBase >> 16) + min((uint2)(uv * mn), mn - 1)].xy * float2(mvSx, mvSy); }\n"
-"      if (split & 2) pf += accAt(pf / float2(FW, FH), frame - 1) * float2(FW, FH);\n"
-"      if (split & 4) pf += slotAt(pf / float2(FW, FH), 5) * float2(FW, FH);\n"
+"      if (sx & 2) pf += accAt(pf / float2(FW, FH), frame - 1) * float2(FW, FH);\n"
+"      if (sx & 4) pf += slotAt(pf / float2(FW, FH), 5) * float2(FW, FH);\n"
 "      if (all(pf == pf) && all(pf >= 0.0) && all(pf < float2(FW, FH))) { float2 p = pf * float2(W, H) / float2(FW, FH); float4 o = stAt(p, 256 + W * H * 8); float dn = depAt(uv), wt = gw(lg, dn, o);\n"
 "        e = fillE(p, lg, dn, wt, wt * jobE(p)); aM = o.rgb; } } }\n"
 "  else if (st.Load(0) == 0) { l = L(col[min((uint2)pf, uint2(FW - 1, FH - 1))]); aM = l; uint age = frame - st.Load(8); float3 lg = (tFl & 256) ? colAt(pf).rgb : l;\n"   // reuse frame (HIP busy / nr_every): the last captured edit, as exp's reuse branches take it
@@ -416,12 +422,12 @@ static const char* kSyncHlsl =
 "    else if (st.Load(0) != 0) { a = sn(bil(p, 0)).rgb; b = sn(bil(p, outOff)).rgb; } else { return c; }\n"
 "    return float4(dbg == 1 ? (hd() ? Ti(b) : b) : (b - a) * 4.0 + 0.5, c.a); }\n"
 "  if (split != 0) {\n"   // nr_split: the last finished NR edit (st+256, job frame st[8]) moved to this frame: by this frame's vectors, + (bit 2) the acc chain of the frame before, + (bit 4) the anchor (job frame -> frame of the edit before); age expected by the CPU in bits 4+
-"    uint age = frame - st.Load(8); if ((int)(st.Load(4) - minSeq) < 0 || age == 0 || ((split & 8) == 0 && age != (split >> 4))) { return c; }\n"   // none since the reset yet / not the edit the CPU expects (spin timeout): live frame; bit 8: chain broken, vectors only, any age
+"    uint age = frame - st.Load(8), sx = spA != 0 && age == (spA >> 4) ? spA : split; if ((int)(st.Load(4) - minSeq) < 0 || age == 0 || ((sx & 8) == 0 && age != (sx >> 4))) { return c; }\n"   // pipeline: the CPU cannot know which job the GPU has harvested; spA is the other candidate   // none since the reset yet / not the edit the CPU expects (spin timeout): live frame; bit 8: chain broken, vectors only, any age
 "    if (tFl & 1) { td = gain * tE(id); tk = 2; return float4(cmp(c, tSe(id, c)), c.a); }\n"   // edit stabilisation: the stabilised edit (warped and gated per model texel by tea)
 "    float2 uv = (id + 0.5) / float2(FW, FH), pf = id + 0.5;\n"   // frame px, same arithmetic as the mv reuse branch (age 1 is bit-identical to it)
 "    if (mvOn) { uint2 mn = uint2(mWH & 0xFFFF, mWH >> 16); pf = id + 0.5 + mot[uint2(mBase & 0xFFFF, mBase >> 16) + min((uint2)(uv * mn), mn - 1)].xy * float2(mvSx, mvSy); }\n"
-"    if (split & 2) pf += accAt(pf / float2(FW, FH), frame - 1) * float2(FW, FH);\n"
-"    if (split & 4) pf += slotAt(pf / float2(FW, FH), 5) * float2(FW, FH);\n"
+"    if (sx & 2) pf += accAt(pf / float2(FW, FH), frame - 1) * float2(FW, FH);\n"
+"    if (sx & 4) pf += slotAt(pf / float2(FW, FH), 5) * float2(FW, FH);\n"
 "    if (!all(pf == pf) || any(pf < 0.0) || any(pf >= float2(FW, FH))) { return c; }\n"   // from off screen: live frame
 "    float2 p = pf * float2(W, H) / float2(FW, FH); float4 o = stAt(p, 256 + W * H * 8); float3 lg = (tFl & 256) ? colAt(id + 0.5).rgb : L(c); float dn = depAt(uv), wt = gw(lg, dn, o);\n"   // colour + depth gate as mv reuse
 "    float3 we = fillE(p, lg, dn, wt, wt * stAt(p, 256).rgb);\n"
@@ -464,7 +470,7 @@ static const char* kSyncHlsl =
 "float3 Pf(float3 x) { x = max(x, 0.0); if (tmap == 0.0) return x; x = max(tmap * x, 0.0); x = min(x / (1.0 + x), 1.0); return lerp(1.055 * pow(x, 1.0 / 2.4) - 0.055, x * 12.92, step(x, 0.0031308)); }\n"   // as k_import: mode 0 raw; else max(0, scale*x), x/(1+x) clamped, sRGB OETF (tmap = scale, 0 = mode 0)
 "[numthreads(8,8,1)] void hst(uint3 id : SV_DispatchThreadID) {\n"
 "  if (id.x >= W || id.y >= H) return; uint ok = st.Load(0);\n"
-"  if (id.x == 0 && id.y == 0) st.Store(12, ok ? frame : 0u);\n"   // frame whose output is kept (0 = none)
+"  if (id.x == 0 && id.y == 0 && (ok || (tFl & 1024) == 0)) st.Store(12, ok ? frame : 0u);\n"   // frame whose output is kept (0 = none); pipeline (bit 1024): a job not done yet keeps the last one
 "  if (ok == 0) return; uint2 r = io.Load2(outOff + (id.y * W + id.x) * 8);\n"
 "  float3 p = Pf(float3(san(f16tof32(r.x & 0xFFFF)), san(f16tof32(r.x >> 16)), san(f16tof32(r.y & 0xFFFF))));\n"
 "  st.Store2(256 + 2 * W * H * 8 + (id.y * W + id.x) * 8, uint2(pk(p.r, p.g), pk(p.b, jobDep(id.xy)))); }\n"
@@ -505,7 +511,7 @@ static const char* kSyncHlsl =
 "  io.Store3(o, asuint(res)); }\n"
 "[numthreads(8,8,1)] void hwp(uint3 id : SV_DispatchThreadID) { hwpB(id, 1); }\n"   // previous frame was NR (bit-exact to the one-frame history)
 "[numthreads(8,8,1)] void hwp2(uint3 id : SV_DispatchThreadID) { hwpB(id, histOk); }\n";   // older NR output (nr_every > 1): histOk = its age in frames
-static const int kSyncRing = 16, kCb = 51;                                     // descriptor pairs (colour SRV, output UAV) in flight
+static const int kSyncRing = 16, kCb = 52;                                     // descriptor pairs (colour SRV, output UAV) in flight
 
 // ---------------------------------------------------------------- feature
 enum { S_LOADING = 0, S_IDLE = 1, S_WAIT_COPY = 2, S_RUNNING = 3, S_FAILED = 4, S_SYNC = 5 };
@@ -518,6 +524,7 @@ struct Sync {                                       // D3D12 side of the sync pa
     unsigned waitFails = 0; unsigned padW = 0, padH = 0, lastNrFrm = 0xFFFFFFF0u, accFrm = 0xFFFFFFF0u; bool histOn = false;   // history=1   // fg: frame counter, frame of each in-flight seq (edit age)
     ID3D12PipelineState* anc = nullptr; unsigned np = 0, ancFrm = 0xFFFFFFF0u, ancTo = 0xFFFFFFF0u, ageSum = 0, ageCnt = 0, ageMax = 0, loose = 0;   // nr_split N: parts per job; anchor (st slot 5) = offsets from frame ancFrm to ancTo; edit age stats
     ID3D12PipelineState *tea = nullptr, *teb = nullptr; unsigned teFrm = 0xFFFFFFF0u; bool warnedTe = false;   // edit stabilisation passes, frame teb last ran
+    bool pipe = false, pjob = false; unsigned prevFrm = 0xFFFFFFF0u, ageSeen = 0; float slice = 0.f, sliceSum = 0.f; ID3D12Resource* ageRb = nullptr; uint8_t* ageRbp = nullptr;   // pipeline: a job in flight (frame jobFrm, seq jobSeq), the job before it; per-frame slice (ms) of the game's queue for the job; st[8] readback ring (GPU edit age stats)
     bool split = false, mvLogged = false; unsigned part = 0, jobFrm = 0, doneFrm = 0xFFFFFFF0u, accTo = 0xFFFFFFF0u, jobSeq = 0;   // nr_split: next part (0 = start a job), frame of the job in flight / last finished one, NR frame the acc chain points to, seq of the job's part 1
     UINT64 obCap = 0; std::vector<std::pair<ID3D12Resource*, unsigned>> obOld;   // R9G9B9E5 staging: capacity (grow only); replaced buffers + frame, released max_inflight + 2 frames later
 };
@@ -620,6 +627,8 @@ static void workerBody(Feature* F) {
                        else { F->sy->split = true; F->sy->np = np; char t[256] = ""; size_t o = 0;
                               for (int f = 0; f < 2; f++) { o += snprintf(t + o, sizeof t - o, f ? " | skipping frames: at" : "full frames: at"); for (int j = 0; j < np - 1; j++) o += snprintf(t + o, sizeof t - o, " %d", (f ? ks : kf)[j]); o += snprintf(t + o, sizeof t - o, ", ms"); for (int j = 0; j < np; j++) o += snprintf(t + o, sizeof t - o, " %.1f", ms[f * np + j]); }
                               logf("nr_split: on, %d parts; %s GPU", np, t); } }
+                   if (g_pipe) { if (!p_extEnqueue3) logf("pipeline: nr_runtime.dll has no nr_ext_enqueue3 (old runtime) - sync path");
+                                 else { F->sy->pipe = true; F->sy->slice = g_pipeSlice; F->sy->ageRb = makeBuffer(F->dev, D3D12_HEAP_TYPE_READBACK, 4 * kSyncRing, &F->sy->ageRbp); logf("pipeline: on - the network runs beside the game, frames show the newest finished edit warped (max age %d frames)", g_pipeAge); } }
                    logf("sync: D3D12<->HIP interop ready, same-frame NR (GPU wait bound %d ms, max %d frames in flight)", g_spinMs, g_maxInflight); F->state = S_SYNC; return; }   // the worker has nothing more to do
         }
         F->state = S_IDLE;
@@ -682,7 +691,7 @@ static bool makeDelta(Feature* F) {
 
 static void freeSync(Sync* s) {
     if (!s) return;
-    for (IUnknown* u : std::initializer_list<IUnknown*>{s->io, s->sig, s->st, s->rs, s->imp, s->spin, s->exp, s->cap, s->expPk, s->ob, s->heap, s->hwp, s->hst, s->acc, s->hwp2, s->lat, s->anc, s->tea, s->teb}) if (u) u->Release();
+    for (IUnknown* u : std::initializer_list<IUnknown*>{s->io, s->sig, s->st, s->rs, s->imp, s->spin, s->exp, s->cap, s->expPk, s->ob, s->heap, s->hwp, s->hst, s->acc, s->hwp2, s->lat, s->anc, s->tea, s->teb, s->ageRb}) if (u) u->Release();
     for (auto& o : s->obOld) o.first->Release();
     if (s->hIo) CloseHandle(s->hIo); if (s->hSig) CloseHandle(s->hSig); delete s;
 }
@@ -702,7 +711,7 @@ static Sync* makeSync(Feature* F) {
     const UINT64 n = (UINT64)F->W * F->H * 8, a = (n + 65535) & ~65535ull;
     s->outOff = a; s->flagOff = 2 * a; s->ioSize = 2 * a + 65536; s->sigSize = 65536;
     if (g_hist) { const UINT64 hb = ((UINT64)((F->W + 64 + 127) & ~127u) * ((F->H + 64 + 127) & ~127u) * 12 + 65535) & ~65535ull; s->histOff = s->ioSize; s->histOut = s->ioSize + hb; s->ioSize += 2 * hb; }   // + history slot (PAD_W x PAD_H RGB32F; PAD can exceed the 128-aligned size (1280x720 -> 1344x768): +64 margin, checked by nr_ext_history)
-    s->io = sharedBuffer(d, s->ioSize, D3D12_HEAP_FLAG_SHARED, &s->ioAlloc); s->sig = sharedBuffer(d, s->sigSize, D3D12_HEAP_FLAG_SHARED, &s->sigAlloc); s->st = sharedBuffer(d, 256 + (g_split ? 11 : g_eT > 0.f || g_eL > 0.f ? 10 : g_hist ? 5 : 2) * n, D3D12_HEAP_FLAG_NONE, nullptr);   // status words | fg edit | its model input (half4, model size each) | ... | edit stabilisation: 6 tea, 7/8 teb, 9 model input of the edit
+    s->io = sharedBuffer(d, s->ioSize, D3D12_HEAP_FLAG_SHARED, &s->ioAlloc); s->sig = sharedBuffer(d, s->sigSize, D3D12_HEAP_FLAG_SHARED, &s->sigAlloc); s->st = sharedBuffer(d, 256 + (g_split || g_pipe ? 11 : g_eT > 0.f || g_eL > 0.f ? 10 : g_hist ? 5 : 2) * n, D3D12_HEAP_FLAG_NONE, nullptr);   // status words | fg edit | its model input (half4, model size each) | ... | edit stabilisation: 6 tea, 7/8 teb, 9 model input of the edit
     if (!s->io || !s->sig || !s->st) { logf("sync: cannot create shared buffers"); freeSync(s); return nullptr; }
     if (FAILED(d->CreateSharedHandle(s->io, nullptr, GENERIC_ALL, nullptr, &s->hIo)) || FAILED(d->CreateSharedHandle(s->sig, nullptr, GENERIC_ALL, nullptr, &s->hSig))) { logf("sync: CreateSharedHandle failed"); freeSync(s); return nullptr; }
     D3D12_DESCRIPTOR_RANGE rg[2] = {}; rg[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; rg[0].NumDescriptors = 3; rg[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; rg[1].NumDescriptors = 1; rg[1].OffsetInDescriptorsFromTableStart = 3;   // colour, motion, depth | output
@@ -713,7 +722,7 @@ static Sync* makeSync(Feature* F) {
     if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sb, &er)) || FAILED(d->CreateRootSignature(0, sb->GetBufferPointer(), sb->GetBufferSize(), IID_PPV_ARGS(&s->rs)))) { logf("sync: root signature failed"); freeSync(s); return nullptr; }
     sb->Release();
     ID3D12PipelineState** pso[13] = {&s->imp, &s->spin, &s->exp, &s->cap, &s->expPk, &s->lat, &s->hwp, &s->hst, &s->acc, &s->hwp2, &s->anc, &s->tea, &s->teb}; const char* ep[13] = {"imp", "spin", "exp", "cap", "exp", "lat", "hwp", "hst", "acc", "hwp2", "anc", "tea", "teb"};
-    for (int i = 0; i < (g_eT > 0.f || g_eL > 0.f ? 13 : g_split ? 11 : g_hist ? 10 : 6); i++) {
+    for (int i = 0; i < (g_eT > 0.f || g_eL > 0.f ? 13 : g_split || g_pipe ? 11 : g_hist ? 10 : 6); i++) {
         ID3DBlob* cs = nullptr; er = nullptr; const char* mac[8] = {}; int nm = 0;   // D3D_SHADER_MACRO[], null-terminated
         if (i == 4) { mac[nm++] = "PACKED"; mac[nm++] = "1"; }                     // expPk
         if (!g_ldrIn) { mac[nm++] = "HDR_IN"; mac[nm++] = "1"; }
@@ -1020,17 +1029,17 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             if (FAILED(cmd->QueryInterface(IID_PPV_ARGS(&c2)))) { if (!s->busy++) logf("sync: host list has no WriteBufferImmediate (ID3D12GraphicsCommandList2) - native frame"); return passThrough(cmd, color, out, w, h); }
             c2->Release();                                          // the host holds the list; we only need the interface for this call
             if (reset == 1) { s->minSeq = s->seq + 1; s->part = 0; }  // fg/split: no edit from before a camera cut is reused; split: a half-done job is abandoned
-            const bool sp = s->split;
+            const bool pl = s->pipe, sp = s->split || pl;   // pipeline: the nr_split machinery (job depth, acc chain, anchor, warp, gates, fill) with one whole-network job at a time
             const unsigned seq = s->seq + 1; ++s->frm; const unsigned accF0 = s->accFrm, accT0 = s->accTo; const unsigned age = s->frm - s->lastNrFrm; const unsigned chain = reset != 1 && (age == 1 || (age <= 8 && s->accFrm + 1 == s->frm)) ? age : 0, histOk = s->histOn ? chain : 0;   // frames since the last NR output; > 1 needs an unbroken offset chain (acc) over the in-between frames
             const bool reuseOn = true;   // cap the edit on every NR frame: busy frames (and spin timeouts) reuse it   // cap the edit on NR frames, reuse it on the others
             const bool skip = g_nrEvery > 1 && reset != 1 && s->sinceNr + 1 < (unsigned)g_nrEvery && (int)(s->seq - s->minSeq) >= 0;   // nr_every: reuse frame (an edit since the last reset exists)
             // nr_split + halo_fix: history older than one frame goes to the post-block lerp only (hist_valid 2). In the pre-block input lanes the
             // N-frame-old warped history made the network draw ghost copies of thin moving objects (FO4 dump: 540p HOLE 14 % -> 1.2 %).
-            auto enq = [&] { return sp ? p_extEnqueue3(F->ctx, seq, g_maxInflight, s->part == 0 && histOk ? (g_fill && g_hist == 1 && histOk > 1 ? 2 : g_hist) : 0, (int)s->part + 1) : skip ? 1 : (s->histOn ? p_extEnqueue2(F->ctx, seq, g_maxInflight, histOk ? g_hist : 0) : p_extEnqueue(F->ctx, seq, g_maxInflight)); };   // HIP: wait flag_in >= seq, run, flag_out = seq (queued now, runs when the list below executes)
+            auto enq = [&] { return sp ? p_extEnqueue3(F->ctx, seq, pl ? 1 : g_maxInflight, s->part == 0 && histOk ? (g_fill && g_hist == 1 && histOk > 1 ? 2 : g_hist) : 0, pl ? 0 : (int)s->part + 1) : skip ? 1 : (s->histOn ? p_extEnqueue2(F->ctx, seq, g_maxInflight, histOk ? g_hist : 0) : p_extEnqueue(F->ctx, seq, g_maxInflight)); };   // HIP: wait flag_in >= seq, run, flag_out = seq (queued now, runs when the list below executes)
             int q = enq();
             // busy_mode=wait: HIP slots free up when the ext thread finishes a job of an EARLIER, already submitted list (or drops it after its own 500 ms
             // flag_in bound), never through the list we are recording -> a bounded CPU wait cannot deadlock. It throttles the game to the network rate.
-            if (q == 1 && (sp || !skip) && !g_fg && g_busy == 0 && s->waitFails < 8) { const DWORD t0 = GetTickCount();
+            if (q == 1 && (sp || !skip) && !pl && !g_fg && g_busy == 0 && s->waitFails < 8) { const DWORD t0 = GetTickCount();
                 while (q == 1 && GetTickCount() - t0 < (DWORD)g_busyWaitMs) { Sleep(0); q = enq(); }   // ponytail: yield-spin (one core for up to ~1 frame), an event from the runtime if CPU use matters
                 if (q == 1 && ++s->waitFails == 8) logf("sync: busy_wait_ms %d ran out 8 times (host submits late?) - busy_mode reuse from now on", g_busyWaitMs);
                 else if (q == 0) s->waitFails = 0; }
@@ -1039,7 +1048,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
             const bool haveNr = (int)(s->seq - s->minSeq) >= 0;   // an NR edit since the last reset exists to reuse
             if (q != 0 && !g_fg && !skip && !sp && !haveNr) { if (s->busy++ < 5 || s->busy % 100 == 0) logf("sync: frame not queued (HIP still busy with older frames, %u so far) - native frame", s->busy); return passThrough(cmd, color, out, w, h); }
             if (q == 0) s->seq = seq;
-            if (q == 0 && sp && s->part == 0) s->jobSeq = seq;   // spin: later parts of this job are skipped if its part 1 did not finish
+            const unsigned prevJobSeq = s->jobSeq; if (q == 0 && sp && s->part == 0) s->jobSeq = seq;   // spin: later parts of this job are skipped if its part 1 did not finish
             if (q == 0 && !(sp && s->part != 0)) { s->frmOf[seq % 16] = s->frm; if (++s->ran <= 3 || s->ran % 1000 == 0) logf("sync: NR frame %u queued (frame %ux%u, %u native, %u reused so far)", s->ran, w, h, s->busy, s->reused); }
             else s->reused++;                                       // fg: HIP busy / nr_every: in-between frame -> live frame + last NR edit, the queue does not wait
             UINT k = (++s->rec % kSyncRing) * 4; auto cpu = s->heap->GetCPUDescriptorHandleForHeapStart(); auto gpu = s->heap->GetGPUDescriptorHandleForHeapStart();
@@ -1102,7 +1111,21 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
                 auto pass = [&](ID3D12PipelineState* p, UINT gx, UINT gy) { cmd->SetComputeRoot32BitConstants(3, kCb, cb, 0); cmd->SetPipelineState(p); cmd->Dispatch(gx, gy, 1); cmd->ResourceBarrier(1, &uav); };
                 const UINT gx = (F->W + 7) / 8, gy = (F->H + 7) / 8;
                 auto accP = [&] { if (chain) { cb[26] = chain; pass(s->acc, gx, gy); s->accFrm = s->frm; s->accTo = s->lastNrFrm; } };   // offsets from this frame to the last job's frame
-                if (s->part == 0) {
+                const unsigned pTp = s->jobFrm, Ta = pl ? s->prevFrm : 0xFFFFFFF0u;   // pipeline: the shown edit's job frame is the job in flight / just harvested (pTp) or else the one before (Ta)
+                if (pl) {   // pipeline: no part of this list waits for HIP (except past pipeline_max_age); harvesting is conditional on the GPU
+                    if (s->pjob) {   // the job in flight: spin polls once (the GPU harvests it if HIP is done by then), ~1 ms once the CPU saw it finish (q == 0), the full bound past max age
+                        const bool old = g_pipeAge && s->frm - s->jobFrm >= (unsigned)g_pipeAge; if (old) s->loose++;
+                        UINT hb[kCb]; memcpy(hb, cb, sizeof hb); hb[2] = hb[47] = prevJobSeq; hb[12] = s->jobFrm; hb[43] |= 1024u; hb[3] = old ? cb[3] : q == 0 ? 6000u : (std::max)(1u, (UINT)(s->slice * 6000.f));
+                        for (auto* p : {s->spin, s->hst, s->cap}) { if (p == s->hst && !s->histOn) continue; cmd->SetComputeRoot32BitConstants(3, kCb, hb, 0); cmd->SetPipelineState(p); cmd->Dispatch(p == s->spin ? 1 : gx, p == s->spin ? 1 : gy, 1); cmd->ResourceBarrier(1, &uav); }
+                        if (q == 0 && g_pipeTarget) { const unsigned a = s->frm - s->jobFrm;   // slice controller: the job took a frames (launch -> the CPU saw it done)
+                            s->slice = a > (unsigned)g_pipeTarget ? (std::min)(s->slice * 1.25f + 0.25f, 20.f) : a < (unsigned)g_pipeTarget ? (std::max)(s->slice * 0.8f - 0.1f, 0.f) : s->slice; } }
+                    s->sliceSum += s->slice;
+                    if (q == 0) {   // HIP idle (the job above is done, harvested in this list at the latest): the next job starts on this frame
+                        pass(s->imp, gx, gy); if (s->histOn) pass(histOk > 1 ? s->hwp2 : s->hwp, (s->padW + 7) / 8, (s->padH + 7) / 8);
+                        if (chain) { cb[26] = chain; pass(s->anc, gx, gy); s->ancFrm = s->frm; s->ancTo = s->lastNrFrm; } else s->ancFrm = 0xFFFFFFF0u;   // anchor: this job's frame -> the previous job's frame
+                        release(); s->prevFrm = s->pjob ? s->jobFrm : 0xFFFFFFF0u; s->lastNrFrm = s->jobFrm = s->frm; s->pjob = true; }
+                    else accP();
+                } else if (s->part == 0) {
                     if (q == 0) { pass(s->imp, gx, gy); if (s->histOn) pass(histOk > 1 ? s->hwp2 : s->hwp, (s->padW + 7) / 8, (s->padH + 7) / 8);
                                   if (s->np > 2) { if (chain) { cb[26] = chain; pass(s->anc, gx, gy); s->ancFrm = s->frm; s->ancTo = s->lastNrFrm; } else s->ancFrm = 0xFFFFFFF0u; }   // anchor: this job's frame -> the previous job's frame (shown until this job is done)
                                   release(); pass(s->spin, 1, 1); s->lastNrFrm = s->jobFrm = s->frm; s->part = 1; }   // the spin waits for part 1 only
@@ -1114,12 +1137,21 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
                                       if (s->histOn) pass(s->hst, gx, gy); pass(s->cap, gx, gy); cb[12] = s->frm; s->doneFrm = s->jobFrm; s->part = 0; } }
                 }
                 // offsets from this frame to the shown edit's frame T: vectors to frame-1, then acc of frame-1 (-> accT0) and/or the anchor (ancFrm -> ancTo)
-                const unsigned da = s->frm - s->doneFrm, T = s->doneFrm; const bool accOk = accF0 + 1 == s->frm, ancOk = s->np > 2 && s->ancTo == T;
-                const unsigned fl = da <= 1 ? 0 : accOk && accT0 == T ? 2 : ancOk && s->ancFrm + 1 == s->frm ? 4 : ancOk && accOk && accT0 == s->ancFrm ? 6 : 8;   // 8: chain broken (HIP busy long), vectors only (colour gate guards)
-                cb[32] = 1 | fl | ((da < 0x8000000u ? da : 0u) << 4);
-                if (T != 0xFFFFFFF0u && da < 64) { s->ageSum += da; s->ageCnt++; s->ageMax = (std::max)(s->ageMax, da); s->loose += fl == 8; }
-                if (s->ageCnt == 200) { logf("nr_split: edit age mean %.2f max %u frames, %u of 200 frames vectors-only", s->ageSum / 200.0, s->ageMax, s->loose); s->ageSum = s->ageCnt = s->ageMax = s->loose = 0; }
+                const bool accOk = accF0 + 1 == s->frm;
+                auto word = [&](unsigned T) { const unsigned da = s->frm - T; const bool ancOk = (s->np > 2 || pl) && s->ancTo == T;
+                    const unsigned fl = da <= 1 ? 0 : accOk && accT0 == T ? 2 : ancOk && s->ancFrm + 1 == s->frm ? 4 : ancOk && accOk && accT0 == s->ancFrm ? 6 : 8;   // 8: chain broken (HIP busy long), vectors only (colour gate guards)
+                    return 1u | fl | ((da < 0x8000000u ? da : 0u) << 4); };
+                const unsigned T = pl ? pTp : s->doneFrm, da = s->frm - T; cb[32] = word(T); if (Ta != 0xFFFFFFF0u) cb[51] = word(Ta);
+                if (!pl && T != 0xFFFFFFF0u && da < 64) { s->ageSum += da; s->ageCnt++; s->ageMax = (std::max)(s->ageMax, da); s->loose += (cb[32] & 8) != 0; }
+                if (!pl && s->ageCnt == 200) { logf("nr_split: edit age mean %.2f max %u frames, %u of 200 frames vectors-only", s->ageSum / 200.0, s->ageMax, s->loose); s->ageSum = s->ageCnt = s->ageMax = s->loose = 0; }
                 if (teOn) { pass(s->tea, gx, gy); pass(s->teb, gx, gy); s->teFrm = s->frm; }
+                if (pl && s->ageRb) {   // GPU edit age stats: st[8] (job frame of the edit this frame shows) -> readback ring, read kSyncRing frames later
+                    const unsigned slot = s->frm % kSyncRing; uint32_t j; memcpy(&j, s->ageRbp + 4 * slot, 4);
+                    if (s->frm > (unsigned)kSyncRing && s->frm - kSyncRing - j < 64) { const unsigned a = s->frm - kSyncRing - j; s->ageSum += a; s->ageCnt++; s->ageMax = (std::max)(s->ageMax, a); }
+                    D3D12_RESOURCE_BARRIER t = {}; t.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION; t.Transition.pResource = s->st; t.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS; t.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+                    cmd->ResourceBarrier(1, &t); cmd->CopyBufferRegion(s->ageRb, 4 * slot, s->st, 8, 4); std::swap(t.Transition.StateBefore, t.Transition.StateAfter); cmd->ResourceBarrier(1, &t);
+                    if (++s->ageSeen == 200) { logf("pipeline: shown edit age mean %.2f max %u frames (GPU, %u of 200 frames with an edit), %u frames waited at max age, %u jobs, slice mean %.2f ms now %.2f ms", s->ageCnt ? s->ageSum / (double)s->ageCnt : 0.0, s->ageMax, s->ageCnt, s->loose, s->ran, s->sliceSum / 200.0, s->slice);
+                        s->ageSum = s->ageCnt = s->ageMax = s->loose = s->ageSeen = 0; s->sliceSum = 0.f; } }
                 cmd->SetComputeRoot32BitConstants(3, kCb, cb, 0);
             } else {
             if (g_fg && s->seq > (q == 0 ? 1u : 0u)) {              // fg: harvest the newest earlier frame if HIP finished it after its own (short) wait

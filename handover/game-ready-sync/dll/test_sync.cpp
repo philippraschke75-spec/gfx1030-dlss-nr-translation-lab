@@ -248,7 +248,7 @@ int main(int argc, char** argv) {
         const int n = atoi(getenv("NR_TEST_PACE")); const int QD = getenv("NR_TEST_QUEUE") ? std::max(1, std::min(7, atoi(getenv("NR_TEST_QUEUE")))) : 2, NQ = QD + 1; const double cpu = getenv("NR_TEST_CPU_MS") ? atof(getenv("NR_TEST_CPU_MS")) : 8.0;
         auto stats = (void (*)(void*, unsigned*, unsigned*, unsigned*))GetProcAddress(m, "dlssnr_port_stats"); if (!stats) { puts("missing dlssnr_port_stats"); return 1; }
         ID3D12CommandAllocator* A[8]; ID3D12GraphicsCommandList* L[8]; for (int i = 0; i < NQ; i++) { CK(dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&A[i]))); CK(dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, A[i], nullptr, IID_PPV_ARGS(&L[i]))); L[i]->Close(); }
-        const double gms = getenv("NR_TEST_GPU_MS") ? atof(getenv("NR_TEST_GPU_MS")) : 0; ID3D12RootSignature* lrs = nullptr; ID3D12PipelineState* lps = nullptr; ID3D12Resource* lb = nullptr; UINT lit = 20000;
+        const double gms = getenv("NR_TEST_GPU_MS") ? atof(getenv("NR_TEST_GPU_MS")) : 0; ID3D12RootSignature* lrs = nullptr; ID3D12PipelineState* lps = nullptr; ID3D12Resource* lb = nullptr; UINT lit = 20000; const UINT LG = getenv("NR_TEST_LOADG") ? atoi(getenv("NR_TEST_LOADG")) : 4096;   // NR_TEST_LOADG: load thread groups (default 4096 = whole GPU)
         if (gms > 0) {   // dummy "game rendering": an ALU loop over 4096x64 threads, iteration count calibrated to gms (from branch pipeline)
             const char* hl = "RWByteAddressBuffer u : register(u0); cbuffer C : register(b0) { uint n; };\n"
                              "[numthreads(64,1,1)] void main(uint3 id : SV_DispatchThreadID) { float x = id.x; for (uint i = 0; i < n; i++) x = x * 0.9999 + 0.5; if (x == 12345.0) u.Store(0, asuint(x)); }\n";
@@ -260,9 +260,35 @@ int main(int argc, char** argv) {
             { D3D12_HEAP_PROPERTIES hp = {}; hp.Type = D3D12_HEAP_TYPE_DEFAULT; D3D12_RESOURCE_DESC d = {}; d.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; d.Width = 256; d.Height = 1; d.DepthOrArraySize = 1; d.MipLevels = 1;
               d.SampleDesc.Count = 1; d.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; d.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS; CK(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&lb))); }
             for (int it = 0; it < 4; it++) {   // calibrate (submit -> done wall time, list holds only the load)
-                al->Reset(); cl->Reset(al, nullptr); cl->SetComputeRootSignature(lrs); cl->SetPipelineState(lps); cl->SetComputeRoot32BitConstants(0, 1, &lit, 0); cl->SetComputeRootUnorderedAccessView(1, lb->GetGPUVirtualAddress()); cl->Dispatch(4096, 1, 1); cl->Close();
+                al->Reset(); cl->Reset(al, nullptr); cl->SetComputeRootSignature(lrs); cl->SetPipelineState(lps); cl->SetComputeRoot32BitConstants(0, 1, &lit, 0); cl->SetComputeRootUnorderedAccessView(1, lb->GetGPUVirtualAddress()); cl->Dispatch(LG, 1, 1); cl->Close();
                 double a = now(); ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); if (!wait(5000)) { puts("FAIL load calibration timeout"); return 7; } double t = now() - a;
                 printf("gpu load calibration: %u iterations -> %.2f ms\n", lit, t); if (it < 3) lit = (UINT)std::min(5e7, std::max(1000.0, lit * gms / std::max(t, 0.05))); }
+        }
+        // NR_TEST_OVERLAP=s: can the network (HIP) and the game (D3D12) share the GPU with a throughput gain? s seconds each: the load alone
+        // (lists of one load dispatch, 2 in flight), the network alone (reference nr_run loop), both at once. gain = load/s x load ms + NR/s x NR ms
+        // (each at its alone cost): 1.00 = pure time slicing, > 1 = real overlap. NR_TEST_LOADG = load thread groups (default 4096 = whole GPU).
+        if (const char* ov = getenv("NR_TEST_OVERLAP")) {
+            if (!lps) { puts("FAIL NR_TEST_OVERLAP needs NR_TEST_GPU_MS"); return 1; }
+            auto wv = [&](UINT64 v) { if (fence->GetCompletedValue() >= v) return true; fence->SetEventOnCompletion(v, ev); return WaitForSingleObject(ev, 5000) == WAIT_OBJECT_0; }; makeFrame(0);
+            const double T = atof(ov) * 1000; const UINT G = LG;
+            auto loads = [&](double dur, std::atomic<bool>* stop) { int n = 0; std::vector<UINT64> v; const double t0 = now();
+                for (int i = 0; (stop ? !*stop : now() - t0 < dur); i++) { if (i >= 2 && !wv(v[i - 2])) return -1; if (i >= 2) n++;
+                    A[i % NQ]->Reset(); L[i % NQ]->Reset(A[i % NQ], nullptr); auto* c = L[i % NQ]; c->SetComputeRootSignature(lrs); c->SetPipelineState(lps); c->SetComputeRoot32BitConstants(0, 1, &lit, 0);
+                    c->SetComputeRootUnorderedAccessView(1, lb->GetGPUVirtualAddress()); c->Dispatch(G, 1, 1); c->Close(); ID3D12CommandList* l[] = {c}; q->ExecuteCommandLists(1, l); q->Signal(fence, ++fv); v.push_back(fv); }
+                return wv(v.back()) ? n + std::min<int>(2, (int)v.size()) : -1; };
+            auto nrs = [&](double dur, std::atomic<bool>* stop, double* gpu) { int n = 0; *gpu = 0; const double t0 = now(); float g;
+                while (stop ? !*stop : now() - t0 < dur) { if (rrun(ref, in.data(), refo.data(), &g)) return -1; *gpu += g; n++; } return n; };
+            double ga = 0; int n; double t0 = now(); n = loads(T, nullptr); const double tl = now() - t0, xl = tl / n;
+            t0 = now(); int m = nrs(T, nullptr, &ga); const double tn = now() - t0, xn = tn / m;
+            printf("OVERLAP alone: load (%u groups) %.2f ms/dispatch (%d in %.0f ms) | network %.2f ms/run wall, %.2f ms GPU events (%d runs)\n", G, xl, n, tl, xn, ga / m, m);
+            std::atomic<bool> stop{false}; double gb = 0; int mb = 0; std::thread th([&] { mb = nrs(0, &stop, &gb); });
+            t0 = now(); while (now() - t0 < 300) Sleep(1);   // network running before the load starts
+            const double tc0 = now(); int nb = loads(T, nullptr); const double tc = now() - tc0; stop = true; th.join();
+            const double tt = now() - t0;   // network ran over the whole window (load window + 300 ms lead + the last run)
+            const double rl = nb / tc, rn = mb / tt;
+            printf("OVERLAP together: load %.2f ms/dispatch (%.1f%% of alone rate) | network %.2f ms/run, %.2f ms GPU events (%.1f%% of alone rate)\n", tc / nb, 100 * rl * xl, tt / mb, gb / mb, 100 * rn * xn);
+            printf("OVERLAP gain %.3f (1.00 = time slicing only, 2.00 = perfect overlap)\n", rl * xl + rn * xn);
+            release(f); return 0;
         }
         auto gtex = [&](DXGI_FORMAT fm) { auto r = tex(D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON, fm); return r; };
         ID3D12Resource *mvt = gtex(DXGI_FORMAT_R16G16_FLOAT), *dpt = gtex(DXGI_FORMAT_R32_FLOAT), *mu[8], *du[8]; uint8_t *mup[8], *dup[8];
@@ -280,30 +306,41 @@ int main(int argc, char** argv) {
         // completion times from a poller thread: the DLL may block the submit thread (busy_mode=wait), which must not skew the GPU frame times
         const UINT64 fv0 = fv; std::vector<double> tv(n, 0); std::atomic<bool> prun{true};
         std::thread pt([&] { UINT64 seen = fv0; while (prun) { UINT64 c = fence->GetCompletedValue(); const double t = now(); while (seen < c && seen - fv0 < (UINT64)n) tv[(++seen) - fv0 - 1] = t; Sleep(0); } });
+        // NR_TEST_TL=1: per-frame GPU timeline (QPC ms via the queue's clock calibration): list start, after the load, after evaluate -> "TLD k t0 t1 t2";
+        // with NR_TIMELINE=1 the runtime prints its jobs (flag_in seen -> done) as "TLH seq part t0 t1" on stderr. Summary: mean load / evaluate span.
+        ID3D12QueryHeap* tlq = nullptr; ID3D12Resource* tlb = nullptr; uint64_t* tlp = nullptr; UINT64 tlf = 1, g0 = 0, c0 = 0; LARGE_INTEGER qf; QueryPerformanceFrequency(&qf); double tlL = 0, tlE = 0; int tlN = 0;
+        if (getenv("NR_TEST_TL")) { D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 3u * NQ, 0}; CK(dev->CreateQueryHeap(&qd, IID_PPV_ARGS(&tlq))); tlb = buf(D3D12_HEAP_TYPE_READBACK, 24u * NQ, D3D12_RESOURCE_STATE_COPY_DEST);
+            tlb->Map(0, nullptr, (void**)&tlp); q->GetTimestampFrequency(&tlf); CK(q->GetClockCalibration(&g0, &c0)); }
+        auto tlRead = [&](int j) { if (!tlq || j < 0) return; const uint64_t* t = tlp + 3 * (j % NQ); double v[3]; for (int i = 0; i < 3; i++) v[i] = c0 * 1000.0 / qf.QuadPart + ((double)t[i] - (double)g0) * 1000.0 / tlf;
+            printf("TLD %d %.3f %.3f %.3f\n", j, v[0], v[1], v[2]); if (j >= 10) { tlL += v[1] - v[0]; tlE += v[2] - v[1]; tlN++; } };
         double next = now();
         for (int k = 0; k < n; k++) {
             while (now() < next) { poll(); Sleep(0); } next = now() + cpu;   // game CPU time per frame
-            if (k >= QD) { if (!waitFv(fvs[k - QD])) { prun = false; pt.join(); puts("FAIL pace: GPU wait timed out"); return 7; } poll(); grab(k - QD); }   // swapchain: at most QD frames queued (NR_TEST_QUEUE, default 2)
+            if (k >= QD) { if (!waitFv(fvs[k - QD])) { prun = false; pt.join(); puts("FAIL pace: GPU wait timed out"); return 7; } poll(); grab(k - QD); tlRead(k - QD); }   // swapchain: at most QD frames queued (NR_TEST_QUEUE, default 2)
             if (ghost) { up = gu[k % NQ]; upp = gup[k % NQ]; mvp = mup[k % NQ]; dpp = dup[k % NQ]; makeFrame(k); }
             auto* c = L[k % NQ]; A[k % NQ]->Reset(); c->Reset(A[k % NQ], nullptr); std::swap(cl, c);
+            if (tlq) cl->EndQuery(tlq, D3D12_QUERY_TYPE_TIMESTAMP, 3 * (k % NQ));
             bar(color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST); { auto d = ts(color), s = fp(up, pitch, FMT); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
             bar(color, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             for (int g = 0; g < 2; g++) { ID3D12Resource* t = g ? dpt : mvt; DXGI_FORMAT fm = g ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R16G16_FLOAT;   // guides: upload -> texture -> shader resource
                 bar(t, gfirst ? D3D12_RESOURCE_STATE_COMMON : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
                 D3D12_TEXTURE_COPY_LOCATION s0 = {}; s0.pResource = g ? du[k % NQ] : mu[k % NQ]; s0.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; s0.PlacedFootprint.Footprint = {fm, W, H, 1, gpitch};
                 auto d0 = ts(t); cl->CopyTextureRegion(&d0, 0, 0, 0, &s0, nullptr); bar(t, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); } gfirst = false;
-            if (lps) { cl->SetComputeRootSignature(lrs); cl->SetPipelineState(lps); cl->SetComputeRoot32BitConstants(0, 1, &lit, 0); cl->SetComputeRootUnorderedAccessView(1, lb->GetGPUVirtualAddress()); cl->Dispatch(4096, 1, 1);
+            if (lps) { cl->SetComputeRootSignature(lrs); cl->SetPipelineState(lps); cl->SetComputeRoot32BitConstants(0, 1, &lit, 0); cl->SetComputeRootUnorderedAccessView(1, lb->GetGPUVirtualAddress()); cl->Dispatch(LG, 1, 1);
                        D3D12_RESOURCE_BARRIER ub = {}; ub.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV; cl->ResourceBarrier(1, &ub); }
+            if (tlq) cl->EndQuery(tlq, D3D12_QUERY_TYPE_TIMESTAMP, 3 * (k % NQ) + 1);
             unsigned x1, x2, ru0, ru1; stats(f, &x1, &x2, &ru0);
             eval(cl, f, nullptr, color, dpt, mvt, out, W, H, W, H, W, H, 0, 0, 0, 0, 1, k == 0, 1.f, 0, 1.f, 1.f, -1.f, 1, (float)W, (float)H);
             stats(f, &x1, &x2, &ru1); greu[k] = ru1 != ru0;
+            if (tlq) { cl->EndQuery(tlq, D3D12_QUERY_TYPE_TIMESTAMP, 3 * (k % NQ) + 2); cl->ResolveQueryData(tlq, D3D12_QUERY_TYPE_TIMESTAMP, 3 * (k % NQ), 3, tlb, 24ull * (k % NQ)); }
             if (ghost) { bar(out, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE); { auto d = fp(gr[k % NQ], opitch, OFMT), s = ts(out); cl->CopyTextureRegion(&d, 0, 0, 0, &s, nullptr); }
                          bar(out, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
             cl->Close();
             ID3D12CommandList* l[] = {cl}; q->ExecuteCommandLists(1, l); q->Signal(fence, ++fv); fvs.push_back(fv); std::swap(cl, c); poll();
         }
         if (!waitFv(fvs.back())) { prun = false; pt.join(); puts("FAIL pace: GPU wait timed out"); return 7; } prun = false; pt.join(); done = tv;
-        for (int j = std::max(0, n - QD); j < n; j++) grab(j);
+        for (int j = std::max(0, n - QD); j < n; j++) { grab(j); tlRead(j); }
+        if (tlN) printf("TL mean GPU span per frame: load %.2f ms, evaluate (our passes + wait on HIP) %.2f ms (%d frames)\n", tlL / tlN, tlE / tlN, tlN);
         if (ghost) {   // ghosting: mean |out - refNR(same frame)| over reused frames; "live" = the plain live frame for scale
             double e = 0, el = 0, er = 0, erl = 0; size_t cnt = 0, cr = 0; int nf = 0; up = up0; upp = upp0; mvp = mvScratch.data(); dpp = dScratch.data();
             for (int j = 0; j < n; j++) { if (gout[j].empty()) continue; makeFrame(j); float gms; if (rrun(ref, in.data(), refo.data(), &gms)) { puts("FAIL reference nr_run"); return 6; } nf++;
