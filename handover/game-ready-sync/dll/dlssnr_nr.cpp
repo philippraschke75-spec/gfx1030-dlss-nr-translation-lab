@@ -48,7 +48,7 @@ static int g_apply = 1, g_gate = 1, g_ldrIn = 1, g_hdr = 2; static float g_hdrFr
 static int g_allowAny = 0, g_evictMs = 2000; static int g_sync = 1, g_spinMs = 250, g_maxInflight = 3, g_fg = 0, g_fgWaitMs = 4, g_fgMaxAge = 3, g_mv = 0, g_nrEvery = 1; static float g_mvLo = 0.05f, g_mvHi = 0.25f;
 static int g_busy = 0, g_busyWaitMs = 100;   // busy_mode: 0 wait (CPU waits, bounded, for a free HIP slot), 1 reuse (last NR edit, warped) - never a native frame once NR ran
 static int g_compose = 0; static float g_detail = 1.f;   // compose= add (0: the edit added as is) | nv (1: NVIDIA's intensity) | ratio (2: OkLab matched residual); detail= live-frame detail above the model raster (1 = as is). handover/community-look/README.md
-static float g_pass2Gain = 0.5f; static std::atomic<int> g_live{0}; static UINT g_hdrP0 = 0; static ID3D12Resource* g_hl = nullptr; static ID3D12Device* g_hlDev = nullptr; static ID3D12Resource* g_eRb = nullptr; static uint8_t* g_eRbp = nullptr; /* g_hl / g_eRb (HDR latch + its log readback) belong to g_hlDev */ static float g_hdrKey = 0.18f, g_hdrAdapt = 0.05f, g_hdrBias = 1.f, g_hdrExp = 0.f;   // OptiScaler "2 passes": a later pass (a second feature on pass 1's output) adds its edit at gain * pass2_gain
+static float g_pass2Gain = 0.5f; static UINT g_hdrP0 = 0; static ID3D12Resource* g_hl = nullptr; static ID3D12Device* g_hlDev = nullptr; static ID3D12Resource* g_eRb = nullptr; static uint8_t* g_eRbp = nullptr; /* g_hl / g_eRb (HDR latch + its log readback) belong to g_hlDev */ static float g_hdrKey = 0.18f, g_hdrAdapt = 0.05f, g_hdrBias = 1.f, g_hdrExp = 0.f;   // OptiScaler "2 passes": a later pass (a second feature on pass 1's output) adds its edit at gain * pass2_gain
 static float g_mvK = 1.f; static unsigned g_dumpFrame = 0, g_dumpFrames = 1; static std::vector<DumpItem> g_dumpItems; static std::mutex g_dumpMu;   // dump_frame=N: frame_dump.h
 static float g_eT = 0.f, g_eL = 0.f; static int g_eFl = 0, g_dbg = 0; static float g_tS = 0.f, g_cS = 1.f, g_pw = 1.f;   // transfer_strength / color_strength / paper_white: RenoDX "Control-compatible color transfer" (kSyncHlsl rtx)   // edit_temporal (blend of the shown edit with the previous one, warped), edit_limit (cap vs local contrast), edit_warp bicubic (flag bit 2)
 static int g_fill = 1; static int g_hGate = 0, g_hCR = 1, g_hSeed = 1, g_hZp = 0;   /* history_pad reflect (NVIDIA) | zero (v0.4.3) */   // history_gate (colour gate, 0 = NVIDIA), history_filter catmull (NVIDIA) | bilinear, history_seed frame (NVIDIA) | 0
@@ -322,7 +322,9 @@ static const char* kSyncHlsl =
 // tFl bit 512 (nr_split): imp keeps this (the job's) frame depth in st slot 10; cap / hst stamp the finished job's input / P with it. They run N-1 frames
 // later, and the depth bound then is that later frame's: the disocclusion gates of the split edit and of the history compared against depth
 // N-1 frames newer than the content (a cable that moved away left sky depth under its old image -> its stale edit / history passed: ghost copies).
-"float jobDep(uint2 q) { return (tFl & 512) ? asfloat(st.Load(256 + 10 * W * H * 8 + (q.y * W + q.x) * 4)) : depAt((q + 0.5) / float2(W, H)); }\n"
+// HLSL ?: evaluates BOTH operands: the slot-10 load must stay in bounds without bit 512 (st has no slot 10 then; a root UAV has no bounds
+// check -> the read past st page-faulted the GPU (DEVICE_HUNG) once a recreate / extra pass moved what lies behind st). Without 512 it reads st[0].
+"float jobDep(uint2 q) { const bool j = (tFl & 512) != 0; float d = asfloat(st.Load(j ? 256 + 10 * W * H * 8 + (q.y * W + q.x) * 4 : 0)); return j ? d : depAt((q + 0.5) / float2(W, H)); }\n"
 "[numthreads(8,8,1)] void imp(uint3 id : SV_DispatchThreadID) {\n"
 "  if (id.x >= W || id.y >= H) return; uint FW = FWH & 0xFFFF, FH = FWH >> 16;\n"
 "  float4 c = (FW == W && FH == H) ? ld(col[id.xy]) : colAt((id.xy + 0.5) * float2(FW, FH) / float2(W, H));\n"   // frame == model size: clamped as the resampled path (raw > 1 input made block artifacts)
@@ -535,13 +537,25 @@ struct Feature {
     ID3D12Device* dev = nullptr; ID3D12RootSignature* rs = nullptr; ID3D12PipelineState* pso = nullptr; ID3D12DescriptorHeap* heap = nullptr; UINT incr = 0; bool delta = false;
     ID3D12Resource* upOld[2] = {}; uint8_t* upOldp[2] = {}; ID3D12Resource* zero = nullptr; uint8_t* zerop = nullptr;   // old model input per slot (motion gate); all-zero buffer for "no result yet"
     std::atomic<int> inFmt{(int)DXGI_FORMAT_R16G16B16A16_FLOAT}, outFmt{(int)DXGI_FORMAT_R16G16B16A16_FLOAT};   // game texture formats (set by evaluate)
-    int pass = 0;                                                       // 0 = the host's main feature; >0 = an extra pass (created while another feature lives)
+    std::atomic<int> pass{0};                                           // 0 = the host's main feature; >0 = an extra pass: its place in the host's list (passOrder)
     Sync* sy = nullptr;                                                 // non-null: sync resources exist (worker tries nr_ext_open)
     std::mutex mu; std::atomic<DWORD> lastUse{GetTickCount()}; std::atomic<bool> done{false}; std::atomic<bool> evaluated{false};   // mu: evaluate vs eviction; done: worker finished (release-while-loading handoff)
 };
 // Hosts (OptiScaler in MSFS 2024) create features again and again without releasing the old ones. Every live feature
 // holds a runtime context (~1 GB VRAM), so before loading a new one the contexts of features idle for evict_idle_ms are freed.
 static std::mutex g_featMu; static std::vector<Feature*> g_feats;
+// Pass = place in the host's list: OptiScaler evaluates its chain in order on one list (pass 0 on the game's colour, pass n on pass n-1's
+// output). A count of live features at create was wrong whenever the host builds the new chain before it releases the old one (janblade
+// v0.1.32 parks retired features for 32 frames): the new main feature became "extra pass 1" (half gain, no HDR latch) for good.
+// A run = consecutive evaluates on one list without a repeat; a new list or a feature seen again starts the next frame's run.
+static std::mutex g_ordMu; static void* g_ordCmd = nullptr; static std::vector<Feature*> g_ordRun;
+static void passOrder(Feature* F, void* cmd) {
+    std::lock_guard<std::mutex> g(g_ordMu);
+    if (cmd != g_ordCmd || std::find(g_ordRun.begin(), g_ordRun.end(), F) != g_ordRun.end()) { g_ordCmd = cmd; g_ordRun.clear(); }
+    g_ordRun.push_back(F); const int p = (int)g_ordRun.size() - 1;
+    if (F->pass.exchange(p) != p) logf("evaluate %p: %s %d in the host's list (pass2_gain %.2f)", (void*)F, p ? "extra pass" : "main feature, pass", p, g_pass2Gain);
+}
+static void passForget(Feature* F) { std::lock_guard<std::mutex> g(g_ordMu); g_ordRun.erase(std::remove(g_ordRun.begin(), g_ordRun.end(), F), g_ordRun.end()); }   // a new feature at F's address is not "seen"
 static const DXGI_FORMAT kFmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
 static bool fmtOk(DXGI_FORMAT f) { return f == DXGI_FORMAT_R16G16B16A16_FLOAT || f == DXGI_FORMAT_R11G11B10_FLOAT || f == DXGI_FORMAT_R8G8B8A8_UNORM; }
 static unsigned fmtBpp(int f) { return f == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4; }
@@ -596,11 +610,17 @@ static void workerBody(Feature* F) {
         char err[512] = {0};
         if (!loadRuntime()) { F->state = S_FAILED; return; }
         const int ve = g_vitEvery ? g_vitEvery : metaInt(F->dir, "vit_every", 1);
+        // One runtime load at a time: a host that recreates faster than a load takes (slider drag, janblade's epoch rebuilds) had every
+        // released-while-loading feature build its ~1-2 GB context in parallel -> VRAM ran out and the feature that stays got none.
+        // A feature released while it waits here leaves at once (worker() frees its buffers) and never loads.
+        static std::mutex loadMu; std::unique_lock<std::mutex> lk(loadMu, std::defer_lock);
+        while (!lk.try_lock()) { if (F->quit) return; Sleep(5); }
+        if (F->quit) return;
         logf("worker: nr_create(%s, %ux%u, vit_every %d%s%s)...", F->dir.c_str(), F->W, F->H, ve, g_reuseBn ? " bottleneck" : "", g_vitEvery ? "" : " (data dir default)");
         evictIdle(F);
         if (p_select) { LUID l = F->dev->GetAdapterLuid(); p_select(&l, g_allowAny); }   // HIP on the GPU the game renders on (not an iGPU / HIP device 0)
         DWORD t0 = GetTickCount();
-        F->ctx = safeCreate(F->dir.c_str(), (int)F->W, (int)F->H, g_reuseBn && ve > 1 ? -ve : ve, err, sizeof err);
+        F->ctx = safeCreate(F->dir.c_str(), (int)F->W, (int)F->H, g_reuseBn && ve > 1 ? -ve : ve, err, sizeof err); lk.unlock();
         if (!F->ctx) { seterr("nr_create failed: %s", err); F->state = S_FAILED; return; }
         if (F->quit) return;   // released while the runtime was loading: worker() frees it
         logf("worker: runtime ready after %lu ms", GetTickCount() - t0);
@@ -842,6 +862,7 @@ __declspec(dllexport) const char* dlssnr_backend_id() { return "rdna2-hip"; }   
 __declspec(dllexport) const char* dlssnr_call_error() { return g_err; }
 __declspec(dllexport) int dlssnr_port_state(void* f) { return f ? ((Feature*)f)->state.load() : -1; }   // diagnostics/tests: 0 loading, 1-3 async, 4 failed, 5 sync
 __declspec(dllexport) void dlssnr_port_stats(void* f, unsigned* nr, unsigned* native, unsigned* reused) { Sync* s = f ? ((Feature*)f)->sy : nullptr; *nr = s ? s->ran : 0; *native = s ? s->busy : 0; *reused = s ? s->reused : 0; }   // tests: sync-path frame counts
+__declspec(dllexport) int dlssnr_port_pass(void* f) { return f ? ((Feature*)f)->pass.load() : -1; }   // tests: 0 main feature, > 0 extra pass
 __declspec(dllexport) const char* dlssnr_port_dir(void* f) { return f ? ((Feature*)f)->dir.c_str() : ""; }   // tests: the data dir create picked (model + step)
 static std::atomic<int> g_testEvalDelay{0};   // tests (dlssnr_port_test): hold evaluate between its first state check and its lock for up to this many ms (eviction race); 0 releases
 __declspec(dllexport) void dlssnr_port_test(int evalDelayMs) { g_testEvalDelay = evalDelayMs; }
@@ -889,17 +910,17 @@ __declspec(dllexport) void* dlssnr_call_create(const wchar_t* snippet, const wch
             logf("create: preset %d asks for the large model (WEIGHTS_HT) but %s has no data for it; using the default model", preset, dir.c_str());
             large = false; dir = pickModelDir(w, h, false); }
         if (dir.empty() || !modelMatches(dir, large)) {   // unknown / missing nvngx_dlssnr.dll: a feature that only passes frames through (returns 1; OptiScaler ends NR on 0)
-            auto* F = new Feature; F->state = S_FAILED; F->W = w; F->H = h; F->pass = g_live++; dlssnr_call_last_create = 1; return F; }
+            auto* F = new Feature; F->state = S_FAILED; F->W = w; F->H = h; dlssnr_call_last_create = 1; return F; }
         if (!readMeta(dir, &mw, &mh)) { seterr("create: no meta.txt in '%s' (run gen_runtime_data.py, see INSTALL.md)", dir.c_str()); return nullptr; }
         if ((mw != w || mh != h) && g_sync) { logf("create: frame %ux%u, model %ux%u - sync path resamples (universal for any resolution / upscaler mode)", w, h, mw, mh); w = mw; h = mh; }
         if (mw != w || mh != h) { seterr("create: model size %ux%u but data dir '%s' is for %ux%u - generate data for this size", w, h, dir.c_str(), mw, mh); return nullptr; }
-        auto* F = new Feature; F->dir = dir; F->pass = g_live++; setHost(F, intensity, style, localStructure, localTone, skinStructure, useAutoMask);   // ponytail: pass = live features at create (janblade creates the main one first); recreating only the main feature while extras live would mislabel it
-        if (F->pass) logf("create: extra pass %d (pass2_gain %.2f)", F->pass, g_pass2Gain); F->W = w; F->H = h; F->pitch = align256(w * 8);
+        auto* F = new Feature; F->dir = dir; setHost(F, intensity, style, localStructure, localTone, skinStructure, useAutoMask);
+        F->W = w; F->H = h; F->pitch = align256(w * 8);
         F->tin.resize((size_t)w * h * 8); F->tout.resize((size_t)w * h * 8);
         UINT64 sz = (UINT64)F->pitch * h;
         F->rb = makeBuffer(dev, D3D12_HEAP_TYPE_READBACK, sz, &F->rbp);
         F->up[0] = makeBuffer(dev, D3D12_HEAP_TYPE_UPLOAD, sz, &F->upp[0]); F->up[1] = makeBuffer(dev, D3D12_HEAP_TYPE_UPLOAD, sz, &F->upp[1]);
-        if (!F->rb || !F->up[0] || !F->up[1]) { seterr("create: cannot allocate staging buffers"); if (F->rb) F->rb->Release(); for (auto u : F->up) if (u) u->Release(); delete F; return nullptr; }
+        if (!F->rb || !F->up[0] || !F->up[1]) { seterr("create: cannot allocate staging buffers (device 0x%08lx)", (unsigned long)dev->GetDeviceRemovedReason()); if (F->rb) F->rb->Release(); for (auto u : F->up) if (u) u->Release(); delete F; return nullptr; }
         F->dev = dev;
         if (g_apply) {
             F->upOld[0] = makeBuffer(dev, D3D12_HEAP_TYPE_UPLOAD, sz, &F->upOldp[0]); F->upOld[1] = makeBuffer(dev, D3D12_HEAP_TYPE_UPLOAD, sz, &F->upOldp[1]);
@@ -990,6 +1011,7 @@ __declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList* cmd
     try {
         auto* F = (Feature*)f; int n = ++g_evalCalls;
         if (!F || !cmd || !color || !out) return 0;
+        passOrder(F, cmd);
         if (F->state == S_FAILED) return passThrough(cmd, color, out, w, h);   // NR off for this session (model guard, runtime failure): native frame
         setHost(F, intensity, style, localStructure, localTone, skinStructure, useAutoMask);
         if (const int d = g_testEvalDelay) for (const DWORD t0 = GetTickCount(); g_testEvalDelay && GetTickCount() - t0 < (DWORD)d;) Sleep(5);   // test hook: hold until released (dlssnr_port_test(0)) or d ms
@@ -1265,7 +1287,7 @@ extern "C" {
 __declspec(dllexport) void dlssnr_call_release(void* f) {
     auto* F = (Feature*)f; if (!F) return;
     try {
-        logf("release %p", f); F->quit = true; g_live--;
+        logf("release %p", f); F->quit = true; passForget(F);
         { std::lock_guard<std::mutex> g(g_featMu); g_feats.erase(std::remove(g_feats.begin(), g_feats.end(), F), g_feats.end()); }
         if (g_exiting) { if (F->th.joinable()) F->th.detach(); return; }   // process exit: never block, leak F
         if (F->state == S_LOADING) { if (F->th.joinable()) F->th.detach(); if (F->done.exchange(true)) freeFeature(F); return; }   // still loading: never block the game, the worker frees F when nr_create returns

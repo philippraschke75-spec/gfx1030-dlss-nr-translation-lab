@@ -115,6 +115,71 @@ int main(int argc, char** argv) {
     if (getenv("NR_TEST_GUARD")) { double t = now(); while (state(f) == 0 && now() - t < 90000) Sleep(50); }   // also catch a runtime-side refusal (weights.map)
     const bool guard = state(f) == 4;   // model guard: unknown nvngx_dlssnr.dll, NR off -> pass-through test below
     if (guard) printf("NR off at create: %s\n", err());
+    if (getenv("NR_TEST_JB")) {   // janblade v0.1.32 host pattern (DlssNr_Dx12.cpp): NR_TEST_JB=cycles. A changed look/preset (epoch) creates the new main
+        // feature while the old chain is parked (released NR_TEST_JBPARK evaluates later, default 32; 0 = right after recording, GPU still busy);
+        // pass count walks 1 -> 2 -> 3 -> 1 (extra features created / parked); the game's history reset (reset=1) every NR_TEST_JBRESET frames;
+        // a failed create is retried every frame (as jb132 does). 3 lists in flight. FAIL: evaluate != 1, GPU timeout (hang), device removed,
+        // a failed create, wrong pass labels (dlssnr_port_pass), free VRAM spread > 200 MB at the cycle ends after warm-up.
+        typedef int (*P_mem)(size_t*, size_t*); HMODULE hip = GetModuleHandleA("amdhip64_6.dll"); auto mem = hip ? (P_mem)GetProcAddress(hip, "hipMemGetInfo") : nullptr;
+        auto ppass = (int (*)(void*))GetProcAddress(m, "dlssnr_port_pass");
+        if (!mem || guard) { puts("FAIL JB: no hipMemGetInfo / NR off"); return 1; }
+        const int N = atoi(getenv("NR_TEST_JB")), park = getenv("NR_TEST_JBPARK") ? atoi(getenv("NR_TEST_JBPARK")) : 32, rsEvery = getenv("NR_TEST_JBRESET") ? atoi(getenv("NR_TEST_JBRESET")) : 7;
+        { for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) memcpy(upp + (size_t)y * pitch + x * 8, &base[((size_t)(y * SH / H) * SW + x * SW / W) * 4], 8); }   // colour: the source scaled to the frame
+        auto gtx = [&](DXGI_FORMAT fm) { return tex(D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON, fm); };
+        ID3D12Resource *mvt = gtx(DXGI_FORMAT_R16G16_FLOAT), *dpt = gtx(DXGI_FORMAT_R32_FLOAT), *outB = tex(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, FMT);
+        const UINT gp = (W * 4 + 255) & ~255u; ID3D12Resource* gu = buf(D3D12_HEAP_TYPE_UPLOAD, (UINT64)gp * H * 2, D3D12_RESOURCE_STATE_GENERIC_READ); uint8_t* gup; gu->Map(0, nullptr, (void**)&gup);
+        for (UINT y = 0; y < H; y++) for (UINT x = 0; x < W; x++) { uint16_t mv[2] = { f2h(4.f / W), 0 }; float d = 0.1f; memcpy(gup + (size_t)y * gp + x * 4, mv, 4); memcpy(gup + (size_t)(H + y) * gp + x * 4, &d, 4); }
+        const int NQ = 3; ID3D12CommandAllocator* A[NQ]; ID3D12GraphicsCommandList* L[NQ]; UINT64 fq[NQ] = {};
+        for (int i = 0; i < NQ; i++) { CK(dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&A[i]))); CK(dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, A[i], nullptr, IID_PPV_ARGS(&L[i]))); L[i]->Close(); }
+        auto waitV = [&](UINT64 v) { if (fence->GetCompletedValue() >= v) return true; fence->SetEventOnCompletion(v, ev); return WaitForSingleObject(ev, 5000) == WAIT_OBJECT_0; };
+        std::vector<void*> chain = {f}; std::vector<std::pair<void*, int>> parked; std::vector<bool> fresh = {true}; int want = 1, k = 0, bad = 0, fails = 0; size_t lo = SIZE_MAX, hi = 0; bool first = true;
+        auto mk = [&](ID3D12GraphicsCommandList* c) { return create(L"nvngx_dlssnr.dll", L"data", dev, c, nullptr, W, H, 0, 1.f, 0, 1.f, 1.f, -1.f, 1, 1); };
+        auto tick = [&] { for (size_t i = 0; i < parked.size();) if (--parked[i].second <= 0) { release(parked[i].first); parked.erase(parked.begin() + i); } else i++; };
+        auto frameJB = [&](int reset) -> int {   // one game frame: (create a missing pass) + evaluate the chain colour -> A -> B -> A ...
+            const int s = k % NQ; if (!waitV(fq[s])) return -100; A[s]->Reset(); ID3D12GraphicsCommandList* c = L[s]; c->Reset(A[s], nullptr); ID3D12GraphicsCommandList* sv = cl; cl = c;
+            if (first) { for (int g = 0; g < 2; g++) { ID3D12Resource* t = g ? dpt : mvt; bar(t, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST); D3D12_TEXTURE_COPY_LOCATION s0 = {}; s0.pResource = gu; s0.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+                s0.PlacedFootprint.Offset = g ? (UINT64)gp * H : 0; s0.PlacedFootprint.Footprint = {g ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R16G16_FLOAT, W, H, 1, gp}; auto d0 = ts(t); c->CopyTextureRegion(&d0, 0, 0, 0, &s0, nullptr); bar(t, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); }
+                bar(color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST); { auto d = ts(color), s1 = fp(up, pitch, FMT); c->CopyTextureRegion(&d, 0, 0, 0, &s1, nullptr); } bar(color, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); first = false; }
+            int r = 1;
+            if ((int)chain.size() < want) {   // jb132: build at most one missing feature on this invocation and evaluate nothing afterwards
+                void* g = mk(c); if (g) { chain.push_back(g); fresh.push_back(true); } else { fails++; if (fails <= 3) printf("frame %d: create of pass %zu failed: %s\n", k, chain.size(), err()); } }
+            else for (size_t p = 0; p < chain.size(); p++) {
+                ID3D12Resource* in = p == 0 ? color : (p & 1) ? out : outB; ID3D12Resource* o = (p & 1) ? outB : out;
+                if (p) bar(in, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                const int e = eval(c, chain[p], nullptr, in, dpt, mvt, o, W, H, W, H, W, H, 0, 0, 0, 0, 1, reset || fresh[p] ? 1 : 0, 1.f, 0, 1.f, 1.f, -1.f, 1, (float)W, (float)H); fresh[p] = false;
+                if (p) bar(in, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                if (e != 1) r = e; }
+            tick(); c->Close(); cl = sv; ID3D12CommandList* l[] = {c}; q->ExecuteCommandLists(1, l); q->Signal(fence, ++fv); fq[s] = fv; k++; return r; };
+        auto loaded = [&] { for (void* g : chain) if (state(g) == 0) return false; return (int)chain.size() >= want; };
+        auto labels = [&]() -> bool { if (!ppass) return true; for (size_t p = 0; p < chain.size(); p++) if (ppass(chain[p]) != (int)p) { printf("cycle label: chain[%zu] has pass %d (expected %zu)\n", p, ppass(chain[p]), p); return false; } return true; };
+        if (const int rapid = getenv("NR_TEST_JBRAPID") ? atoi(getenv("NR_TEST_JBRAPID")) : 0) {   // a slider dragged: a new epoch every 3 frames, the features never finish loading
+            for (int i = 0; i < rapid && !bad; i++) { for (void* g : chain) parked.push_back({g, park}); chain.clear(); fresh.clear(); want = 1;
+                for (int j = 0; j < 3 && !bad; j++) { const int r = frameJB(j == 2); if (r != 1 || dev->GetDeviceRemovedReason() != S_OK || fails) { printf("FAIL JB rapid %d: evaluate %d, device 0x%08lx, %d failed creates\n", i, r, (unsigned long)dev->GetDeviceRemovedReason(), fails); bad = 9; } } }
+            size_t fr2 = 0, tot = 0; mem(&fr2, &tot); printf("rapid: %d epochs, %zu parked, free VRAM %zu MB\n", rapid, parked.size(), fr2 >> 20); }
+        for (int cy = 0; cy < N && !bad; cy++) {
+            const int kind = cy % 4;   // 0 new epoch (look preset), 1 -> 2 passes, 2 -> 3 passes, 3 -> 1 pass
+            if (kind == 0 && cy) { for (void* g : chain) parked.push_back({g, park}); chain.clear(); fresh.clear(); if (!park) tick(); want = 1; }   // park = 0: released after this frame's list is recorded
+            else if (kind == 1) want = 2; else if (kind == 2) want = 3;
+            else if (kind == 3) { while (chain.size() > 1) { parked.push_back({chain.back(), park}); chain.pop_back(); fresh.pop_back(); } want = 1; }
+            const double t0 = now(); int fr = 0;
+            while ((!loaded() || fr < 12 || !parked.empty()) && now() - t0 < 30000 && !bad) {
+                const int r = frameJB(k % rsEvery == 0); fr++;
+                if (r == -100) { printf("FAIL JB cycle %d frame %d: GPU wait timed out (hang)\n", cy, k); bad = 7; }
+                else if (r != 1) { printf("FAIL JB cycle %d frame %d: evaluate returned %d\n", cy, k, r); bad = 9; }
+                if (dev->GetDeviceRemovedReason() != S_OK) { printf("FAIL JB cycle %d frame %d: device removed 0x%08lx\n", cy, k, (unsigned long)dev->GetDeviceRemovedReason()); bad = 9; }
+                if (fails) bad = bad ? bad : 3; }
+            if (!bad && !loaded()) { printf("FAIL JB cycle %d: features not loaded after 30 s\n", cy); bad = 4; }
+            if (!bad && !labels()) bad = 5;
+            for (void* g : chain) if (!bad && state(g) != 5) { printf("FAIL JB cycle %d: a feature is in state %d (%s)\n", cy, state(g), err()); bad = 4; }
+            if (!waitV(fv)) { printf("FAIL JB cycle %d: GPU idle wait timed out\n", cy); bad = 7; }
+            size_t fr2 = 0, tot = 0; mem(&fr2, &tot); if (cy >= 4 && kind == 3) { lo = std::min(lo, fr2); hi = std::max(hi, fr2); }
+            printf("cycle %2d kind %d passes %zu frames %d free VRAM %zu MB device 0x%08lx\n", cy, kind, chain.size(), fr, fr2 >> 20, (unsigned long)dev->GetDeviceRemovedReason());
+        }
+        waitV(fv); for (auto& pg : parked) release(pg.first); for (void* g : chain) release(g);
+        const size_t spread = hi > lo ? (hi - lo) >> 20 : 0; printf("JB: %d frames, free VRAM spread %zu MB over the 1-pass cycle ends\n", k, spread);
+        if (!bad && spread > 200) { puts("FAIL JB: VRAM grows"); bad = 9; }
+        puts(bad ? "FAIL JB" : "PASS JB"); return bad;
+    }
     char e2[512] = ""; void* ref = guard ? nullptr : rcreate(dd, (int)MW, (int)MH, 1, e2, sizeof e2); if (!ref && !guard) { printf("FAIL reference nr_create: %s\n", e2); return 3; }
     if (ref && getenv("NR_TEST_COND")) { int s = 0, am = 1; float t = 1, st = 1, sk = -1; sscanf(getenv("NR_TEST_COND"), "%d,%f,%f,%f,%d", &s, &t, &st, &sk, &am);   // the reference's conditioning (style,tone,structure,skin,auto_mask), as the ini sliders give the DLL
         auto sc = (int (*)(void*, int, float, float, float, int))GetProcAddress(rt, "nr_set_conditioning"); if (!sc || sc(ref, s, t, st, sk, am)) { puts("FAIL NR_TEST_COND"); return 3; } }
