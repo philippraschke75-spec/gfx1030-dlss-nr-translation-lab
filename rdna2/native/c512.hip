@@ -533,12 +533,22 @@ extern "C" __global__ void __launch_bounds__(256, ATTN_WAVES) ATTN_ATTR k_qkv_at
     Inv[tid] = __fdiv_rn(1.f, fmaxf(__fadd_rn(hv[0], hv[1]), 6.103515625e-05f));
   }
   __syncthreads();
+  {   // P = store8(Pr * inv) once per element, in place (the 4 threads of a query each recomputed all 64 before; 3z).
+      // store8 is on the e4m3 grid, so the f16 holds it exactly: the P.V loop below sees the same values.
+    const int i = tid >> 2;
+    const float inv = Inv[i];
+#pragma unroll
+    for (int l = 0; l < 16; l++) {
+      const int j = (tid & 3) + 4 * l;
+      Pr[i * 66 + j] = (f16)store8(__fmul_rn((float)Pr[i * 66 + j], inv));
+    }
+  }
+  __syncthreads();
   {
     const int i = tid >> 2, cg = (tid & 3) * 8, tile = win_tile(i >> 4);
-    const float inv = Inv[i];
     float c8[8] = {};
     for (int j = 0; j < 64; j++) {
-      const float pj = store8(__fmul_rn((float)Pr[i * 66 + j], inv));
+      const float pj = (float)Pr[i * 66 + j];
 #pragma unroll
       for (int c = 0; c < 8; c++) c8[c] = fmaf(pj, Vs[j * 33 + cg + c], c8[c]);
     }
